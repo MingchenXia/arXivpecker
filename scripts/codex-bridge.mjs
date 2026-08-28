@@ -104,6 +104,369 @@ async function acquireArxivSource(paper, requestedArxivId = paper.arxivId, versi
   return manifest;
 }
 
+function latexConversionPrompt({ paper }) {
+  return `Convert the complete primary PDF at https://arxiv.org/pdf/${paper.arxivId} into a faithful standalone LaTeX document.
+
+This is a transcription task, not a rewrite. Read every page. Preserve the title, authors, abstract, section hierarchy, theorem/definition/lemma/proposition environments, equation structure, labels, references, proofs, footnotes, bibliography, and mathematical notation. Do not improve, complete, or silently correct the mathematics. Mark illegible fragments explicitly with \\text{[unreadable in source]}. Add a short LaTeX comment before each page transition in the form "% PDF page N" when you can identify it.
+
+Return only one complete compilable LaTeX document, beginning with \\documentclass and ending with \\end{document}. Do not use Markdown fences or add commentary outside the document.`;
+}
+
+function extractLatexDocument(text) {
+  const clean = String(text || '').trim().replace(/^```(?:latex|tex)?\s*/i, '').replace(/\s*```$/i, '');
+  const start = clean.indexOf('\\documentclass');
+  const endMarker = '\\end{document}';
+  const end = clean.lastIndexOf(endMarker);
+  if (start < 0 || end < start) throw new Error('Codex did not return a complete LaTeX document.');
+  const document = clean.slice(start, end + endMarker.length).trim();
+  if (Buffer.byteLength(document, 'utf8') > 12 * 1024 * 1024) throw new Error('The AI-converted LaTeX document exceeds the local safety limit.');
+  return `${document}\n`;
+}
+
+async function saveAiLatexSource(paper, converted) {
+  const sourceRoot = await vault.sourceDirectory(paper.id);
+  const sourceDirectory = path.join(sourceRoot, 'ai-converted');
+  await mkdir(sourceDirectory, { recursive: true });
+  const entryFile = path.join(sourceDirectory, 'main.tex');
+  const manifestFile = path.join(sourceDirectory, 'proofroom-ai-source.json');
+  const latex = extractLatexDocument(converted.text);
+  await writeFile(entryFile, latex, 'utf8');
+  const manifest = { kind: 'ai-tex', arxivId: paper.arxivId, entryFile, sourceDirectory, fileCount: 1, convertedAt: new Date().toISOString(), conversionThreadId: converted.threadId, cached: false };
+  await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  return manifest;
+}
+
+async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 0) {
+  if (depth > 12 || seen.has(entryFile)) return '';
+  const relative = path.relative(sourceRoot, entryFile);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return '';
+  seen.add(entryFile);
+  let source = await readFile(entryFile, 'utf8');
+  const include = /\\(?:input|include)\s*\{([^}]+)\}/g;
+  let expanded = ''; let cursor = 0;
+  for (const match of source.matchAll(include)) {
+    expanded += source.slice(cursor, match.index);
+    const requested = match[1].trim();
+    const candidate = path.resolve(path.dirname(entryFile), /\.[A-Za-z0-9]+$/.test(requested) ? requested : `${requested}.tex`);
+    try { expanded += await readExpandedTex(candidate, sourceRoot, seen, depth + 1); }
+    catch { expanded += `\n% Proofroom could not resolve ${requested}\n`; }
+    cursor = (match.index ?? 0) + match[0].length;
+  }
+  expanded += source.slice(cursor);
+  return expanded;
+}
+
+function normalizeMathTextCommands(source) {
+  let text = String(source || '');
+  const command = /\\(mbox|text)\s*\{/g;
+  for (let pass = 0; pass < 3; pass += 1) {
+    let output = ''; let cursor = 0; let changed = false;
+    for (const match of text.matchAll(command)) {
+      if ((match.index ?? 0) < cursor) continue;
+      const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+      if (!group) continue;
+      let content = group.content.trim().replace(/^\{\\(?:normalfont|rm)\s*/, '').replace(/\}\s*$/, '').replace(/\\(?:normalfont|rm)\b\s*/g, '');
+      if (match[1] === 'text' && !content.includes('$')) continue;
+      const pieces = content.split(/\$([^$]*)\$/g).map((piece, index) => index % 2 ? piece.trim() : piece.replace(/\s+/g, ' '));
+      const replacement = pieces.map((piece, index) => {
+        if (!piece) return '';
+        return index % 2 ? piece : `\\text{${piece}}`;
+      }).join('');
+      output += text.slice(cursor, match.index ?? 0) + replacement;
+      cursor = group.end; changed = true;
+    }
+    if (!changed) break;
+    text = output + text.slice(cursor);
+  }
+  return text;
+}
+
+function unwrapLatexTextCommands(source) {
+  let text = String(source || '');
+  const command = /\\(footnote|emph|textbf|textit|textrm)\s*\{/g;
+  for (let pass = 0; pass < 4; pass += 1) {
+    let output = ''; let cursor = 0; let changed = false;
+    for (const match of text.matchAll(command)) {
+      if ((match.index ?? 0) < cursor) continue;
+      const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+      if (!group) continue;
+      const replacement = match[1] === 'footnote' ? ` (Note: ${group.content})` : group.content;
+      output += text.slice(cursor, match.index ?? 0) + replacement;
+      cursor = group.end; changed = true;
+    }
+    if (!changed) break;
+    text = output + text.slice(cursor);
+  }
+  return text;
+}
+
+function readableLatex(source) {
+  return unwrapLatexTextCommands(normalizeMathTextCommands(String(source || '')))
+    .replace(/(^|[^\\])%[^\n]*/g, '$1')
+    .replace(/\\label\s*\{[^}]*\}/g, '')
+    .replace(/\\(?:eqref|ref|autoref|cref|Cref)\s*\{[^}]*\}/g, 'the referenced result')
+    .replace(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/g, (_match, locator, keys) => String(keys).split(',').map((key) => `[[cite:${key.trim()}${locator ? `|${locator.trim()}` : ''}]]`).join(' '))
+    .replace(/\\begin\{tikzcd\}(?:\[[^\]]*\])?/g, '\\begin{array}{cccccccccccc}')
+    .replace(/\\end\{tikzcd\}/g, '\\end{array}')
+    .replace(/\\ar(?:\[[^\]]*\])?\s*\{[^}]*\}/g, '')
+    .replace(/\\footnotemark\b/g, '')
+    .replace(/\\hfil\b/g, '')
+    .replace(/\\'\{?e\}?/g, 'é')
+    .replace(/\\'\{?E\}?/g, 'É')
+    .replace(/\\begin\{(?:equation|equation\*)\}/g, () => '$$')
+    .replace(/\\end\{(?:equation|equation\*)\}/g, () => '$$')
+    // `aligned` is an inner math environment and is commonly already wrapped
+    // in \[...\]. Converting it to another pair of delimiters creates invalid
+    // nested math such as \[$$...$$\]. Only promote top-level environments.
+    .replace(/\\begin\{(?:align|align\*|gather|gather\*|multline|multline\*)\}/g, () => '$$\\begin{aligned}')
+    .replace(/\\end\{(?:align|align\*|gather|gather\*|multline|multline\*)\}/g, () => '\\end{aligned}$$')
+    .replace(/\\begin\{(?:enumerate|itemize|description)\}(?:\[[^\]]*\])?/g, '')
+    .replace(/\\end\{(?:enumerate|itemize|description)\}/g, '')
+    .replace(/\\item(?:\[[^\]]*\])?/g, '\n• ')
+    .replace(/\\(?:emph|textbf|textit|textrm)\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\\(?:medskip|smallskip|bigskip|noindent|par)\b/g, '\n')
+    .replace(/~+/g, ' ')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function citationKeys(source) {
+  return citationMentions(source).map((mention) => mention.key);
+}
+
+function citationMentions(source) {
+  const mentions = [];
+  for (const match of String(source || '').matchAll(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)) {
+    for (const key of match[2].split(',').map((item) => item.trim()).filter(Boolean)) {
+      const locator = String(match[1] || '').trim();
+      if (!mentions.some((item) => item.key === key && item.locator === locator)) mentions.push({ key, locator });
+    }
+  }
+  return mentions;
+}
+
+function cleanBibliographyFragment(value) {
+  return readableLatex(String(value || '')
+    .replace(/\\newblock\b/g, '\n')
+    .replace(/\{\\(?:em|it|bf)\s+([^{}]*)\}/g, '$1')
+    .replace(/\\(?:url|path)\s*\{([^}]*)\}/g, '$1')
+    .replace(/\\href\s*\{[^}]*\}\s*\{([^}]*)\}/g, '$1'))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractBibliography(source) {
+  const text = String(source || '');
+  const matches = [...text.matchAll(/\\bibitem(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)];
+  const references = new Map();
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const raw = text.slice((match.index ?? 0) + match[0].length, matches[index + 1]?.index ?? text.indexOf('\\end{thebibliography}', (match.index ?? 0) + match[0].length));
+    const blocks = raw.split(/\\newblock\b/).map(cleanBibliographyFragment).filter(Boolean);
+    const citationText = cleanBibliographyFragment(raw);
+    const title = blocks[1] || blocks[0] || match[1];
+    const authors = blocks.length > 1 ? blocks[0] : '';
+    const href = /\\href\s*\{([^}]+)\}/.exec(raw)?.[1];
+    const explicitUrl = /\\url\s*\{([^}]+)\}/.exec(raw)?.[1] || /https?:\/\/[^\s}]+/.exec(raw)?.[0];
+    const doi = /\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/i.exec(raw)?.[0]?.replace(/[.,;]+$/, '') || '';
+    const arxivId = /(?:arXiv\s*:\s*|arXiv\s+)([a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i.exec(citationText)?.[1] || '';
+    const searchQuery = [title, authors].filter(Boolean).join(' ');
+    const searchUrl = `https://scholar.google.com/scholar?q=${encodeURIComponent(searchQuery)}`;
+    const url = explicitUrl || href || (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : searchUrl);
+    references.set(match[1], { key: match[1], title, authors, text: citationText, url, searchUrl, doi, arxivId, direct: Boolean(explicitUrl || href || doi || arxivId) });
+  }
+  return references;
+}
+
+function balancedGroup(text, start, openToken = '{', closeToken = '}') {
+  if (text[start] !== openToken) return null;
+  let depth = 0;
+  for (let index = start; index < text.length; index += 1) {
+    if (text[index] === openToken && text[index - 1] !== '\\') depth += 1;
+    else if (text[index] === closeToken && text[index - 1] !== '\\') {
+      depth -= 1;
+      if (depth === 0) return { content: text.slice(start + 1, index), end: index + 1 };
+    }
+  }
+  return null;
+}
+
+function authorMacroTable(source) {
+  const text = String(source || '');
+  const macros = new Map();
+  const declarations = /\\(?:newcommand|renewcommand)\s*\{\\([A-Za-z@]+)\}\s*(?:\[(\d+)\])?\s*(?:\[([^\]]*)\])?\s*\{/g;
+  for (const match of text.matchAll(declarations)) {
+    const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    if (group) macros.set(match[1], { replacement: group.content, arity: Number(match[2] || 0), defaultArg: match[3] });
+  }
+  for (const match of text.matchAll(/\\def\s*\\([A-Za-z@]+)\s*((?:#\d\s*)*)\{/g)) {
+    const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    const arity = Math.max(0, ...[...String(match[2] || '').matchAll(/#(\d)/g)].map((item) => Number(item[1])));
+    if (group) macros.set(match[1], { replacement: group.content, arity });
+  }
+  for (const match of text.matchAll(/\\DeclareMathOperator\*?\s*\{\\([A-Za-z@]+)\}\s*\{/g)) {
+    const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    if (group) macros.set(match[1], { replacement: `\\operatorname{${group.content}}`, arity: 0 });
+  }
+  return macros;
+}
+
+function expandMacroUse(text, name, macro) {
+  const pattern = new RegExp(`\\\\${name}(?![A-Za-z@])`, 'g');
+  let output = ''; let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    let position = (match.index ?? 0) + match[0].length;
+    const args = [];
+    // TeX uses whitespace to terminate a zero-argument control word. Preserve
+    // that separator or `\\leq R` becomes the undefined command `\\leqslantR`.
+    if (macro.arity > 0 || macro.defaultArg !== undefined) while (/\s/.test(text[position] || '')) position += 1;
+    if (macro.defaultArg !== undefined) {
+      const optional = balancedGroup(text, position, '[', ']');
+      args.push(optional ? optional.content : macro.defaultArg);
+      if (optional) position = optional.end;
+    }
+    let complete = true;
+    for (let argIndex = args.length; argIndex < macro.arity; argIndex += 1) {
+      while (/\s/.test(text[position] || '')) position += 1;
+      const group = balancedGroup(text, position);
+      if (group) { args.push(group.content); position = group.end; continue; }
+      const token = text[position] === '\\' ? /^\\[A-Za-z@]+|^\\./.exec(text.slice(position))?.[0] : text[position];
+      if (!token) { complete = false; break; }
+      args.push(token); position += token.length;
+    }
+    if (!complete) continue;
+    let replacement = macro.replacement;
+    args.forEach((argument, index) => { replacement = replacement.replace(new RegExp(`#${index + 1}`, 'g'), () => argument); });
+    output += text.slice(cursor, match.index ?? 0) + replacement;
+    cursor = position;
+  }
+  return output + text.slice(cursor);
+}
+
+function expandSimpleEnvironments(source) {
+  const text = String(source || '');
+  const definitions = [];
+  for (const match of text.matchAll(/\\(?:newenvironment|renewenvironment)\s*\{([^}]+)\}(?!\s*\[)\s*\{/g)) {
+    const begin = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    if (!begin) continue;
+    let position = begin.end; while (/\s/.test(text[position] || '')) position += 1;
+    const end = balancedGroup(text, position);
+    if (end) definitions.push({ name: match[1], begin: begin.content, end: end.content });
+  }
+  let expanded = text;
+  for (const definition of definitions) {
+    const escaped = definition.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    expanded = expanded.replace(new RegExp(`\\\\begin\\{${escaped}\\}`, 'g'), () => definition.begin).replace(new RegExp(`\\\\end\\{${escaped}\\}`, 'g'), () => definition.end);
+  }
+  return expanded;
+}
+
+function expandAuthorMacros(source) {
+  const macros = authorMacroTable(source);
+  let expanded = expandSimpleEnvironments(source);
+  const entries = [...macros.entries()].sort((a, b) => b[0].length - a[0].length);
+  for (let pass = 0; pass < 4; pass += 1) for (const [name, macro] of entries) expanded = expandMacroUse(expanded, name, macro);
+  return expanded;
+}
+
+function theoremKind(title, environment) {
+  const value = `${title} ${environment}`.toLowerCase();
+  if (value.includes('theorem') || /(^|-)thm/.test(value)) return 'theorem';
+  if (value.includes('lemma') || /(^|-)lem/.test(value)) return 'lemma';
+  if (value.includes('proposition') || /(^|-)prop/.test(value)) return 'proposition';
+  if (value.includes('corollary') || /(^|-)cor/.test(value)) return 'corollary';
+  if (value.includes('definition') || /(^|-)def/.test(value)) return 'definition';
+  if (value.includes('remark') || /(^|-)rem/.test(value)) return 'remark';
+  if (value.includes('example') || /(^|-)ex/.test(value)) return 'example';
+  return null;
+}
+
+function extractSourceUnits(source) {
+  const originalSource = String(source || '');
+  const normalizedSource = expandAuthorMacros(originalSource);
+  const environments = new Map([
+    ['theorem', 'theorem'], ['thm', 'theorem'], ['lemma', 'lemma'], ['lem', 'lemma'],
+    ['proposition', 'proposition'], ['prop', 'proposition'], ['corollary', 'corollary'], ['cor', 'corollary'],
+    ['definition', 'definition'], ['defn', 'definition'], ['remark', 'remark'], ['rem', 'remark'], ['example', 'example'],
+  ]);
+  const declarations = /\\newtheorem\*?\s*\{([^}]+)\}(?:\[[^\]]+\])?\s*\{([^}]+)\}(?:\[[^\]]+\])?/g;
+  for (const match of originalSource.matchAll(declarations)) {
+    const kind = theoremKind(match[2], match[1]);
+    if (kind) environments.set(match[1], kind);
+  }
+  const names = [...environments.keys()].sort((a, b) => b.length - a.length).map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  if (!names) return [];
+  const unitPattern = new RegExp(`\\\\begin\\{(${names})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
+  const embeddedProofPattern = /\\begin\{proof\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{proof\}/g;
+  const units = [];
+  for (const match of normalizedSource.matchAll(unitPattern)) {
+    const start = match.index ?? 0; const end = start + match[0].length;
+    const label = /\\label\s*\{([^}]+)\}/.exec(match[3])?.[1] || '';
+    const embeddedProofs = [...match[3].matchAll(embeddedProofPattern)];
+    const statementSource = match[3].replace(embeddedProofPattern, '');
+    units.push({ environment: match[1], kind: environments.get(match[1]), title: match[2] || '', texLabel: label, start, end, statement: readableLatex(statementSource), proofText: embeddedProofs.map((proof) => readableLatex(proof[1])).filter(Boolean).join('\n\n'), citationMentions: citationMentions(`${match[2] || ''} ${match[3]}`), citationKeys: citationKeys(`${match[2] || ''} ${match[3]}`) });
+  }
+  const byLabel = new Map(units.filter((unit) => unit.texLabel).map((unit) => [unit.texLabel, unit]));
+  const proofPattern = /\\begin\{proof\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{proof\}/g;
+  for (const proof of normalizedSource.matchAll(proofPattern)) {
+    const proofStart = proof.index ?? 0;
+    if (units.some((unit) => unit.start < proofStart && proofStart < unit.end)) continue;
+    const nearest = units.filter((unit) => unit.end <= proofStart).at(-1) || null;
+    const prelude = normalizedSource.slice(Math.max(nearest?.end ?? 0, proofStart - 2200), proofStart);
+    const explicitMatch = [...prelude.matchAll(/(?:proof\s+of|prove|complet(?:e|es|ed)\s+the\s+proof\s+of)[\s\S]{0,180}?(?:\\ref\s*\{([^}]+)\}|\\hyperref\s*\[([^\]]+)\])/gi)].at(-1);
+    const explicit = explicitMatch?.[1] || explicitMatch?.[2];
+    let target = explicit ? byLabel.get(explicit) : null;
+    if (!target && nearest && !nearest.proofText) target = nearest;
+    if (target && !target.proofText) target.proofText = readableLatex(proof[1]);
+  }
+  return units;
+}
+
+async function enrichAuditFromTex(rawText, primarySource) {
+  if (!primarySource?.entryFile || !primarySource?.sourceDirectory) return rawText;
+  const clean = String(rawText || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const first = clean.indexOf('{'); const last = clean.lastIndexOf('}');
+  if (first < 0 || last <= first) return rawText;
+  let audit;
+  try { audit = JSON.parse(clean.slice(first, last + 1)); }
+  catch { return rawText; }
+  if (!Array.isArray(audit.nodes)) return rawText;
+  const expanded = await readExpandedTex(primarySource.entryFile, primarySource.sourceDirectory);
+  const sourceUnits = extractSourceUnits(expanded);
+  const bibliography = extractBibliography(expanded);
+  const cursors = new Map();
+  for (const node of audit.nodes) {
+    if (!node || typeof node !== 'object') continue;
+    const aiCitations = Array.isArray(node.citations) ? node.citations : [];
+    node.citations = [];
+    const kind = String(node.kind || '');
+    const sameKind = sourceUnits.filter((unit) => unit.kind === kind);
+    const index = cursors.get(kind) || 0;
+    const sourceUnit = sameKind[index];
+    if (!sourceUnit) continue;
+    cursors.set(kind, index + 1);
+    if (sourceUnit.statement) node.statement = sourceUnit.statement;
+    // The TeX tree is authoritative here. Clearing an absent proof matters when
+    // re-enriching an older audit: otherwise a stale, positionally misassigned
+    // proof can survive forever on an externally quoted result.
+    node.proofText = sourceUnit.proofText || '';
+    node.citations = sourceUnit.citationMentions.map(({ key, locator }) => {
+      const reference = bibliography.get(key) || { key, title: key, authors: '', text: `Bibliography entry ${key} was cited here but could not be extracted from the available TeX tree.`, url: `https://scholar.google.com/scholar?q=${encodeURIComponent(key)}`, searchUrl: `https://scholar.google.com/scholar?q=${encodeURIComponent(key)}`, doi: '', arxivId: '', direct: false };
+      const aiDetail = aiCitations.find((citation) => citation && citation.key === key && String(citation.locator || '') === locator) || aiCitations.find((citation) => citation && citation.key === key);
+      return { ...reference, locator, statement: typeof aiDetail?.statement === 'string' ? aiDetail.statement : '' };
+    });
+  }
+  const captured = audit.nodes.filter((node) => typeof node.proofText === 'string' && node.proofText.trim()).length;
+  if (audit.audit && Array.isArray(audit.audit.verificationWarnings)) {
+    audit.audit.verificationWarnings = audit.audit.verificationWarnings.filter((warning) => !/payload|reproduc(?:e|ing).*entire proof|proof-text capture/i.test(String(warning)));
+    const proofCaptureNote = `Complete attached proof environments were captured directly from the local TeX tree (${captured} proofs), independently of the AI explanation payload.`;
+    const baseSummary = String(audit.audit.sourceSummary || '').replace(/\s*Complete attached proof environments were captured directly from the local TeX tree \(\d+ proofs\), independently of the AI explanation payload\./g, '').trim();
+    audit.audit.sourceSummary = `${baseSummary} ${proofCaptureNote}`.trim();
+  }
+  return JSON.stringify(audit);
+}
+
 function makeAuditSchema() {
   const anchor = {
     type: 'object',
@@ -118,13 +481,22 @@ function makeAuditSchema() {
   const node = {
     type: 'object',
     additionalProperties: false,
-    required: ['id', 'kind', 'label', 'title', 'statement', 'status', 'anchor', 'role', 'dependencies', 'proofSketch', 'whyItMatters', 'expandable'],
+    required: ['id', 'kind', 'label', 'title', 'statement', 'proofText', 'citations', 'status', 'anchor', 'role', 'dependencies', 'proofSketch', 'whyItMatters', 'expandable'],
     properties: {
       id: { type: 'string' },
       kind: { enum: ['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'proof', 'equation', 'remark', 'example', 'section', 'external-result'] },
       label: { type: 'string' },
       title: { type: 'string' },
       statement: { type: 'string' },
+      proofText: { type: 'string' },
+      citations: {
+        type: 'array',
+        items: {
+          type: 'object', additionalProperties: false,
+          required: ['key', 'locator', 'statement'],
+          properties: { key: { type: 'string' }, locator: { type: 'string' }, statement: { type: 'string' } },
+        },
+      },
       status: { enum: ['verified', 'needs-verification', 'unavailable'] },
       anchor,
       role: { type: 'string' },
@@ -236,7 +608,16 @@ function auditPrompt({ paper, profile, localInventory, primarySource }) {
 - TeX files available: ${primarySource.fileCount}
 
 Prefer these local TeX files over the PDF: preserve theorem environment labels, \\label/\\ref relationships, section structure, equations, and \\input/\\include dependencies. Use the PDF only to verify pagination or material absent from the source bundle.`
-    : `The arXiv TeX source could not be used (${primarySource?.error || 'unavailable'}). Fall back to the primary PDF at https://arxiv.org/pdf/${paper.arxivId}.`;
+    : primarySource?.kind === 'ai-tex'
+      ? `The arXiv source bundle had no usable TeX. At the reader's request, local AI transcribed the complete PDF into an editable LaTeX working source.
+- AI-generated LaTeX entry: ${primarySource.entryFile}
+- source directory: ${primarySource.sourceDirectory}
+
+Read that local LaTeX document first, but treat the original PDF at https://arxiv.org/pdf/${paper.arxivId} as authoritative. Verify statements against the PDF whenever the conversion may be ambiguous. State clearly in sourceSummary that the LaTeX is an AI transcription, not author-supplied source.`
+      : `The arXiv TeX source could not be used (${primarySource?.error || 'unavailable'}). Fall back to the primary PDF at https://arxiv.org/pdf/${paper.arxivId}.`;
+  const proofCaptureInstructions = primarySource?.kind === 'tex' || primarySource?.kind === 'ai-tex'
+    ? `The host application deterministically attaches complete theorem statements and proof environments from the local LaTeX tree after your turn. Set proofText to an empty string for every node; spend the response budget on accurate dependency analysis and proofSketch explanations. Do not warn about proof payload length.`
+    : `For every theorem, lemma, proposition, corollary, and proof node, statement must be a source-faithful transcription of the complete printed statement, not a summary, and proofText must contain the complete proof from the PDF, including all equations, cases, and cited intermediate results. Do not shorten a proof. Use an empty proofText only when the source genuinely has no proof or the complete proof cannot be accessed, and explain that limitation in the verification warnings.`;
   return `You are Proofroom's mathematical-paper audit engine. Work for a ${profile.level} in ${profile.area}, whose goal is "${profile.goal}".
 
 FIRST: Read the WHOLE primary source before making a guide. Inspect the introduction, every section heading, all named definitions, assumptions, propositions, lemmas, theorems, corollaries, and the proof architecture. Do not use only the abstract. If full text is unavailable, report partial-text-read or blocked and do not invent missing mathematical statements.
@@ -254,7 +635,15 @@ Paper:
 Existing audited papers in this reader's local vault:
 ${libraryContext}
 
-THEN: Produce a source-anchored audit that will become the durable context for later questions about individual theorems. Each node must be a distinct clickable document unit. Include the exact label and page whenever available. Mark a statement verified only when you saw it in the primary source. Dependencies must reference other node ids and point only from a result to prerequisites. The proofSketch must be a short ordered list; use an empty list if it cannot be audited. Include no made-up formulas, theorem statements, page numbers, or citations.
+THEN: Produce a source-anchored audit that will become the durable context for later questions about individual theorems. Each node must be a distinct clickable document unit. Include the exact printed label and page whenever available. The id is internal only; never copy a TeX \\label slug such as thm101 into the reader-facing label or title. Mark a statement verified only when you saw it in the primary source. Dependencies must reference other internal node ids and point only from a result to prerequisites. Include no made-up formulas, theorem statements, page numbers, or citations.
+
+${proofCaptureInstructions}
+
+The proofSketch is a separate short AI explanation of the proof route; it never substitutes for the complete source proof shown to the reader.
+
+For every explicit \\cite in a node's statement or proof, add a citations entry using the exact bibliography key and optional locator text. If the locator names a specific Theorem, Lemma, Proposition, Corollary, Definition, or numbered result, use primary-source access to verify and transcribe that cited result's complete statement into citations.statement. A general paper citation has an empty statement; the reader will preview its bibliographic title. Never invent an external theorem statement. If a specifically located result cannot be verified, leave statement empty and add a verification warning naming the key and locator.
+
+In every JSON string, wrap complete inline mathematical expressions in $...$ and display expressions in $$...$$. Keep each expression together: for example $\\chi|\\det|^s$ and $L_v(\\chi_v,s+n-(k+1)/2)^{-1}$. Never emit a formula partly as prose and partly as LaTeX.
 
 Cross-paper links are optional but useful. Return one only when this paper explicitly uses, extends, contrasts with, or needs background from a unit listed in the existing local vault. Use the exact paperId and node id supplied above; never guess a link. Otherwise return an empty crossPaperLinks array.
 
@@ -268,7 +657,7 @@ ${JSON.stringify(node)}
 Paper: ${paper.title} (arXiv:${paper.arxivId})
 Reader question: ${question}
 
-Answer only about this selected unit and its declared dependency chain. Start with the source anchor and verification status. Preserve uncertainty: if the audit does not establish a claim, say what needs checking in the primary paper. Explain at the reader's configured level; give a proof expansion only when the dependencies justify it. Do not silently replace the paper's theorem by a stronger or simpler statement.`;
+Answer only about this selected unit and its declared dependency chain. Refer to results by their printed names (for example, “Theorem 3.5”), never by internal ids or TeX label slugs. Start with the source anchor and verification status. Preserve uncertainty: if the audit does not establish a claim, say what needs checking in the primary paper. Explain at the reader's configured level; use the complete proofText as the source when expanding a proof. Do not silently replace the paper's theorem by a stronger or simpler statement.`;
 }
 
 function editorialPrompt({ paper, node }) {
@@ -431,6 +820,10 @@ class CodexAppServer {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.turns.delete(turnId);
+        // Do not leave a provider retry consuming the local subscription after
+        // the reader has already reported a timeout. Interruption is best-effort
+        // because older app-server builds may finish between these two calls.
+        void this.call('turn/interrupt', { threadId: params.threadId, turnId }, 10000).catch(() => {});
         reject(new Error('Codex analysis exceeded the 12-minute local wait limit.'));
       }, 12 * 60 * 1000);
       this.turns.set(turnId, {
@@ -462,6 +855,30 @@ class CodexAppServer {
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'readOnly', networkAccess: true },
       outputSchema: makeAuditSchema(),
+    });
+    return { threadId, ...output };
+  }
+
+  async convertPdfToLatex({ paper, profile }) {
+    await this.start();
+    const model = profile.model || this.models.find((item) => item.isDefault)?.model || undefined;
+    const created = await this.call('thread/start', {
+      model,
+      cwd: WORKDIR,
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      developerInstructions: 'You are a source-faithful mathematical transcription assistant. Do not modify files or invent missing mathematics.',
+    });
+    const threadId = created.thread?.id;
+    if (!threadId) throw new Error('Codex did not create a LaTeX conversion thread.');
+    this.loadedThreads.add(threadId);
+    const output = await this.runTurn({
+      threadId,
+      input: [{ type: 'text', text: latexConversionPrompt({ paper }), text_elements: [] }],
+      model,
+      effort: profile.reasoning,
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'readOnly', networkAccess: true },
     });
     return { threadId, ...output };
   }
@@ -653,10 +1070,15 @@ const server = createServer(async (request, response) => {
           await vault.saveSourceRecord(paper.id, { analysisFormat: 'tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.fetchedAt });
         } catch (error) {
           primarySource = { kind: 'pdf', error: error instanceof Error ? error.message : 'TeX source unavailable' };
-          await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
+          if (body.convertPdfToLatex) {
+            const converted = await codex.convertPdfToLatex({ paper, profile });
+            primarySource = await saveAiLatexSource(paper, converted);
+            await vault.saveSourceRecord(paper.id, { analysisFormat: 'ai-tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.convertedAt, sourceError: 'Author TeX unavailable; saved AI transcription from the primary PDF.' });
+          } else await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
         }
         const analyzed = await codex.analyze({ paper, profile, primarySource, localInventory: localInventory.filter((item) => item.paperId !== paper.id) });
-        return { ...analyzed, paper, primarySource: { kind: primarySource.kind, fileCount: primarySource.fileCount ?? 0, cached: Boolean(primarySource.cached), error: primarySource.error ?? null } };
+        const text = primarySource.kind === 'tex' || primarySource.kind === 'ai-tex' ? await enrichAuditFromTex(analyzed.text, primarySource) : analyzed.text;
+        return { ...analyzed, text, paper, primarySource: { kind: primarySource.kind, fileCount: primarySource.fileCount ?? 0, cached: Boolean(primarySource.cached), error: primarySource.error ?? null } };
       }
       if (!body.threadId || !body.node) throw new Error('threadId and node are required.');
       if (pathname === '/node-edit/suggest') return codex.suggestEditorialPatch({ paper: body.paper, profile, node: body.node, threadId: body.threadId });
@@ -681,3 +1103,5 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     process.exit(0);
   });
 }
+
+export { enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractSourceUnits, readExpandedTex };

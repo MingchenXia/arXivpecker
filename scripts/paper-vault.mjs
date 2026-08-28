@@ -197,6 +197,7 @@ export class PaperVault {
       nodeId: typeof patch.nodeId === 'string' ? patch.nodeId : '',
       title: typeof patch.title === 'string' ? patch.title : '',
       statement: typeof patch.statement === 'string' ? patch.statement : '',
+      proofText: typeof patch.proofText === 'string' ? patch.proofText : '',
       nodeKind: allowedNodeKinds.has(patch.nodeKind) ? patch.nodeKind : '',
       afterNodeId: typeof patch.afterNodeId === 'string' ? patch.afterNodeId : '',
       rationale: typeof patch.rationale === 'string' ? patch.rationale : '',
@@ -337,9 +338,9 @@ function workingNodes(nodes, patches) {
   for (const node of nodes) {
     if (deleted.has(node.id)) continue;
     const replacement = replacements.get(node.id);
-    result.push(replacement ? { ...node, kind: replacement.nodeKind || node.kind, title: replacement.title || node.title, statement: replacement.statement || node.statement, dependencies: replacement.dependencies?.length ? replacement.dependencies : node.dependencies, proofSketch: replacement.proofSketch?.length ? replacement.proofSketch : node.proofSketch, status: 'needs-verification', anchor: { ...node.anchor, confidence: 'approximate' } } : node);
+    result.push(replacement ? { ...node, kind: replacement.nodeKind || node.kind, title: replacement.title || node.title, statement: replacement.statement || node.statement, proofText: replacement.proofText || node.proofText, dependencies: replacement.dependencies?.length ? replacement.dependencies : node.dependencies, proofSketch: replacement.proofSketch?.length ? replacement.proofSketch : node.proofSketch, status: 'needs-verification', anchor: { ...node.anchor, confidence: 'approximate' } } : node);
     for (const patch of patches.filter((item) => item.kind === 'add' && item.afterNodeId === node.id)) {
-      result.push({ id: `working-${patch.id}`, kind: patch.nodeKind || 'proposition', label: 'Working edition', title: patch.title, statement: patch.statement, status: 'needs-verification', anchor: { label: 'Working edition — reader addition', page: null, confidence: 'unverified' }, role: patch.rationale || 'Reader-added proposition', dependencies: patch.dependencies ?? [], proofSketch: patch.proofSketch ?? [], whyItMatters: 'This unit was added in the working edition and is not part of the original source.', expandable: true });
+      result.push({ id: `working-${patch.id}`, kind: patch.nodeKind || 'proposition', label: 'Working edition', title: patch.title, statement: patch.statement, proofText: patch.proofText || '', status: 'needs-verification', anchor: { label: 'Working edition — reader addition', page: null, confidence: 'unverified' }, role: patch.rationale || 'Reader-added proposition', dependencies: patch.dependencies ?? [], proofSketch: patch.proofSketch ?? [], whyItMatters: 'This unit was added in the working edition and is not part of the original source.', expandable: true });
     }
   }
   return result;
