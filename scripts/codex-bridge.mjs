@@ -795,7 +795,7 @@ function makeVersionComparisonSchema() {
   };
 }
 
-function auditPrompt({ paper, profile, localInventory, primarySource }) {
+function auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit = true, detailedAudit = true }) {
   const libraryContext = localInventory.length
     ? JSON.stringify(localInventory, null, 2)
     : 'No other audited papers are available in the local vault yet.';
@@ -816,6 +816,12 @@ Read that local LaTeX document first, but treat the original PDF at https://arxi
   const proofCaptureInstructions = primarySource?.kind === 'tex' || primarySource?.kind === 'ai-tex'
     ? `The host application deterministically attaches complete theorem statements and proof environments from the local LaTeX tree after your turn. Set proofText to an empty string for every node; spend the response budget on accurate dependency analysis and proofSketch explanations. Do not warn about proof payload length.`
     : `For every theorem, lemma, proposition, corollary, and proof node, statement must be a source-faithful transcription of the complete printed statement, not a summary, and proofText must contain the complete proof from the PDF, including all equations, cases, and cited intermediate results. Do not shorten a proof. Use an empty proofText only when the source genuinely has no proof or the complete proof cannot be accessed, and explain that limitation in the verification warnings.`;
+  const correctnessInstructions = correctnessAudit
+    ? `CORRECTNESS AUDIT REQUESTED: For every formal environment, actively check whether the statement is well-formed under the declared hypotheses and whether its proof supports the exact conclusion. Trace dependencies, inspect cited prerequisites when accessible, and use status "verified" only when this check succeeds. Use "needs-verification" for a specific gap, ambiguity, unchecked external dependency, or possible error, and explain the issue in role or verificationWarnings. Never repair or silently strengthen an argument.`
+    : `CORRECTNESS AUDIT NOT REQUESTED: Preserve the complete document structure and source text, build logical dependencies, and mark source-transcribed environments as verified only in the limited sense that their text was located in the primary source. Do not claim that the mathematics or proof has been checked for correctness.`;
+  const depthInstructions = detailedAudit
+    ? `DETAILED AUDIT MODE: Spend additional effort on the bibliography and every theorem-level external citation. Follow the cited primary paper or book when accessible; recover the exact cited theorem, lemma, proposition, corollary, or definition statement and the definitions of every nonstandard symbol it uses. Populate citations.statement and citations.definitions with that verified material. Prefer arXiv TeX source for cited arXiv papers. Do not return a placeholder saying that a record is not cached; either provide verified source detail or leave the field empty and give a precise verification warning.`
+    : `STANDARD AUDIT MODE: Preserve citation keys, locators, titles, and direct primary-source links, but do not spend the audit budget following every external theorem.`;
   return `You are Proofroom's mathematical-paper audit engine. Work for a ${profile.level} interested in ${profile.areas.join(', ')}, whose goal is "${profile.goal}".
 
 FIRST: Read the WHOLE primary source before making a guide. Inspect the introduction, every section heading, all named definitions, assumptions, propositions, lemmas, theorems, corollaries, and the proof architecture. Do not use only the abstract. If full text is unavailable, report partial-text-read or blocked and do not invent missing mathematical statements.
@@ -836,6 +842,10 @@ ${libraryContext}
 THEN: Produce a source-anchored audit that will become the durable context for later questions about individual theorems. Each node must be a distinct clickable document unit. Include the exact printed label and page whenever available. The id is internal only; never copy a TeX \\label slug such as thm101 into the reader-facing label or title. Mark a statement verified only when you saw it in the primary source. Dependencies must reference other internal node ids and point only from a result to prerequisites. Include no made-up formulas, theorem statements, page numbers, or citations.
 
 ${proofCaptureInstructions}
+
+${correctnessInstructions}
+
+${depthInstructions}
 
 The proofSketch is a separate short AI explanation of the proof route; it never substitutes for the complete source proof shown to the reader.
 
@@ -1050,7 +1060,7 @@ class CodexAppServer {
     });
   }
 
-  async analyze({ paper, profile, localInventory = [], primarySource = null }) {
+  async analyze({ paper, profile, localInventory = [], primarySource = null, correctnessAudit = true, detailedAudit = true }) {
     await this.start();
     const model = profile.model || this.models.find((item) => item.isDefault)?.model || undefined;
     const created = await this.call('thread/start', {
@@ -1065,7 +1075,7 @@ class CodexAppServer {
     this.loadedThreads.add(threadId);
     const output = await this.runTurn({
       threadId,
-      input: [{ type: 'text', text: auditPrompt({ paper, profile, localInventory, primarySource }), text_elements: [] }],
+      input: [{ type: 'text', text: auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit, detailedAudit }), text_elements: [] }],
       model,
       effort: profile.reasoning,
       approvalPolicy: 'never',
@@ -1370,7 +1380,7 @@ const server = createServer(async (request, response) => {
             await vault.saveSourceRecord(paper.id, { analysisFormat: 'ai-tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.convertedAt, sourceError: 'Author TeX unavailable; saved AI transcription from the primary PDF.' });
           } else await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
         }
-        const analyzed = await codex.analyze({ paper, profile, primarySource, localInventory: localInventory.filter((item) => item.paperId !== paper.id) });
+        const analyzed = await codex.analyze({ paper, profile, primarySource, correctnessAudit: body.correctnessAudit !== false, detailedAudit: body.detailedAudit !== false, localInventory: localInventory.filter((item) => item.paperId !== paper.id) });
         const text = primarySource.kind === 'tex' || primarySource.kind === 'ai-tex' ? await enrichAuditFromTex(analyzed.text, primarySource) : analyzed.text;
         return { ...analyzed, text, paper, primarySource: { kind: primarySource.kind, fileCount: primarySource.fileCount ?? 0, cached: Boolean(primarySource.cached), error: primarySource.error ?? null } };
       }
