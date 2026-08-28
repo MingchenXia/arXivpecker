@@ -116,7 +116,7 @@ export class PaperVault {
     const directory = this.paperDirectory(record);
     await this.createDirectories(directory);
     const oldPaper = await readJson(path.join(directory, 'paper.json'), {});
-    await writeJson(path.join(directory, 'paper.json'), { ...oldPaper, ...paper, folder: record.folder, updatedAt: record.updatedAt, createdAt: oldPaper.createdAt ?? record.createdAt, source: { abstractUrl: `https://arxiv.org/abs/${paper.arxivId}`, pdfUrl: `https://arxiv.org/pdf/${paper.arxivId}` } });
+    await writeJson(path.join(directory, 'paper.json'), { ...oldPaper, ...paper, folder: record.folder, updatedAt: record.updatedAt, createdAt: oldPaper.createdAt ?? record.createdAt, source: { ...(oldPaper.source ?? {}), abstractUrl: `https://arxiv.org/abs/${paper.arxivId}`, pdfUrl: `https://arxiv.org/pdf/${paper.arxivId}`, texUrl: `https://export.arxiv.org/e-print/${paper.arxivId}` } });
     await writeFile(path.join(directory, 'README.md'), readmeFor(paper), 'utf8');
     const patchesFile = path.join(directory, 'editions', 'working', 'patches.json');
     const patches = await readJson(patchesFile, null);
@@ -131,6 +131,38 @@ export class PaperVault {
     const record = index.papers.find((item) => item.id === paperId);
     if (!record) throw new Error('This paper is not yet in the local vault.');
     return record;
+  }
+
+  async sourceDirectory(paperId) {
+    const record = await this.recordFor(paperId);
+    return path.join(this.paperDirectory(record), 'attachments', 'source');
+  }
+
+  async saveSourceRecord(paperId, sourceRecord) {
+    const record = await this.recordFor(paperId);
+    const file = path.join(this.paperDirectory(record), 'paper.json');
+    const paper = await readJson(file, {});
+    await writeJson(file, { ...paper, source: { ...(paper.source ?? {}), ...sourceRecord }, updatedAt: new Date().toISOString() });
+    return sourceRecord;
+  }
+
+  async removePaper(paperId) {
+    const index = await this.index();
+    const record = index.papers.find((item) => item.id === paperId);
+    if (!record) throw new Error('This paper is not in the local vault.');
+    const trashDirectory = path.join(this.root, '_trash');
+    await mkdir(trashDirectory, { recursive: true });
+    const archivedName = `${record.folder}--removed-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    await rename(this.paperDirectory(record), path.join(trashDirectory, archivedName));
+    index.papers = index.papers.filter((item) => item.id !== paperId);
+    index.links = index.links.filter((link) => link.from.paperId !== paperId && link.to.paperId !== paperId);
+    await this.writeIndex(index);
+    for (const remaining of index.papers) {
+      const incident = index.links.filter((link) => link.from.paperId === remaining.id || link.to.paperId === remaining.id);
+      await writeJson(path.join(this.paperDirectory(remaining), 'links.json'), incident);
+    }
+    await this.rebuildGraph();
+    return { paperId, archivedFolder: path.join('_trash', archivedName), recoverable: true };
   }
 
   async saveAudit(paper, audit) {
@@ -165,9 +197,11 @@ export class PaperVault {
       nodeId: typeof patch.nodeId === 'string' ? patch.nodeId : '',
       title: typeof patch.title === 'string' ? patch.title : '',
       statement: typeof patch.statement === 'string' ? patch.statement : '',
-      nodeKind: allowedNodeKinds.has(patch.nodeKind) ? patch.nodeKind : 'proposition',
+      nodeKind: allowedNodeKinds.has(patch.nodeKind) ? patch.nodeKind : '',
       afterNodeId: typeof patch.afterNodeId === 'string' ? patch.afterNodeId : '',
       rationale: typeof patch.rationale === 'string' ? patch.rationale : '',
+      dependencies: Array.isArray(patch.dependencies) ? patch.dependencies.map(String).filter(Boolean).slice(0, 100) : [],
+      proofSketch: Array.isArray(patch.proofSketch) ? patch.proofSketch.map(String).filter(Boolean).slice(0, 100) : [],
       source: patch.source === 'ai' ? 'ai' : 'manual',
       createdAt: typeof patch.createdAt === 'string' ? patch.createdAt : new Date().toISOString(),
     })).filter((patch) => patch.nodeId || (patch.kind === 'add' && patch.title && patch.statement)) : [];
@@ -303,9 +337,9 @@ function workingNodes(nodes, patches) {
   for (const node of nodes) {
     if (deleted.has(node.id)) continue;
     const replacement = replacements.get(node.id);
-    result.push(replacement ? { ...node, title: replacement.title || node.title, statement: replacement.statement || node.statement, status: 'needs-verification', anchor: { ...node.anchor, confidence: 'approximate' } } : node);
+    result.push(replacement ? { ...node, kind: replacement.nodeKind || node.kind, title: replacement.title || node.title, statement: replacement.statement || node.statement, dependencies: replacement.dependencies?.length ? replacement.dependencies : node.dependencies, proofSketch: replacement.proofSketch?.length ? replacement.proofSketch : node.proofSketch, status: 'needs-verification', anchor: { ...node.anchor, confidence: 'approximate' } } : node);
     for (const patch of patches.filter((item) => item.kind === 'add' && item.afterNodeId === node.id)) {
-      result.push({ id: `working-${patch.id}`, kind: patch.nodeKind || 'proposition', label: 'Working edition', title: patch.title, statement: patch.statement, status: 'needs-verification', anchor: { label: 'Working edition — reader addition', page: null, confidence: 'unverified' }, role: patch.rationale || 'Reader-added proposition', dependencies: [], proofSketch: [], whyItMatters: 'This unit was added in the working edition and is not part of the original source.', expandable: true });
+      result.push({ id: `working-${patch.id}`, kind: patch.nodeKind || 'proposition', label: 'Working edition', title: patch.title, statement: patch.statement, status: 'needs-verification', anchor: { label: 'Working edition — reader addition', page: null, confidence: 'unverified' }, role: patch.rationale || 'Reader-added proposition', dependencies: patch.dependencies ?? [], proofSketch: patch.proofSketch ?? [], whyItMatters: 'This unit was added in the working edition and is not part of the original source.', expandable: true });
     }
   }
   return result;
