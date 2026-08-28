@@ -181,10 +181,41 @@ export class PaperVault {
       nodeNotes: reader.nodeNotes && typeof reader.nodeNotes === 'object' ? reader.nodeNotes : {},
       nodeAnswers: reader.nodeAnswers && typeof reader.nodeAnswers === 'object' ? reader.nodeAnswers : {},
       expanded: reader.expanded && typeof reader.expanded === 'object' ? reader.expanded : {},
+      marks: reader.marks && typeof reader.marks === 'object' ? Object.fromEntries(Object.entries(reader.marks).filter(([, value]) => ['understood', 'question', 'error'].includes(value))) : {},
       updatedAt: new Date().toISOString(),
     };
     await writeJson(path.join(this.paperDirectory(record), 'reader.json'), safeReader);
     return safeReader;
+  }
+
+  async saveExport(paperId, exportRecord) {
+    const record = await this.recordFor(paperId);
+    const content = typeof exportRecord?.content === 'string' ? exportRecord.content : '';
+    if (!content.trim()) throw new Error('The selected paper export is empty.');
+    if (Buffer.byteLength(content, 'utf8') > 16 * 1024 * 1024) throw new Error('The selected paper export is too large.');
+    const requested = String(exportRecord?.fileName || 'reading-edition.md').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 120) || 'reading-edition.md';
+    const fileName = requested.toLowerCase().endsWith('.md') ? requested : `${requested}.md`;
+    const directory = path.join(this.paperDirectory(record), 'exports'); await mkdir(directory, { recursive: true });
+    const file = path.join(directory, fileName); await writeFile(file, content, 'utf8');
+    await writeJson(path.join(directory, `${fileName}.manifest.json`), { paperId, fileName, selection: exportRecord?.selection ?? {}, savedAt: new Date().toISOString() });
+    return { fileName, relativePath: path.relative(this.root, file), bytes: Buffer.byteLength(content, 'utf8') };
+  }
+
+  async saveCitationAsset(paperId, upload) {
+    const record = await this.recordFor(paperId);
+    const encoded = typeof upload?.dataBase64 === 'string' ? upload.dataBase64 : '';
+    const payload = Buffer.from(encoded, 'base64');
+    if (!payload.length) throw new Error('The uploaded reference file is empty.');
+    if (payload.length > 32 * 1024 * 1024) throw new Error('Reference uploads are limited to 32 MB.');
+    const citation = upload?.citation && typeof upload.citation === 'object' ? upload.citation : {};
+    const referenceName = slug(citation.key || citation.title || 'attached-reference', 72);
+    const fileName = String(upload?.fileName || 'source.pdf').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 140) || 'source.pdf';
+    const directory = path.join(this.paperDirectory(record), 'attachments', 'references', referenceName); await mkdir(directory, { recursive: true });
+    const file = path.join(directory, fileName); await writeFile(file, payload);
+    const manifestFile = path.join(directory, 'reference.json'); const previous = await readJson(manifestFile, { files: [] });
+    const relativePath = path.relative(this.root, file);
+    await writeJson(manifestFile, { citation: { key: String(citation.key || ''), title: String(citation.title || ''), authors: String(citation.authors || ''), locator: String(citation.locator || '') }, files: [...new Set([...(Array.isArray(previous.files) ? previous.files : []), relativePath])], updatedAt: new Date().toISOString() });
+    return { fileName, relativePath, bytes: payload.length };
   }
 
   async savePatches(paperId, patches) {
@@ -226,7 +257,7 @@ export class PaperVault {
       const [paper, audit, reader, patches] = await Promise.all([
         readJson(path.join(directory, 'paper.json'), null),
         readJson(path.join(directory, 'audit.json'), null),
-        readJson(path.join(directory, 'reader.json'), { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {} }),
+        readJson(path.join(directory, 'reader.json'), { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} }),
         readJson(path.join(directory, 'editions', 'working', 'patches.json'), { patches: [] }),
       ]);
       if (paper) records.push({ paper, audit, reader, patches: Array.isArray(patches.patches) ? patches.patches : [], folder: record.folder });
@@ -244,8 +275,9 @@ export class PaperVault {
     const nodeNotes = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.nodeNotes ?? {}]));
     const nodeAnswers = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.nodeAnswers ?? {}]));
     const expanded = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.expanded ?? {}]));
+    const marks = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.marks ?? {}]));
     const patches = Object.fromEntries(records.map((record) => [record.paper.id, record.patches ?? []]));
-    return { papers, audits, notes, nodeNotes, nodeAnswers, expanded, patches, profile, links: index.links, graph, vault: { folder: this.root, paperFolders: records.map((record) => ({ paperId: record.paper.id, folder: record.folder })) } };
+    return { papers, audits, notes, nodeNotes, nodeAnswers, expanded, marks, patches, profile, links: index.links, graph, vault: { folder: this.root, paperFolders: records.map((record) => ({ paperId: record.paper.id, folder: record.folder })) } };
   }
 
   async compactInventory() {

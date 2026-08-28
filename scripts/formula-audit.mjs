@@ -9,8 +9,11 @@ const failed = [];
 
 for (const folder of (await fs.readdir(root)).filter((name) => name.startsWith('arxiv-'))) {
   const audit = JSON.parse(await fs.readFile(path.join(root, folder, 'audit.json'), 'utf8'));
-  for (const node of audit.nodes) {
-    for (const [field, value] of [['statement', node.statement], ['proof', node.proofText]]) {
+  const documents = [
+    ...(audit.nodes ?? []).flatMap((node) => [['statement', node.statement, node.title], ['proof', node.proofText, node.title]]),
+    ...(audit.sourceBlocks ?? []).flatMap((block) => [['source content', block.content, block.title || block.id], ['source proof', block.proofText, block.title || block.id]]),
+  ];
+  for (const [field, value, label] of documents) {
       for (const match of String(value || '').matchAll(formulaPattern)) {
         total += 1;
         const expression = match[1] ?? match[2] ?? match[3] ?? match[4] ?? '';
@@ -23,13 +26,12 @@ for (const folder of (await fs.readdir(root)).filter((name) => name.startsWith('
         } catch (error) {
           failed.push({
             paper: folder,
-            node: node.title,
+            node: label,
             field,
             expression,
             error: error instanceof Error ? error.message : String(error),
           });
         }
-      }
     }
   }
 }

@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { PaperVault } from './paper-vault.mjs';
 
 const PORT = Number(process.env.PROOFROOM_CODEX_PORT || 4318);
@@ -183,14 +184,14 @@ function normalizeMathTextCommands(source) {
 
 function unwrapLatexTextCommands(source) {
   let text = String(source || '');
-  const command = /\\(footnote|emph|textbf|textit|textrm)\s*\{/g;
+  const command = /\\(footnote|footnotetext|caption|emph|textbf|textit|textrm)\s*\{/g;
   for (let pass = 0; pass < 4; pass += 1) {
     let output = ''; let cursor = 0; let changed = false;
     for (const match of text.matchAll(command)) {
       if ((match.index ?? 0) < cursor) continue;
       const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
       if (!group) continue;
-      const replacement = match[1] === 'footnote' ? ` (Note: ${group.content})` : group.content;
+      const replacement = match[1] === 'footnote' || match[1] === 'footnotetext' ? ` (Note: ${group.content})` : match[1] === 'caption' ? `\n${group.content}\n` : group.content;
       output += text.slice(cursor, match.index ?? 0) + replacement;
       cursor = group.end; changed = true;
     }
@@ -201,7 +202,7 @@ function unwrapLatexTextCommands(source) {
 }
 
 function readableLatex(source) {
-  return unwrapLatexTextCommands(normalizeMathTextCommands(String(source || '')))
+  const readable = unwrapLatexTextCommands(normalizeMathTextCommands(String(source || '')))
     .replace(/(^|[^\\])%[^\n]*/g, '$1')
     .replace(/\\label\s*\{[^}]*\}/g, '')
     .replace(/\\(?:eqref|ref|autoref|cref|Cref)\s*\{[^}]*\}/g, 'the referenced result')
@@ -210,9 +211,16 @@ function readableLatex(source) {
     .replace(/\\end\{tikzcd\}/g, '\\end{array}')
     .replace(/\\ar(?:\[[^\]]*\])?\s*\{[^}]*\}/g, '')
     .replace(/\\footnotemark\b/g, '')
+    .replace(/\\includegraphics(?:\[[^\]]*\])?\s*\{[^}]+\}/g, '')
     .replace(/\\hfil\b/g, '')
     .replace(/\\'\{?e\}?/g, 'é')
     .replace(/\\'\{?E\}?/g, 'É')
+    .replace(/\\"\{?([aeiouAEIOU])\}?/g, (_match, letter) => ({ a: 'ä', e: 'ë', i: 'ï', o: 'ö', u: 'ü', A: 'Ä', E: 'Ë', I: 'Ï', O: 'Ö', U: 'Ü' }[letter] || letter))
+    .replace(/\\~\{?([anoANO])\}?/g, (_match, letter) => ({ a: 'ã', n: 'ñ', o: 'õ', A: 'Ã', N: 'Ñ', O: 'Õ' }[letter] || letter))
+    .replace(/\\c\{?([cC])\}?/g, (_match, letter) => letter === 'C' ? 'Ç' : 'ç')
+    .replace(/\\v\{?([cszCSZ])\}?/g, (_match, letter) => ({ c: 'č', s: 'š', z: 'ž', C: 'Č', S: 'Š', Z: 'Ž' }[letter] || letter))
+    .replace(/\\o\{\}/g, 'ø')
+    .replace(/\\O\{\}/g, 'Ø')
     .replace(/\\begin\{(?:equation|equation\*)\}/g, () => '$$')
     .replace(/\\end\{(?:equation|equation\*)\}/g, () => '$$')
     // `aligned` is an inner math environment and is commonly already wrapped
@@ -229,6 +237,15 @@ function readableLatex(source) {
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+  // Author TeX is line-wrapped for source control, not for typography. Preserve
+  // paragraph breaks and explicit TeX `\\`, but reflow soft source newlines so
+  // proofs read like the typeset paper instead of a code listing.
+  return readable
+    .replace(/\n\s*•/g, '\n\n•')
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.replace(/[ \t]*\n[ \t]*/g, ' ').replace(/[ \t]{2,}/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 function citationKeys(source) {
@@ -275,6 +292,67 @@ function extractBibliography(source) {
     const searchUrl = `https://scholar.google.com/scholar?q=${encodeURIComponent(searchQuery)}`;
     const url = explicitUrl || href || (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : searchUrl);
     references.set(match[1], { key: match[1], title, authors, text: citationText, url, searchUrl, doi, arxivId, direct: Boolean(explicitUrl || href || doi || arxivId) });
+  }
+  return references;
+}
+
+function bibtexField(entry, name) {
+  const match = new RegExp(`(?:^|,)\\s*${name}\\s*=\\s*`, 'i').exec(entry);
+  if (!match) return '';
+  let cursor = (match.index ?? 0) + match[0].length;
+  while (/\s/.test(entry[cursor] || '')) cursor += 1;
+  if (entry[cursor] === '{') return balancedGroup(entry, cursor)?.content || '';
+  if (entry[cursor] === '"') {
+    let end = cursor + 1;
+    while (end < entry.length && (entry[end] !== '"' || entry[end - 1] === '\\')) end += 1;
+    return entry.slice(cursor + 1, end);
+  }
+  return entry.slice(cursor).split(',')[0]?.trim() || '';
+}
+
+function cleanBibtexField(value) {
+  return readableLatex(String(value || '').replace(/[{}]/g, '').replace(/\\&/g, '&')).replace(/\s+/g, ' ').trim();
+}
+
+function extractBibtex(source) {
+  const references = new Map();
+  const pattern = /@(?!comment|preamble|string)([A-Za-z]+)\s*\{/gi;
+  for (const match of String(source || '').matchAll(pattern)) {
+    const group = balancedGroup(source, (match.index ?? 0) + match[0].length - 1);
+    if (!group) continue;
+    const comma = group.content.indexOf(',');
+    if (comma < 0) continue;
+    const key = group.content.slice(0, comma).trim();
+    const entry = group.content.slice(comma + 1);
+    const title = cleanBibtexField(bibtexField(entry, 'title')) || 'Untitled cited source';
+    const authors = cleanBibtexField(bibtexField(entry, 'author')).replace(/\s+and\s+/gi, ' · ');
+    const year = cleanBibtexField(bibtexField(entry, 'year'));
+    const journal = cleanBibtexField(bibtexField(entry, 'journal') || bibtexField(entry, 'booktitle'));
+    const doi = cleanBibtexField(bibtexField(entry, 'doi'));
+    const eprint = cleanBibtexField(bibtexField(entry, 'eprint'));
+    const explicitUrl = cleanBibtexField(bibtexField(entry, 'url'));
+    const arxivId = /^(?:[a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?$/i.test(eprint) ? eprint.replace(/v\d+$/i, '') : '';
+    const text = [authors, title, journal, year].filter(Boolean).join('. ');
+    const searchUrl = `https://scholar.google.com/scholar?q=${encodeURIComponent([title, authors].filter(Boolean).join(' '))}`;
+    const url = explicitUrl || (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : searchUrl);
+    references.set(key, { key, title, authors, text, url, searchUrl, doi, arxivId, direct: Boolean(explicitUrl || doi || arxivId) });
+  }
+  return references;
+}
+
+async function extractBibliographyTree(source, sourceRoot) {
+  const references = extractBibliography(source);
+  const requested = [];
+  for (const match of String(source || '').matchAll(/\\(?:bibliography|addbibresource)(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)) {
+    for (const name of match[1].split(',').map((value) => value.trim()).filter(Boolean)) requested.push(name);
+  }
+  for (const name of requested) {
+    const filename = /\.bib$/i.test(name) ? name : `${name}.bib`;
+    const candidate = path.resolve(sourceRoot, filename);
+    const relative = path.relative(sourceRoot, candidate);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    try { for (const [key, reference] of extractBibtex(await readFile(candidate, 'utf8'))) references.set(key, reference); }
+    catch { /* A missing bibliography remains a non-fatal, explicit lookup. */ }
   }
   return references;
 }
@@ -382,6 +460,10 @@ function theoremKind(title, environment) {
   return null;
 }
 
+function graphicPaths(source) {
+  return [...String(source || '').matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].map((match) => match[1].trim()).filter(Boolean);
+}
+
 function extractSourceUnits(source) {
   const originalSource = String(source || '');
   const normalizedSource = expandAuthorMacros(originalSource);
@@ -405,7 +487,7 @@ function extractSourceUnits(source) {
     const label = /\\label\s*\{([^}]+)\}/.exec(match[3])?.[1] || '';
     const embeddedProofs = [...match[3].matchAll(embeddedProofPattern)];
     const statementSource = match[3].replace(embeddedProofPattern, '');
-    units.push({ environment: match[1], kind: environments.get(match[1]), title: match[2] || '', texLabel: label, start, end, statement: readableLatex(statementSource), proofText: embeddedProofs.map((proof) => readableLatex(proof[1])).filter(Boolean).join('\n\n'), citationMentions: citationMentions(`${match[2] || ''} ${match[3]}`), citationKeys: citationKeys(`${match[2] || ''} ${match[3]}`) });
+    units.push({ environment: match[1], kind: environments.get(match[1]), title: match[2] || '', texLabel: label, start, end, statement: readableLatex(statementSource), proofText: embeddedProofs.map((proof) => readableLatex(proof[1])).filter(Boolean).join('\n\n'), assetPaths: graphicPaths(statementSource), proofAssetPaths: embeddedProofs.flatMap((proof) => graphicPaths(proof[1])), embeddedProof: embeddedProofs.length > 0, citationMentions: citationMentions(`${match[2] || ''} ${match[3]}`), citationKeys: citationKeys(`${match[2] || ''} ${match[3]}`) });
   }
   const byLabel = new Map(units.filter((unit) => unit.texLabel).map((unit) => [unit.texLabel, unit]));
   const proofPattern = /\\begin\{proof\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{proof\}/g;
@@ -418,9 +500,118 @@ function extractSourceUnits(source) {
     const explicit = explicitMatch?.[1] || explicitMatch?.[2];
     let target = explicit ? byLabel.get(explicit) : null;
     if (!target && nearest && !nearest.proofText) target = nearest;
-    if (target && !target.proofText) target.proofText = readableLatex(proof[1]);
+    if (target && !target.proofText) {
+      target.proofText = readableLatex(proof[1]);
+      target.proofAssetPaths = graphicPaths(proof[1]);
+      for (const mention of citationMentions(proof[1])) if (!target.citationMentions.some((item) => item.key === mention.key && item.locator === mention.locator)) target.citationMentions.push(mention);
+      target.citationKeys = target.citationMentions.map((mention) => mention.key);
+      target.proofStart = proofStart;
+      target.proofEnd = proofStart + proof[0].length;
+    }
   }
   return units;
+}
+
+function citationReference(mention, bibliography, aiCitations = []) {
+  const { key, locator = '' } = mention;
+  const reference = bibliography.get(key) || { key, title: 'Bibliographic record not cached yet', authors: '', text: '', url: `https://scholar.google.com/scholar?q=${encodeURIComponent(key)}`, searchUrl: `https://scholar.google.com/scholar?q=${encodeURIComponent(key)}`, doi: '', arxivId: '', direct: false };
+  const aiDetail = aiCitations.find((citation) => citation && citation.key === key && String(citation.locator || '') === locator) || aiCitations.find((citation) => citation && citation.key === key);
+  return { ...reference, locator, statement: typeof aiDetail?.statement === 'string' ? aiDetail.statement : '', definitions: Array.isArray(aiDetail?.definitions) ? aiDetail.definitions.filter((item) => item && typeof item.notation === 'string' && typeof item.definition === 'string').map((item) => ({ notation: item.notation, definition: item.definition, source: typeof item.source === 'string' ? item.source : '' })) : [] };
+}
+
+function sectionEvents(source) {
+  const events = [];
+  const pattern = /\\(part|section|subsection|subsubsection)\*?(?:\[[^\]]*\])?\s*\{/g;
+  const levels = { part: 0, section: 1, subsection: 2, subsubsection: 3 };
+  for (const match of String(source || '').matchAll(pattern)) {
+    const title = balancedGroup(source, (match.index ?? 0) + match[0].length - 1);
+    if (!title) continue;
+    events.push({ type: 'section', start: match.index ?? 0, end: title.end, level: levels[match[1]] ?? 1, title: readableLatex(title.content) });
+  }
+  return events;
+}
+
+function readableBodyFragment(source) {
+  const cleaned = String(source || '')
+    .replace(/\\begin\{abstract\}[\s\S]*?\\end\{abstract\}/g, '')
+    .replace(/\\(?:title|author|address|email|subjclass|date|dedicatory|keywords|thanks)(?:\[[^\]]*\])?\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, '')
+    .replace(/\\(?:maketitle|tableofcontents|clearpage|newpage|printbibliography|centering)\b/g, '')
+    .replace(/\\(?:bibliography|bibliographystyle|addbibresource)\s*\{[^}]*\}/g, '')
+    .replace(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]*)\}/g, (_match, file) => `\n[Figure from the original source: ${file}]\n`)
+    .replace(/\\begin\{(?:center|flushleft|flushright|quote|quotation|figure\*?|table\*?|minipage)\}(?:\[[^\]]*\])?(?:\{[^}]*\})?/g, '')
+    .replace(/\\end\{(?:center|flushleft|flushright|quote|quotation|figure\*?|table\*?|minipage)\}/g, '')
+    .replace(/\\begin\{tabular\}(?:\[[^\]]*\])?\s*\{[^}]*\}/g, '\n')
+    .replace(/\\end\{tabular\}/g, '\n')
+    .replace(/(^|\n)\s*&/g, '$1')
+    .replace(/&/g, '  ·  ');
+  return readableLatex(cleaned).replace(/\\(?:vspace|hspace)\*?\s*\{[^}]*\}/g, ' ').trim();
+}
+
+function sourceParagraphBlocks(source, bibliography, state) {
+  const readable = readableBodyFragment(source);
+  if (!readable) return [];
+  return readable.split(/\n\s*\n+/).map((content) => content.trim()).filter((content) => content && !/^\\(?:begin|end)\{document\}/.test(content)).map((content) => {
+    state.paragraph += 1;
+    const mentions = [...content.matchAll(/\[\[cite:([^|\]]+)(?:\|([^\]]*))?\]\]/g)].map((match) => ({ key: match[1], locator: match[2] || '' }));
+    return { id: `source-paragraph-${state.paragraph}`, kind: 'paragraph', level: 4, title: '', content, proofText: '', nodeId: '', resultKind: '', citations: mentions.map((mention) => citationReference(mention, bibliography)) };
+  });
+}
+
+function buildSourceBlocks(source, units, bibliography) {
+  const normalized = expandAuthorMacros(String(source || ''));
+  const documentBegin = normalized.indexOf('\\begin{document}');
+  const bodyStart = documentBegin >= 0 ? documentBegin + '\\begin{document}'.length : 0;
+  const documentEnd = normalized.lastIndexOf('\\end{document}');
+  const bodyEnd = documentEnd > bodyStart ? documentEnd : normalized.length;
+  const events = [
+    ...sectionEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
+    ...figureEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
+    ...units.filter((unit) => unit.start >= bodyStart && unit.start < bodyEnd).map((unit) => ({ type: 'result', start: unit.start, end: unit.end, unit })),
+    ...units.filter((unit) => Number.isFinite(unit.proofStart)).map((unit) => ({ type: 'proof-skip', start: unit.proofStart, end: unit.proofEnd, unit })),
+  ].sort((left, right) => left.start - right.start || (left.type === 'section' ? -1 : 1));
+  const blocks = []; const state = { paragraph: 0, section: 0, result: 0, proof: 0 };
+  let cursor = bodyStart;
+  for (const event of events) {
+    if (event.start < cursor) continue;
+    blocks.push(...sourceParagraphBlocks(normalized.slice(cursor, event.start), bibliography, state));
+    if (event.type === 'section') {
+      state.section += 1;
+      blocks.push({ id: `source-section-${state.section}`, kind: 'section', level: event.level, title: event.title, content: '', proofText: '', nodeId: '', resultKind: '', citations: [] });
+    } else if (event.type === 'figure') {
+      state.figure = (state.figure || 0) + 1;
+      blocks.push({ id: `source-figure-${state.figure}`, kind: 'figure', level: 4, title: '', content: '', proofText: '', nodeId: '', resultKind: '', citations: event.citations || [], assetPaths: event.assetPaths, caption: event.caption });
+    } else if (event.type === 'result') {
+      state.result += 1;
+      blocks.push({ id: `source-result-${state.result}`, kind: 'result', level: 4, title: readableLatex(event.unit.title), content: event.unit.statement, proofText: '', nodeId: event.unit.nodeId || '', resultKind: event.unit.kind || 'theorem', citations: event.unit.citations || [], assetPaths: event.unit.assetPaths || [], caption: '' });
+      if (event.unit.proofText) {
+        state.proof += 1;
+        blocks.push({ id: `source-proof-${state.proof}`, kind: 'proof', level: 4, title: '', content: '', proofText: event.unit.proofText, nodeId: event.unit.nodeId || '', resultKind: event.unit.kind || 'theorem', citations: event.unit.citations || [], assetPaths: event.unit.proofAssetPaths || [], caption: '' });
+      }
+    }
+    cursor = event.end;
+  }
+  blocks.push(...sourceParagraphBlocks(normalized.slice(cursor, bodyEnd), bibliography, state));
+  return blocks;
+}
+
+function figureEvents(source) {
+  const events = []; const covered = [];
+  const images = (fragment) => graphicPaths(fragment);
+  const caption = (fragment) => {
+    const match = /\\caption(?:\[[^\]]*\])?\s*\{/.exec(fragment);
+    if (!match) return '';
+    return readableLatex(balancedGroup(fragment, (match.index ?? 0) + match[0].length - 1)?.content || '');
+  };
+  for (const match of String(source || '').matchAll(/\\begin\{figure\*?\}([\s\S]*?)\\end\{figure\*?\}/g)) {
+    const assetPaths = images(match[0]); if (!assetPaths.length) continue;
+    const start = match.index ?? 0; const end = start + match[0].length; covered.push([start, end]);
+    events.push({ type: 'figure', start, end, assetPaths, caption: caption(match[0]), citations: citationMentions(match[0]) });
+  }
+  for (const match of String(source || '').matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)) {
+    const start = match.index ?? 0; if (covered.some(([left, right]) => left <= start && start < right)) continue;
+    events.push({ type: 'figure', start, end: start + match[0].length, assetPaths: [match[1].trim()], caption: '', citations: [] });
+  }
+  return events;
 }
 
 async function enrichAuditFromTex(rawText, primarySource) {
@@ -434,7 +625,7 @@ async function enrichAuditFromTex(rawText, primarySource) {
   if (!Array.isArray(audit.nodes)) return rawText;
   const expanded = await readExpandedTex(primarySource.entryFile, primarySource.sourceDirectory);
   const sourceUnits = extractSourceUnits(expanded);
-  const bibliography = extractBibliography(expanded);
+  const bibliography = await extractBibliographyTree(expanded, primarySource.sourceDirectory);
   const cursors = new Map();
   for (const node of audit.nodes) {
     if (!node || typeof node !== 'object') continue;
@@ -451,12 +642,18 @@ async function enrichAuditFromTex(rawText, primarySource) {
     // re-enriching an older audit: otherwise a stale, positionally misassigned
     // proof can survive forever on an externally quoted result.
     node.proofText = sourceUnit.proofText || '';
-    node.citations = sourceUnit.citationMentions.map(({ key, locator }) => {
-      const reference = bibliography.get(key) || { key, title: key, authors: '', text: `Bibliography entry ${key} was cited here but could not be extracted from the available TeX tree.`, url: `https://scholar.google.com/scholar?q=${encodeURIComponent(key)}`, searchUrl: `https://scholar.google.com/scholar?q=${encodeURIComponent(key)}`, doi: '', arxivId: '', direct: false };
-      const aiDetail = aiCitations.find((citation) => citation && citation.key === key && String(citation.locator || '') === locator) || aiCitations.find((citation) => citation && citation.key === key);
-      return { ...reference, locator, statement: typeof aiDetail?.statement === 'string' ? aiDetail.statement : '' };
-    });
+    sourceUnit.nodeId = node.id;
+    sourceUnit.citations = sourceUnit.citationMentions.map((mention) => citationReference(mention, bibliography, aiCitations));
+    node.citations = sourceUnit.citations;
   }
+  for (const [index, sourceUnit] of sourceUnits.entries()) {
+    if (sourceUnit.nodeId) continue;
+    const id = `source-unit-${index + 1}`;
+    sourceUnit.nodeId = id;
+    sourceUnit.citations = sourceUnit.citationMentions.map((mention) => citationReference(mention, bibliography));
+    audit.nodes.push({ id, kind: sourceUnit.kind || 'theorem', label: sourceUnit.kind || 'Result', title: readableLatex(sourceUnit.title) || `${String(sourceUnit.kind || 'result')[0].toUpperCase()}${String(sourceUnit.kind || 'result').slice(1)}`, statement: sourceUnit.statement, proofText: sourceUnit.proofText || '', citations: sourceUnit.citations, status: 'verified', anchor: { label: 'Author TeX source', page: null, confidence: 'verified' }, role: 'Source result preserved by the deterministic document parser.', dependencies: [], proofSketch: [], whyItMatters: 'This result belongs to the complete original document structure and was retained even though the AI audit did not create a separate analytical node for it.', expandable: true });
+  }
+  audit.sourceBlocks = buildSourceBlocks(expanded, sourceUnits, bibliography);
   const captured = audit.nodes.filter((node) => typeof node.proofText === 'string' && node.proofText.trim()).length;
   if (audit.audit && Array.isArray(audit.audit.verificationWarnings)) {
     audit.audit.verificationWarnings = audit.audit.verificationWarnings.filter((warning) => !/payload|reproduc(?:e|ing).*entire proof|proof-text capture/i.test(String(warning)));
@@ -493,8 +690,8 @@ function makeAuditSchema() {
         type: 'array',
         items: {
           type: 'object', additionalProperties: false,
-          required: ['key', 'locator', 'statement'],
-          properties: { key: { type: 'string' }, locator: { type: 'string' }, statement: { type: 'string' } },
+          required: ['key', 'locator', 'statement', 'definitions'],
+          properties: { key: { type: 'string' }, locator: { type: 'string' }, statement: { type: 'string' }, definitions: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['notation', 'definition', 'source'], properties: { notation: { type: 'string' }, definition: { type: 'string' }, source: { type: 'string' } } } } },
         },
       },
       status: { enum: ['verified', 'needs-verification', 'unavailable'] },
@@ -509,7 +706,7 @@ function makeAuditSchema() {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['audit', 'nodes', 'readingPaths', 'crossPaperLinks', 'openQuestions'],
+    required: ['audit', 'nodes', 'readingPaths', 'crossPaperLinks', 'openQuestions', 'editorialCorrections'],
     properties: {
       audit: {
         type: 'object',
@@ -547,6 +744,7 @@ function makeAuditSchema() {
         },
       },
       openQuestions: { type: 'array', items: { type: 'string' } },
+      editorialCorrections: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['nodeId', 'field', 'original', 'replacement', 'rationale', 'confidence'], properties: { nodeId: { type: 'string' }, field: { enum: ['statement', 'proofText'] }, original: { type: 'string' }, replacement: { type: 'string' }, rationale: { type: 'string' }, confidence: { enum: ['high', 'medium', 'low'] } } } },
     },
   };
 }
@@ -618,7 +816,7 @@ Read that local LaTeX document first, but treat the original PDF at https://arxi
   const proofCaptureInstructions = primarySource?.kind === 'tex' || primarySource?.kind === 'ai-tex'
     ? `The host application deterministically attaches complete theorem statements and proof environments from the local LaTeX tree after your turn. Set proofText to an empty string for every node; spend the response budget on accurate dependency analysis and proofSketch explanations. Do not warn about proof payload length.`
     : `For every theorem, lemma, proposition, corollary, and proof node, statement must be a source-faithful transcription of the complete printed statement, not a summary, and proofText must contain the complete proof from the PDF, including all equations, cases, and cited intermediate results. Do not shorten a proof. Use an empty proofText only when the source genuinely has no proof or the complete proof cannot be accessed, and explain that limitation in the verification warnings.`;
-  return `You are Proofroom's mathematical-paper audit engine. Work for a ${profile.level} in ${profile.area}, whose goal is "${profile.goal}".
+  return `You are Proofroom's mathematical-paper audit engine. Work for a ${profile.level} interested in ${profile.areas.join(', ')}, whose goal is "${profile.goal}".
 
 FIRST: Read the WHOLE primary source before making a guide. Inspect the introduction, every section heading, all named definitions, assumptions, propositions, lemmas, theorems, corollaries, and the proof architecture. Do not use only the abstract. If full text is unavailable, report partial-text-read or blocked and do not invent missing mathematical statements.
 
@@ -641,7 +839,9 @@ ${proofCaptureInstructions}
 
 The proofSketch is a separate short AI explanation of the proof route; it never substitutes for the complete source proof shown to the reader.
 
-For every explicit \\cite in a node's statement or proof, add a citations entry using the exact bibliography key and optional locator text. If the locator names a specific Theorem, Lemma, Proposition, Corollary, Definition, or numbered result, use primary-source access to verify and transcribe that cited result's complete statement into citations.statement. A general paper citation has an empty statement; the reader will preview its bibliographic title. Never invent an external theorem statement. If a specifically located result cannot be verified, leave statement empty and add a verification warning naming the key and locator.
+Perform a conservative editorial pass during this same initial audit. Put only obvious, source-verifiable typographical corrections in editorialCorrections: malformed notation, a clear misspelling, an inconsistent symbol, or an unmistakable local reference typo. Each correction must name an existing nodeId and either statement or proofText, preserve the exact original fragment, supply the complete corrected field, and explain the evidence. Never use this mechanism for stylistic rewriting, proof completion, strengthening a claim, changing hypotheses, or uncertain mathematics. When doubt remains, make no correction and add a verification warning instead. These corrections become reversible highlighted working-layer edits; the author source remains preserved.
+
+For every explicit \\cite in a node's statement or proof, add a citations entry using the exact bibliography key and optional locator text. During this initial audit—not deferred until a later reader question—resolve every citation that names a specific Theorem, Lemma, Proposition, Corollary, Definition, or numbered result whenever primary-source access makes that possible. Transcribe the complete exact cited statement into citations.statement. Then inspect the cited source's surrounding definitions and notation sections: add one citations.definitions item for every nonstandard symbol, object, map, space, hypothesis abbreviation, or convention needed to understand that statement. Each item contains notation, its precise definition, and a source locator such as “Definition 2.1” or “p. 7”. Do not infer a definition from the current paper when the cited paper defines it differently. A general paper citation has an empty statement and an empty definitions array; the reader will preview its bibliographic title. Never invent an external theorem statement or notation definition. If a specifically located result or necessary definition cannot be verified, leave the unavailable field empty and add a verification warning naming the key and locator.
 
 In every JSON string, wrap complete inline mathematical expressions in $...$ and display expressions in $$...$$. Keep each expression together: for example $\\chi|\\det|^s$ and $L_v(\\chi_v,s+n-(k+1)/2)^{-1}$. Never emit a formula partly as prose and partly as LaTeX.
 
@@ -655,9 +855,25 @@ function nodeQuestionPrompt({ paper, node, question }) {
 ${JSON.stringify(node)}
 
 Paper: ${paper.title} (arXiv:${paper.arxivId})
+${paper.folder ? `Local reader folder: proofroom-library/${paper.folder}. Check attachments/references for reader-supplied PDFs, TeX, or BibTeX before treating a cited source as unavailable.` : ''}
 Reader question: ${question}
 
-Answer only about this selected unit and its declared dependency chain. Refer to results by their printed names (for example, “Theorem 3.5”), never by internal ids or TeX label slugs. Start with the source anchor and verification status. Preserve uncertainty: if the audit does not establish a claim, say what needs checking in the primary paper. Explain at the reader's configured level; use the complete proofText as the source when expanding a proof. Do not silently replace the paper's theorem by a stronger or simpler statement.`;
+Answer only about this selected unit and its declared dependency chain. Refer to results by their printed names (for example, “Theorem 3.5”), never by internal ids or TeX label slugs. Start with the source anchor and verification status. Preserve uncertainty: if the audit does not establish a claim, say what needs checking in the primary paper. Explain at the reader's configured level; use the complete proofText as the source when expanding a proof. Do not silently replace the paper's theorem by a stronger or simpler statement.
+
+If the reader asks to retrieve or expand a cited result, follow the citation URL or exact-title lookup in the selected unit, locate the named theorem/lemma/proposition in the cited primary paper, and return: (1) the complete cited statement, (2) the complete original proof when accessible, and (3) a clearly separated reader-level explanation. Never invent a missing proof. Say exactly which primary source and result locator you verified.`;
+}
+
+function paperQuestionPrompt({ paper, currentNode, question }) {
+  const sourceHint = paper.folder ? `The local paper folder is proofroom-library/${paper.folder}; prefer its attachments/source TeX tree over the PDF whenever it is present, and inspect attachments/references for reader-supplied cited sources.` : `Use the primary source already inspected in the full-paper audit.`;
+  return `The complete paper and the durable full-paper audit from the first turn are the controlling context for this conversation.
+
+Paper: ${paper.title} (arXiv:${paper.arxivId})
+${sourceHint}
+${currentNode ? `The reader is currently near this unit, but the question may concern any part of the paper:\n${JSON.stringify(currentNode)}` : ''}
+
+Reader question: ${question}
+
+Answer across the whole paper, not merely the current unit. Use the author text, its definitions, theorem statements, complete proofs, bibliography, and audited logical dependencies as context. Re-open the local TeX source when exact wording or a proof step matters. Distinguish verbatim source content from your explanation, refer to results by printed names rather than internal ids or TeX labels, preserve uncertainty, and render mathematics in LaTeX. If the answer depends on an external cited result, identify the exact source and locator; retrieve its original statement and proof when the reader asks for expansion, and never invent inaccessible material.`;
 }
 
 function editorialPrompt({ paper, node }) {
@@ -925,6 +1141,22 @@ class CodexAppServer {
     });
   }
 
+  async answerPaper({ paper, profile, currentNode, question, threadId }) {
+    await this.start();
+    if (!this.loadedThreads.has(threadId)) {
+      await this.call('thread/resume', { threadId });
+      this.loadedThreads.add(threadId);
+    }
+    return this.runTurn({
+      threadId,
+      input: [{ type: 'text', text: paperQuestionPrompt({ paper, currentNode, question }), text_elements: [] }],
+      model: profile.model || undefined,
+      effort: profile.reasoning,
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'readOnly', networkAccess: true },
+    });
+  }
+
   async suggestEditorialPatch({ paper, profile, node, threadId }) {
     await this.start();
     if (!this.loadedThreads.has(threadId)) {
@@ -966,12 +1198,13 @@ function validatePaper(value) {
 }
 
 function normalizeProfile(value) {
+  const areas = Array.isArray(value?.areas) ? value.areas.map(String).filter((area) => /^math\.[A-Z]{2}$/.test(area)) : typeof value?.area === 'string' ? [value.area] : ['math.AP'];
   return {
     level: typeof value?.level === 'string' ? value.level : 'Graduate student',
-    area: typeof value?.area === 'string' ? value.area : 'math.GN',
+    areas: areas.length ? areas : ['math.AP'],
     goal: typeof value?.goal === 'string' ? value.goal : 'Understand proofs',
     model: typeof value?.model === 'string' ? value.model : '',
-    reasoning: typeof value?.reasoning === 'string' ? value.reasoning : 'medium',
+    reasoning: typeof value?.reasoning === 'string' ? value.reasoning : 'xhigh',
   };
 }
 
@@ -995,6 +1228,53 @@ function enqueue(work) {
   return scheduled;
 }
 
+const figureExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf', '.eps'];
+
+async function collectFigureFiles(directory, root = directory, depth = 0) {
+  if (depth > 8) return [];
+  const files = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.name === '.proofroom-previews') continue;
+    const absolute = path.join(directory, entry.name); const relative = path.relative(root, absolute);
+    if (entry.isDirectory()) files.push(...await collectFigureFiles(absolute, root, depth + 1));
+    else if (figureExtensions.includes(path.extname(entry.name).toLowerCase())) files.push({ absolute, relative });
+  }
+  return files;
+}
+
+async function figureAsset(paperId, requestedPath) {
+  const sourceRoot = await vault.sourceDirectory(paperId);
+  const requested = String(requestedPath || '').replaceAll('\\', '/').replace(/^\.\//, '').trim();
+  if (!requested || requested.includes('\0')) throw new Error('A valid figure path is required.');
+  const extension = path.extname(requested).toLowerCase();
+  const alternatives = extension ? [requested] : figureExtensions.map((suffix) => `${requested}${suffix}`);
+  let candidate = null;
+  for (const alternative of alternatives) {
+    const absolute = path.resolve(sourceRoot, alternative); const relative = path.relative(sourceRoot, absolute);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    try { if ((await stat(absolute)).isFile()) { candidate = absolute; break; } } catch { /* Search by suffix below. */ }
+  }
+  if (!candidate) {
+    const files = await collectFigureFiles(sourceRoot); const normalized = requested.toLowerCase(); const basename = path.basename(normalized);
+    const found = files.find((file) => alternatives.some((alternative) => file.relative.toLowerCase().endsWith(alternative.toLowerCase()))) || files.find((file) => path.basename(file.relative, path.extname(file.relative)).toLowerCase() === path.basename(basename, path.extname(basename)));
+    candidate = found?.absolute || null;
+  }
+  if (!candidate) throw new Error('The referenced figure asset is not present in this paper source.');
+  const sourceExtension = path.extname(candidate).toLowerCase();
+  if (sourceExtension === '.pdf' || sourceExtension === '.eps') {
+    const previewDirectory = path.join(sourceRoot, '.proofroom-previews'); await mkdir(previewDirectory, { recursive: true });
+    const token = Buffer.from(path.relative(sourceRoot, candidate)).toString('base64url').slice(0, 72); const preview = path.join(previewDirectory, `${token}.png`);
+    try { await stat(preview); }
+    catch {
+      if (sourceExtension === '.pdf') await runProgram('pdftoppm', ['-png', '-singlefile', '-r', '180', candidate, preview.slice(0, -4)]);
+      else await runProgram('sips', ['-s', 'format', 'png', candidate, '--out', preview]);
+    }
+    candidate = preview;
+  }
+  const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml' }[path.extname(candidate).toLowerCase()] || 'application/octet-stream';
+  return { payload: await readFile(candidate), mime };
+}
+
 const server = createServer(async (request, response) => {
   const origin = request.headers.origin;
   if (!isAllowedOrigin(origin)) return sendJson(response, 403, { error: 'This local bridge accepts only localhost origins.' }, origin);
@@ -1009,6 +1289,12 @@ const server = createServer(async (request, response) => {
     return response.end();
   }
   try {
+    if (request.method === 'GET' && pathname === '/asset') {
+      const url = new URL(request.url || '/', `http://${HOST}:${PORT}`); const paperId = url.searchParams.get('paperId') || ''; const file = url.searchParams.get('file') || '';
+      const asset = await figureAsset(paperId, file);
+      response.writeHead(200, { 'Content-Type': asset.mime, 'Cache-Control': 'private, max-age=3600', ...(origin && isAllowedOrigin(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) });
+      return response.end(asset.payload);
+    }
     if (request.method === 'GET' && pathname === '/vault') return sendJson(response, 200, await vault.snapshot(), origin);
     if (request.method === 'GET' && pathname === '/vault/graph') {
       const snapshot = await vault.snapshot();
@@ -1018,7 +1304,7 @@ const server = createServer(async (request, response) => {
       try { await codex.start(); } catch { /* status returns useful error below */ }
       return sendJson(response, 200, codex.status(), origin);
     }
-    if (request.method !== 'POST' || !['/analyze', '/compare-versions', '/node-question', '/node-edit/suggest', '/vault/paper', '/vault/paper/update', '/vault/paper/delete', '/vault/audit', '/vault/reader', '/vault/patches', '/vault/profile', '/vault/link', '/vault/link/delete'].includes(pathname)) {
+    if (request.method !== 'POST' || !['/analyze', '/compare-versions', '/paper-question', '/node-question', '/node-edit/suggest', '/vault/paper', '/vault/paper/update', '/vault/paper/delete', '/vault/audit', '/vault/reader', '/vault/patches', '/vault/profile', '/vault/link', '/vault/link/delete', '/vault/export', '/vault/citation-asset'].includes(pathname)) {
       return sendJson(response, 404, { error: 'Not found.' }, origin);
     }
     const body = await readBody(request);
@@ -1039,6 +1325,14 @@ const server = createServer(async (request, response) => {
       const patches = await vault.savePatches(String(body.paperId), body.patches ?? []);
       const snapshot = await vault.snapshot();
       return sendJson(response, 200, { patches, graph: snapshot.graph }, origin);
+    }
+    if (pathname === '/vault/export') {
+      if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
+      return sendJson(response, 200, { saved: await vault.saveExport(String(body.paperId), body.export ?? {}) }, origin);
+    }
+    if (pathname === '/vault/citation-asset') {
+      if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
+      return sendJson(response, 200, { saved: await vault.saveCitationAsset(String(body.paperId), body.upload ?? {}) }, origin);
     }
     if (!validatePaper(body.paper)) return sendJson(response, 400, { error: 'A paper with title, arXiv id, and abstract is required.' }, origin);
     if (pathname === '/vault/paper' || pathname === '/vault/paper/update') return sendJson(response, 200, { paper: await vault.upsertPaper(body.paper) }, origin);
@@ -1080,6 +1374,10 @@ const server = createServer(async (request, response) => {
         const text = primarySource.kind === 'tex' || primarySource.kind === 'ai-tex' ? await enrichAuditFromTex(analyzed.text, primarySource) : analyzed.text;
         return { ...analyzed, text, paper, primarySource: { kind: primarySource.kind, fileCount: primarySource.fileCount ?? 0, cached: Boolean(primarySource.cached), error: primarySource.error ?? null } };
       }
+      if (pathname === '/paper-question') {
+        if (!body.threadId || typeof body.question !== 'string') throw new Error('threadId and a question are required.');
+        return codex.answerPaper({ paper: body.paper, profile, currentNode: body.node, question: body.question, threadId: body.threadId });
+      }
       if (!body.threadId || !body.node) throw new Error('threadId and node are required.');
       if (pathname === '/node-edit/suggest') return codex.suggestEditorialPatch({ paper: body.paper, profile, node: body.node, threadId: body.threadId });
       if (typeof body.question !== 'string') throw new Error('A question is required.');
@@ -1091,17 +1389,19 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`Proofroom Codex bridge listening on http://${HOST}:${PORT}`);
-  console.log('Uses your local Codex/ChatGPT sign-in. No OpenAI API key is used.');
-});
-
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    server.close();
-    codex.process?.kill();
-    process.exit(0);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  server.listen(PORT, HOST, () => {
+    console.log(`Proofroom Codex bridge listening on http://${HOST}:${PORT}`);
+    console.log('Uses your local Codex/ChatGPT sign-in. No OpenAI API key is used.');
   });
+
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      server.close();
+      codex.process?.kill();
+      process.exit(0);
+    });
+  }
 }
 
-export { enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractSourceUnits, readExpandedTex };
+export { enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractSourceUnits, readExpandedTex };

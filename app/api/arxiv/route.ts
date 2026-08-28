@@ -62,19 +62,30 @@ function parseFeed(xml: string): ArxivPaper[] {
 
 export async function GET(request: NextRequest) {
   const arxivId = normalizeArxivId(request.nextUrl.searchParams.get('id') ?? '');
-  const category = request.nextUrl.searchParams.get('category')?.trim() || 'math';
-  const query = arxivId
-    ? `id_list=${encodeURIComponent(arxivId)}`
-    : `search_query=${encodeURIComponent(`cat:${category}`)}&sortBy=submittedDate&sortOrder=descending&start=0&max_results=12`;
+  const categories = (request.nextUrl.searchParams.get('categories') || request.nextUrl.searchParams.get('category') || 'math')
+    .split(',').map((value) => value.trim()).filter((value) => value === 'math' || /^math\.[A-Z]{2}$/.test(value));
+  const allToday = request.nextUrl.searchParams.get('allToday') === '1' && !arxivId;
+  const now = new Date(); const day = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}${String(now.getUTCDate()).padStart(2, '0')}`;
+  const categoryQuery = categories.length > 1 ? `(${categories.map((category) => `cat:${category}`).join(' OR ')})` : `cat:${categories[0] || 'math'}`;
+  const searchQuery = allToday ? `${categoryQuery} AND submittedDate:[${day}0000 TO ${day}2359]` : categoryQuery;
 
   try {
-    const response = await fetch(`https://export.arxiv.org/api/query?${query}`, {
-      cache: 'no-store',
-      headers: { 'User-Agent': 'Proofroom/0.1 (local mathematics paper reader)' },
-    });
-    if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
-    const papers = parseFeed(await response.text());
-    return NextResponse.json({ papers });
+    if (arxivId) {
+      const response = await fetch(`https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}`, { cache: 'no-store', headers: { 'User-Agent': 'Proofroom/0.1 (local mathematics paper reader)' } });
+      if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
+      return NextResponse.json({ papers: parseFeed(await response.text()) });
+    }
+    const pageSize = allToday ? 250 : 24; const papers: ArxivPaper[] = []; let start = 0; let total = pageSize;
+    do {
+      const query = `search_query=${encodeURIComponent(searchQuery)}&sortBy=submittedDate&sortOrder=descending&start=${start}&max_results=${pageSize}`;
+      const response = await fetch(`https://export.arxiv.org/api/query?${query}`, { cache: 'no-store', headers: { 'User-Agent': 'Proofroom/0.1 (local mathematics paper reader)' } });
+      if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
+      const xml = await response.text(); const page = parseFeed(xml); papers.push(...page);
+      total = Number(valueOf(xml, 'opensearch:totalResults')) || page.length; start += pageSize;
+      if (!allToday || page.length < pageSize) break;
+    } while (start < total);
+    const unique = [...new Map(papers.map((paper) => [paper.arxivId, paper])).values()];
+    return NextResponse.json({ papers: unique, total: allToday ? total : unique.length, mode: allToday ? 'today' : 'feed', day, categories });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'arXiv is unavailable.', papers: [] },
