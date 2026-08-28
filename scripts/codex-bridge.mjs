@@ -1214,7 +1214,7 @@ function normalizeProfile(value) {
     areas: areas.length ? areas : ['math.AP'],
     goal: typeof value?.goal === 'string' ? value.goal : 'Understand proofs',
     model: typeof value?.model === 'string' ? value.model : '',
-    reasoning: typeof value?.reasoning === 'string' ? value.reasoning : 'xhigh',
+    reasoning: typeof value?.reasoning === 'string' && value.reasoning.trim() ? value.reasoning : 'xhigh',
   };
 }
 

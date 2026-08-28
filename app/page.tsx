@@ -34,7 +34,8 @@ type VaultSnapshot = { papers: Paper[]; audits: Record<string, PaperAudit>; note
 const bridgeUrl = 'http://127.0.0.1:4318';
 const preferenceKey = 'proofroom-reader-preferences-v1';
 const paperScaleKey = 'proofroom-paper-scale-v1';
-const defaultProfile: Profile = { level: 'Graduate student', areas: ['math.AP'], goal: 'Understand proofs', model: '', reasoning: 'xhigh' };
+const defaultReasoning = 'xhigh';
+const defaultProfile: Profile = { level: 'Graduate student', areas: ['math.AP'], goal: 'Understand proofs', model: '', reasoning: defaultReasoning };
 const mathAreas = [
   ['math.AC', 'Commutative Algebra'], ['math.AG', 'Algebraic Geometry'], ['math.AP', 'Analysis of PDEs'], ['math.AT', 'Algebraic Topology'],
   ['math.CA', 'Classical Analysis and ODEs'], ['math.CO', 'Combinatorics'], ['math.CT', 'Category Theory'], ['math.CV', 'Complex Variables'],
@@ -49,7 +50,7 @@ const mathAreas = [
 function normalizeReaderProfile(value: unknown): Profile {
   const stored = value && typeof value === 'object' ? value as Partial<Profile> & { area?: string } : {};
   const areas = Array.isArray(stored.areas) ? stored.areas.filter((area): area is string => typeof area === 'string' && mathAreas.some(([id]) => id === area)) : typeof stored.area === 'string' ? [stored.area] : defaultProfile.areas;
-  return { ...defaultProfile, ...stored, areas: areas.length ? areas : defaultProfile.areas };
+  return { ...defaultProfile, ...stored, reasoning: typeof stored.reasoning === 'string' && stored.reasoning.trim() ? stored.reasoning : defaultReasoning, areas: areas.length ? areas : defaultProfile.areas };
 }
 const emptyGraph: Graph = { version: 1, updatedAt: null, nodes: [], edges: [] };
 const fallbackDiscoveries: Paper[] = [
@@ -849,7 +850,7 @@ function ModelControls({ profile, setProfile, bridge, compact = false }: { profi
   const efforts = selected?.efforts.length ? selected.efforts : ['low', 'medium', 'high', 'xhigh'];
   function chooseModel(modelId: string) {
     const model = bridge?.models.find((item) => item.id === modelId);
-    setProfile((current) => ({ ...current, model: modelId, reasoning: model?.efforts.includes(current.reasoning) ? current.reasoning : model?.defaultEffort ?? model?.efforts[0] ?? 'xhigh' }));
+    setProfile((current) => ({ ...current, model: modelId, reasoning: model?.efforts.includes(current.reasoning) ? current.reasoning : model?.efforts.includes(defaultReasoning) ? defaultReasoning : model?.defaultEffort ?? model?.efforts[0] ?? defaultReasoning }));
   }
   return <div className={`model-controls ${compact ? 'model-controls-compact' : ''}`}><label><span>Model</span><select aria-label="AI model" value={profile.model} onChange={(event) => chooseModel(event.target.value)} disabled={!bridge?.models.length}><option value="">Codex default</option>{(bridge?.models ?? []).map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</select></label><label><span>Reasoning</span><select aria-label="Reasoning effort" value={profile.reasoning} onChange={(event) => setProfile((current) => ({ ...current, reasoning: event.target.value }))}>{efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}</select></label></div>;
 }
