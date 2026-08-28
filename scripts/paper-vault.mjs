@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -77,7 +77,24 @@ export class PaperVault {
   async index() {
     await this.ensure();
     const index = await readJson(this.indexFile, { version: VAULT_VERSION, updatedAt: new Date().toISOString(), papers: [], links: [] });
-    return { ...index, papers: Array.isArray(index.papers) ? index.papers : [], links: Array.isArray(index.links) ? index.links : [] };
+    const savedPapers = Array.isArray(index.papers) ? index.papers : [];
+    const folders = (await readdir(this.root, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'));
+    const discovered = [];
+    for (const entry of folders) {
+      const paper = await readJson(path.join(this.root, entry.name, 'paper.json'), null);
+      if (!paper?.id || !paper?.title || !paper?.arxivId) continue;
+      const previous = savedPapers.find((record) => record.folder === entry.name || record.id === String(paper.id));
+      discovered.push({ id: String(paper.id), arxivId: String(paper.arxivId), folder: entry.name, title: String(paper.title), updatedAt: String(paper.updatedAt || previous?.updatedAt || new Date().toISOString()), createdAt: String(paper.createdAt || previous?.createdAt || new Date().toISOString()) });
+    }
+    const byId = new Map(discovered.map((record) => [record.id, record]));
+    const ordered = savedPapers.map((record) => byId.get(record.id)).filter(Boolean);
+    const seen = new Set(ordered.map((record) => record.id));
+    const papers = [...ordered, ...discovered.filter((record) => !seen.has(record.id)).sort((left, right) => left.title.localeCompare(right.title))];
+    const normalized = { ...index, papers, links: Array.isArray(index.links) ? index.links : [] };
+    const priorShape = savedPapers.map(({ id, folder, title, arxivId }) => ({ id, folder, title, arxivId }));
+    const nextShape = papers.map(({ id, folder, title, arxivId }) => ({ id, folder, title, arxivId }));
+    if (JSON.stringify(priorShape) !== JSON.stringify(nextShape)) await this.writeIndex(normalized);
+    return normalized;
   }
 
   async writeIndex(index) {
@@ -121,7 +138,9 @@ export class PaperVault {
     const patchesFile = path.join(directory, 'editions', 'working', 'patches.json');
     const patches = await readJson(patchesFile, null);
     if (!patches) await writeJson(patchesFile, { version: VAULT_VERSION, updatedAt: new Date().toISOString(), patches: [] });
-    index.papers = [record, ...index.papers.filter((item) => item.id !== record.id && item.arxivId !== record.arxivId)];
+    const existingIndex = index.papers.findIndex((item) => item.id === record.id || item.arxivId === record.arxivId);
+    if (existingIndex >= 0) index.papers = index.papers.map((item, position) => position === existingIndex ? record : item).filter((item, position, all) => all.findIndex((candidate) => candidate.id === item.id || candidate.arxivId === item.arxivId) === position);
+    else index.papers = [record, ...index.papers];
     await this.writeIndex(index);
     return { ...paper, folder: record.folder };
   }
@@ -165,6 +184,17 @@ export class PaperVault {
     return { paperId, archivedFolder: path.join('_trash', archivedName), recoverable: true };
   }
 
+  async reorderPapers(paperIds) {
+    const index = await this.index();
+    const requested = Array.isArray(paperIds) ? paperIds.map(String) : [];
+    const byId = new Map(index.papers.map((record) => [record.id, record]));
+    const ordered = requested.map((id) => byId.get(id)).filter(Boolean);
+    const seen = new Set(ordered.map((record) => record.id));
+    index.papers = [...ordered, ...index.papers.filter((record) => !seen.has(record.id))];
+    await this.writeIndex(index);
+    return index.papers.map((record) => record.id);
+  }
+
   async saveAudit(paper, audit) {
     const storedPaper = await this.upsertPaper(paper);
     const record = await this.recordFor(storedPaper.id);
@@ -206,7 +236,7 @@ export class PaperVault {
     const encoded = typeof upload?.dataBase64 === 'string' ? upload.dataBase64 : '';
     const payload = Buffer.from(encoded, 'base64');
     if (!payload.length) throw new Error('The uploaded reference file is empty.');
-    if (payload.length > 32 * 1024 * 1024) throw new Error('Reference uploads are limited to 32 MB.');
+    if (payload.length > 80 * 1024 * 1024) throw new Error('Reference uploads are limited to 80 MB.');
     const citation = upload?.citation && typeof upload.citation === 'object' ? upload.citation : {};
     const referenceName = slug(citation.key || citation.title || 'attached-reference', 72);
     const fileName = String(upload?.fileName || 'source.pdf').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 140) || 'source.pdf';
@@ -221,7 +251,7 @@ export class PaperVault {
   async savePatches(paperId, patches) {
     const record = await this.recordFor(paperId);
     const allowedKinds = new Set(['replace', 'delete', 'add']);
-    const allowedNodeKinds = new Set(['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'proof', 'equation', 'remark', 'example', 'section', 'external-result']);
+    const allowedNodeKinds = new Set(['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'proof', 'equation', 'remark', 'example', 'section', 'paragraph', 'figure', 'external-result']);
     const safePatches = Array.isArray(patches) ? patches.slice(0, 500).map((patch) => ({
       id: typeof patch.id === 'string' ? patch.id : randomUUID(),
       kind: allowedKinds.has(patch.kind) ? patch.kind : 'replace',

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
@@ -66,7 +66,66 @@ async function chooseMainTex(files) {
   return scored.sort((left, right) => right.score - left.score)[0] ?? null;
 }
 
+async function uploadedPaperSource(paper) {
+  const sourceRoot = await vault.sourceDirectory(paper.id);
+  const manifestFile = path.join(sourceRoot, 'proofroom-uploaded-source.json');
+  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  if (!manifest.entryFile || !manifest.sourceDirectory) throw new Error('The uploaded source manifest is incomplete.');
+  await stat(manifest.entryFile);
+  return { ...manifest, cached: true };
+}
+
+async function saveUploadedPaperSource(paper, upload) {
+  const encoded = typeof upload?.dataBase64 === 'string' ? upload.dataBase64 : '';
+  const payload = Buffer.from(encoded, 'base64');
+  if (!payload.length) throw new Error('The uploaded paper source is empty.');
+  if (payload.length > MAX_SOURCE_BYTES) throw new Error('Paper source uploads are limited to 80 MB.');
+  const requestedName = String(upload?.fileName || 'source.tex');
+  const extension = path.extname(requestedName).toLowerCase();
+  if (!['.tex', '.ltx', '.zip', '.pdf'].includes(extension)) throw new Error('Upload one TeX file, one PDF, or one ZIP source project.');
+  const stored = await vault.upsertPaper(paper);
+  const sourceRoot = await vault.sourceDirectory(stored.id);
+  const sourceDirectory = path.join(sourceRoot, `reader-upload-${Date.now()}`);
+  await mkdir(sourceDirectory, { recursive: true });
+  const fileName = requestedName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 140) || `source${extension}`;
+  const uploadedFile = path.join(sourceDirectory, fileName);
+  await writeFile(uploadedFile, payload);
+  let entryFile = uploadedFile; let fileCount = 1; let kind = extension === '.pdf' ? 'uploaded-pdf' : 'tex';
+  if (extension === '.zip') {
+    const listing = (await runProgram('unzip', ['-Z1', uploadedFile], 4 * 1024 * 1024)).toString('utf8').split('\n').filter(Boolean);
+    if (!listing.length || listing.some((entry) => path.isAbsolute(entry) || path.normalize(entry).split(path.sep).includes('..'))) throw new Error('The ZIP source project contains an unsafe path.');
+    const projectDirectory = path.join(sourceDirectory, 'project'); await mkdir(projectDirectory, { recursive: true });
+    await runProgram('unzip', ['-q', uploadedFile, '-d', projectDirectory], 8 * 1024 * 1024);
+    const texFiles = await collectTexFiles(projectDirectory); const main = await chooseMainTex(texFiles);
+    if (!main) throw new Error('No TeX file was found in the ZIP source project.');
+    entryFile = main.absolute; fileCount = texFiles.length;
+  }
+  const manifest = { kind, origin: 'reader-upload', entryFile, sourceDirectory: extension === '.zip' ? path.dirname(entryFile) : sourceDirectory, fileCount, uploadedFile, uploadedAt: new Date().toISOString(), cached: false };
+  await writeFile(path.join(sourceRoot, 'proofroom-uploaded-source.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await vault.saveSourceRecord(stored.id, { analysisFormat: kind === 'tex' ? 'tex' : 'pdf', sourceDirectory: manifest.sourceDirectory, mainTex: kind === 'tex' ? entryFile : '', localPdf: kind === 'uploaded-pdf' ? entryFile : '', sourceUploadedAt: manifest.uploadedAt });
+  return { paper: stored, primarySource: manifest };
+}
+
+async function saveCompleteLatexExport(paperId, exportRecord) {
+  const content = typeof exportRecord?.content === 'string' ? exportRecord.content : '';
+  if (!content.includes('\\begin{document}') || !content.includes('\\end{document}')) throw new Error('The complete LaTeX export is missing its document boundary.');
+  if (Buffer.byteLength(content, 'utf8') > 16 * 1024 * 1024) throw new Error('The complete LaTeX export is too large.');
+  const record = await vault.recordFor(String(paperId));
+  const exportDirectory = path.join(vault.paperDirectory(record), 'exports'); await mkdir(exportDirectory, { recursive: true });
+  const edition = exportRecord?.edition === 'original' ? 'author' : 'working';
+  const sourceRoot = await vault.sourceDirectory(String(paperId));
+  let texFiles = []; try { texFiles = await collectTexFiles(sourceRoot); } catch { /* A generated single-file export remains available. */ }
+  if (texFiles.length <= 1) { const fileName = `proofroom-${edition}-edition.tex`; const file = path.join(exportDirectory, fileName); await writeFile(file, content, 'utf8'); return { fileName, relativePath: path.relative(vault.root, file), format: 'tex', bytes: Buffer.byteLength(content, 'utf8') }; }
+  const fileName = `proofroom-${edition}-edition-source.zip`; const file = path.join(exportDirectory, fileName); const staging = await mkdtemp(path.join(exportDirectory, '.latex-export-'));
+  try { await cp(sourceRoot, path.join(staging, 'original-source'), { recursive: true }); await writeFile(path.join(staging, `proofroom-${edition}-edition.tex`), content, 'utf8'); await runProgram('ditto', ['-c', '-k', '--sequesterRsrc', staging, file]); }
+  finally { await rm(staging, { recursive: true, force: true }); }
+  return { fileName, relativePath: path.relative(vault.root, file), format: 'zip', sourceFiles: texFiles.length };
+}
+
 async function acquireArxivSource(paper, requestedArxivId = paper.arxivId, versionCache = false) {
+  if (!versionCache) {
+    try { return await uploadedPaperSource(paper); } catch { /* No reader upload; continue with arXiv. */ }
+  }
   const sourceRoot = await vault.sourceDirectory(paper.id);
   const cacheName = String(requestedArxivId).replace(/[^a-zA-Z0-9.-]+/g, '-');
   const sourceDirectory = versionCache ? path.join(sourceRoot, 'versions', cacheName) : sourceRoot;
@@ -105,8 +164,8 @@ async function acquireArxivSource(paper, requestedArxivId = paper.arxivId, versi
   return manifest;
 }
 
-function latexConversionPrompt({ paper }) {
-  return `Convert the complete primary PDF at https://arxiv.org/pdf/${paper.arxivId} into a faithful standalone LaTeX document.
+function latexConversionPrompt({ paper, pdfPath = '' }) {
+  return `Convert the complete primary PDF at ${pdfPath || `https://arxiv.org/pdf/${paper.arxivId}`} into a faithful standalone LaTeX document.
 
 This is a transcription task, not a rewrite. Read every page. Preserve the title, authors, abstract, section hierarchy, theorem/definition/lemma/proposition environments, equation structure, labels, references, proofs, footnotes, bibliography, and mathematical notation. Do not improve, complete, or silently correct the mathematics. Mark illegible fragments explicitly with \\text{[unreadable in source]}. Add a short LaTeX comment before each page transition in the form "% PDF page N" when you can identify it.
 
@@ -800,7 +859,7 @@ function auditPrompt({ paper, profile, localInventory, primarySource, correctnes
     ? JSON.stringify(localInventory, null, 2)
     : 'No other audited papers are available in the local vault yet.';
   const sourceInstructions = primarySource?.kind === 'tex'
-    ? `A local arXiv TeX source bundle has already been acquired. Read it before doing anything else.
+    ? `A local ${primarySource.origin === 'reader-upload' ? 'reader-supplied' : 'arXiv'} TeX source bundle has already been acquired. Read it before doing anything else.
 - main TeX entry: ${primarySource.entryFile}
 - source directory: ${primarySource.sourceDirectory}
 - TeX files available: ${primarySource.fileCount}
@@ -812,7 +871,9 @@ Prefer these local TeX files over the PDF: preserve theorem environment labels, 
 - source directory: ${primarySource.sourceDirectory}
 
 Read that local LaTeX document first, but treat the original PDF at https://arxiv.org/pdf/${paper.arxivId} as authoritative. Verify statements against the PDF whenever the conversion may be ambiguous. State clearly in sourceSummary that the LaTeX is an AI transcription, not author-supplied source.`
-      : `The arXiv TeX source could not be used (${primarySource?.error || 'unavailable'}). Fall back to the primary PDF at https://arxiv.org/pdf/${paper.arxivId}.`;
+      : primarySource?.kind === 'uploaded-pdf'
+        ? `The reader supplied the primary PDF directly. Read the complete local PDF at ${primarySource.entryFile}. Treat this uploaded file as authoritative and do not attempt to substitute an arXiv document.`
+        : `The arXiv TeX source could not be used (${primarySource?.error || 'unavailable'}). Fall back to the primary PDF at https://arxiv.org/pdf/${paper.arxivId}.`;
   const proofCaptureInstructions = primarySource?.kind === 'tex' || primarySource?.kind === 'ai-tex'
     ? `The host application deterministically attaches complete theorem statements and proof environments from the local LaTeX tree after your turn. Set proofText to an empty string for every node; spend the response budget on accurate dependency analysis and proofSketch explanations. Do not warn about proof payload length.`
     : `For every theorem, lemma, proposition, corollary, and proof node, statement must be a source-faithful transcription of the complete printed statement, not a summary, and proofText must contain the complete proof from the PDF, including all equations, cases, and cited intermediate results. Do not shorten a proof. Use an empty proofText only when the source genuinely has no proof or the complete proof cannot be accessed, and explain that limitation in the verification warnings.`;
@@ -820,7 +881,7 @@ Read that local LaTeX document first, but treat the original PDF at https://arxi
     ? `CORRECTNESS AUDIT REQUESTED: For every formal environment, actively check whether the statement is well-formed under the declared hypotheses and whether its proof supports the exact conclusion. Trace dependencies, inspect cited prerequisites when accessible, and use status "verified" only when this check succeeds. Use "needs-verification" for a specific gap, ambiguity, unchecked external dependency, or possible error, and explain the issue in role or verificationWarnings. Never repair or silently strengthen an argument.`
     : `CORRECTNESS AUDIT NOT REQUESTED: Preserve the complete document structure and source text, build logical dependencies, and mark source-transcribed environments as verified only in the limited sense that their text was located in the primary source. Do not claim that the mathematics or proof has been checked for correctness.`;
   const depthInstructions = detailedAudit
-    ? `DETAILED AUDIT MODE: Spend additional effort on the bibliography and every theorem-level external citation. Follow the cited primary paper or book when accessible; recover the exact cited theorem, lemma, proposition, corollary, or definition statement and the definitions of every nonstandard symbol it uses. Populate citations.statement and citations.definitions with that verified material. Prefer arXiv TeX source for cited arXiv papers. Do not return a placeholder saying that a record is not cached; either provide verified source detail or leave the field empty and give a precise verification warning.`
+    ? `DETAILED AUDIT MODE: Build a retrieval queue for every citation locator that names a theorem, lemma, proposition, corollary, definition, equation, section, or numbered result. For each queue item, resolve the cited paper from its bibliography record, fetch the cited paper's primary TeX source when it is on arXiv (use its PDF only when TeX is unavailable), search that source for the exact locator, and recover the complete statement before finishing this audit. Also recover every nearby definition needed to interpret its nonstandard notation and hypotheses. Populate citations.statement and citations.definitions only with material verified in that cited primary source. Continue through the full queue within the available audit time instead of deferring retrieval to a later question. Do not return a placeholder saying that a record is not cached; either provide verified source detail or leave the field empty and give a precise verification warning naming what access or locator failed.`
     : `STANDARD AUDIT MODE: Preserve citation keys, locators, titles, and direct primary-source links, but do not spend the audit budget following every external theorem.`;
   return `You are Proofroom's mathematical-paper audit engine. Work for a ${profile.level} interested in ${profile.areas.join(', ')}, whose goal is "${profile.goal}".
 
@@ -1085,7 +1146,7 @@ class CodexAppServer {
     return { threadId, ...output };
   }
 
-  async convertPdfToLatex({ paper, profile }) {
+  async convertPdfToLatex({ paper, profile, pdfPath = '' }) {
     await this.start();
     const model = profile.model || this.models.find((item) => item.isDefault)?.model || undefined;
     const created = await this.call('thread/start', {
@@ -1100,7 +1161,7 @@ class CodexAppServer {
     this.loadedThreads.add(threadId);
     const output = await this.runTurn({
       threadId,
-      input: [{ type: 'text', text: latexConversionPrompt({ paper }), text_elements: [] }],
+      input: [{ type: 'text', text: latexConversionPrompt({ paper, pdfPath }), text_elements: [] }],
       model,
       effort: profile.reasoning,
       approvalPolicy: 'never',
@@ -1218,12 +1279,12 @@ function normalizeProfile(value) {
   };
 }
 
-function readBody(request) {
+function readBody(request, maxChars = 1_000_000) {
   return new Promise((resolve, reject) => {
     let body = '';
     request.on('data', (chunk) => {
       body += chunk;
-      if (body.length > 1_000_000) reject(new Error('Request body is too large.'));
+      if (body.length > maxChars) reject(new Error('Request body is too large.'));
     });
     request.on('end', () => {
       try { resolve(JSON.parse(body || '{}')); } catch { reject(new Error('Request body must be JSON.')); }
@@ -1314,10 +1375,10 @@ const server = createServer(async (request, response) => {
       try { await codex.start(); } catch { /* status returns useful error below */ }
       return sendJson(response, 200, codex.status(), origin);
     }
-    if (request.method !== 'POST' || !['/analyze', '/compare-versions', '/paper-question', '/node-question', '/node-edit/suggest', '/vault/paper', '/vault/paper/update', '/vault/paper/delete', '/vault/audit', '/vault/reader', '/vault/patches', '/vault/profile', '/vault/link', '/vault/link/delete', '/vault/export', '/vault/citation-asset'].includes(pathname)) {
+    if (request.method !== 'POST' || !['/analyze', '/compare-versions', '/paper-question', '/node-question', '/node-edit/suggest', '/vault/paper', '/vault/paper/update', '/vault/paper/delete', '/vault/paper/order', '/vault/audit', '/vault/reader', '/vault/patches', '/vault/profile', '/vault/link', '/vault/link/delete', '/vault/export', '/vault/latex-export', '/vault/citation-asset', '/vault/source-upload'].includes(pathname)) {
       return sendJson(response, 404, { error: 'Not found.' }, origin);
     }
-    const body = await readBody(request);
+    const body = await readBody(request, ['/vault/source-upload', '/vault/citation-asset'].includes(pathname) ? 112_000_000 : pathname === '/vault/latex-export' ? 24_000_000 : 1_000_000);
     if (pathname === '/vault/profile') return sendJson(response, 200, { profile: await vault.saveProfile(normalizeProfile(body.profile)) }, origin);
     if (pathname === '/vault/link') return sendJson(response, 200, { link: await vault.addLink(body.link), graph: await vault.rebuildGraph() }, origin);
     if (pathname === '/vault/link/delete') { await vault.removeLink(String(body.linkId || '')); return sendJson(response, 200, { graph: await vault.rebuildGraph() }, origin); }
@@ -1326,6 +1387,7 @@ const server = createServer(async (request, response) => {
       const removed = await vault.removePaper(String(body.paperId));
       return sendJson(response, 200, { removed, snapshot: await vault.snapshot() }, origin);
     }
+    if (pathname === '/vault/paper/order') return sendJson(response, 200, { order: await vault.reorderPapers(body.paperIds) }, origin);
     if (pathname === '/vault/reader') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
       return sendJson(response, 200, { reader: await vault.saveReader(String(body.paperId), body.reader ?? {}) }, origin);
@@ -1340,9 +1402,17 @@ const server = createServer(async (request, response) => {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
       return sendJson(response, 200, { saved: await vault.saveExport(String(body.paperId), body.export ?? {}) }, origin);
     }
+    if (pathname === '/vault/latex-export') {
+      if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
+      return sendJson(response, 200, { saved: await saveCompleteLatexExport(String(body.paperId), body.export ?? {}) }, origin);
+    }
     if (pathname === '/vault/citation-asset') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
       return sendJson(response, 200, { saved: await vault.saveCitationAsset(String(body.paperId), body.upload ?? {}) }, origin);
+    }
+    if (pathname === '/vault/source-upload') {
+      if (!validatePaper(body.paper)) return sendJson(response, 400, { error: 'A paper title and local source record are required.' }, origin);
+      return sendJson(response, 200, await saveUploadedPaperSource(body.paper, body.upload ?? {}), origin);
     }
     if (!validatePaper(body.paper)) return sendJson(response, 400, { error: 'A paper with title, arXiv id, and abstract is required.' }, origin);
     if (pathname === '/vault/paper' || pathname === '/vault/paper/update') return sendJson(response, 200, { paper: await vault.upsertPaper(body.paper) }, origin);
@@ -1372,6 +1442,13 @@ const server = createServer(async (request, response) => {
         try {
           primarySource = await acquireArxivSource(paper);
           await vault.saveSourceRecord(paper.id, { analysisFormat: 'tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.fetchedAt });
+          if (primarySource.kind === 'uploaded-pdf' && body.convertPdfToLatex) {
+            const converted = await codex.convertPdfToLatex({ paper, profile, pdfPath: primarySource.entryFile });
+            primarySource = await saveAiLatexSource(paper, converted);
+            const sourceRoot = await vault.sourceDirectory(paper.id);
+            await writeFile(path.join(sourceRoot, 'proofroom-uploaded-source.json'), `${JSON.stringify(primarySource, null, 2)}\n`, 'utf8');
+            await vault.saveSourceRecord(paper.id, { analysisFormat: 'ai-tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.convertedAt, sourceError: 'Reader-supplied PDF converted to an editable LaTeX working source.' });
+          }
         } catch (error) {
           primarySource = { kind: 'pdf', error: error instanceof Error ? error.message : 'TeX source unavailable' };
           if (body.convertPdfToLatex) {
