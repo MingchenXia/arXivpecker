@@ -93,7 +93,7 @@ function MathText({ value, block = false, citations = [] }: { value: string; blo
     // omitted them, keeping expressions such as χ|det|^s and L_v(χ_v,s)^{-1}
     // together instead of rendering only their superscripts.
     const pattern = /(\[\[cite:[^\]]+\]\]|\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([\s\S]+?\\\)|\([^()$\n]{0,180}(?:\^|_|\\[A-Za-z]+|\{[^}]*\})[^()$\n]{0,180}\)|[A-Za-z0-9\u0370-\u03ff\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*(?:\^|_|\\|[|≤≥∈×=])[A-Za-z0-9\u0370-\u03ff\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*|(?:Re|Im|GL|SL|Sp|SO|SU|Spec|Hom|Ext|Tor|dim|ker|coker|rank|det|tr|vol|[A-Z])\([^()\s]{1,180}\)(?:(?:_|\^)(?:\{[^{}\n]{1,80}\}|[A-Za-z0-9\u0370-\u03ff+-]))*|[\u0370-\u03ff])/g;
-    const result: { text: string; math: boolean; display: boolean; citation?: { key: string; locator: string } }[] = [];
+    const result: { text: string; math: boolean; display: boolean; source?: string; citation?: { key: string; locator: string } }[] = [];
     let cursor = 0;
     for (const match of source.matchAll(pattern)) {
       const index = match.index ?? 0;
@@ -103,14 +103,14 @@ function MathText({ value, block = false, citations = [] }: { value: string; blo
       const display = token.startsWith('$$') || token.startsWith('\\[');
       const expression = token.startsWith('$$') ? token.slice(2, -2) : token.startsWith('$') ? token.slice(1, -1) : token.startsWith('\\(') || token.startsWith('\\[') ? token.slice(2, -2) : token;
       const rendered = renderMath(expression, display);
-      result.push(rendered ? { text: rendered, math: true, display } : { text: token, math: false, display: false });
+      result.push(rendered ? { text: rendered, math: true, display, source: token } : { text: token, math: false, display: false });
       cursor = index + token.length;
     }
     if (cursor < source.length) result.push({ text: source.slice(cursor), math: false, display: false });
     return result;
   }, [value]);
   const Tag = block ? 'div' : 'span';
-  return <Tag className={`math-text ${block ? 'math-text-block' : ''}`}>{parts.map((part, index) => part.citation ? <InlineCitation key={index} mention={part.citation} citations={citations} /> : part.math ? <span key={index} className={part.display ? 'math-display' : 'math-inline'} dangerouslySetInnerHTML={{ __html: part.text }} /> : <span key={index}>{part.text}</span>)}</Tag>;
+  return <Tag className={`math-text ${block ? 'math-text-block' : ''}`}>{parts.map((part, index) => part.citation ? <InlineCitation key={index} mention={part.citation} citations={citations} /> : part.math ? <span key={index} className={part.display ? 'math-display' : 'math-inline'} data-source={part.source} dangerouslySetInnerHTML={{ __html: part.text }} /> : <span key={index}>{part.text}</span>)}</Tag>;
 }
 
 function InlineCitation({ mention, citations }: { mention: { key: string; locator: string }; citations: CitationReference[] }) {
@@ -118,7 +118,8 @@ function InlineCitation({ mention, citations }: { mention: { key: string; locato
   const locator = mention.locator || citation?.locator || '';
   const specificResult = /\b(theorem|lemma|proposition|corollary|definition|claim|result|thm\.?|lem\.?|prop\.?)\b/i.test(locator);
   const preview = specificResult && citation?.statement ? citation.statement : citationTitle(citation, mention.key);
-  return <span className="inline-citation" tabIndex={0}>[{citationAlphaLabel(citation, mention.key)}{locator ? `, ${locator}` : ''}]<span className="citation-hover-card" role="tooltip"><b>{specificResult ? locator : 'Cited paper'}</b><span>{preview}</span>{specificResult && !citation?.statement && <em>Verified theorem statement is not cached yet; open the cited source below.</em>}</span></span>;
+  const sourceLabel = `[${citationAlphaLabel(citation, mention.key)}${locator ? `, ${locator}` : ''}]`;
+  return <span className="inline-citation" data-source={sourceLabel} tabIndex={0}>{sourceLabel}<span className="citation-hover-card" role="tooltip"><b>{specificResult ? locator : 'Cited paper'}</b><span>{preview}</span>{specificResult && !citation?.statement && <em>Verified theorem statement is not cached yet; open the cited source below.</em>}</span></span>;
 }
 
 function citationTitle(citation: CitationReference | undefined, key: string) {
@@ -439,14 +440,16 @@ function Reader({ paper, audit, openImport, selectedNodeId, setSelectedNodeId, e
   }
   async function expandProofStep(target: AuditNode, step: string, index: number) {
     if (!paper || !audit?.threadId) throw new Error('Run the full-paper audit first.');
-    const prompt = `Expand Step ${index + 1} of the AI proof map in complete mathematical detail: “${step}”. Use the complete original proof and the durable full-paper audit as the authority. State every prerequisite used, fill in intermediate equations, explain each implication, and identify exactly where this step occurs in the author proof. Clearly separate text present in the source from explanatory details you supply. Do not invent a missing argument.`;
+    const visibleLines = indexedVisibleProof(target.id);
+    const prompt = `Expand Step ${index + 1} of the AI proof map in complete mathematical detail: “${step}”. Use the complete original proof and the durable full-paper audit as the authority. State every prerequisite used, fill in intermediate equations, explain each implication, and identify exactly where this step occurs using the reader-visible L-numbers below. Cite only line numbers supported by this map. Clearly separate text present in the source from explanatory details you supply. Do not invent a missing argument.\n\nReader-visible proof map:\n${visibleLines || 'No rendered line map is available; do not claim an L-number.'}`;
     const response = await fetch(`${bridgeUrl}/node-question`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paper, profile, node: target, question: prompt, threadId: audit.threadId }) });
     const data = await response.json(); if (!response.ok) throw new Error(data.error || 'This proof step could not be expanded.');
     return readString(data.text);
   }
   async function expandProofRequest(target: AuditNode, request: string) {
     if (!paper || !audit?.threadId) throw new Error('Run the full-paper audit first.');
-    const prompt = `The reader is working inside the complete proof of ${displayUnitLabel(target)} and asks: “${request}”. Use the author proof and its paragraph anchors L1, L2, … in displayed order. Give a detailed, source-faithful expansion at exactly the requested scope; include intermediate equations and prerequisites, distinguish author text from explanation, and do not invent missing mathematics.`;
+    const visibleLines = indexedVisibleProof(target.id);
+    const prompt = `The reader is working inside the complete proof of ${displayUnitLabel(target)} and asks: “${request}”. The L-labels refer exactly to the current rendered proof-line map below, including one line for each displayed formula. Give a detailed, source-faithful expansion at exactly the requested scope; include intermediate equations and prerequisites, distinguish author text from explanation, and do not invent missing mathematics.\n\nReader-visible proof map:\n${visibleLines || 'No rendered line map is available; ask the reader to reopen the proof before claiming an L-number.'}`;
     const response = await fetch(`${bridgeUrl}/node-question`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paper, profile, node: target, question: prompt, threadId: audit.threadId }) });
     const data = await response.json(); if (!response.ok) throw new Error(data.error || 'The proof could not be expanded.');
     return readString(data.text);
@@ -576,7 +579,7 @@ function InteractiveDocument({ paper, audit, nodes, selectedNodeId, setSelectedN
         <header><b>{displayUnitLabel(node)}.</b>{block.title && <span>(<MathText value={block.title} />)</span>}<AuditPeek node={node} open={() => { setSelectedNodeId(node.id); openAssistant(); }} /><ReadingMarkSelect value={readingMark} onChange={(value) => setMark(block.id, value)} /></header>
         <EditableTexBlock label="Statement TeX" value={node.statement || block.content} originalValue={sourceNode?.statement ?? block.content} changeRationale={patch?.rationale} citations={citations} emptyText="No standalone statement was extracted for this unit." onSave={(value) => saveInlineTex(node, 'statement', value)} />
         {block.assetPaths.length > 0 && <SourceFigure paperId={paper.id} assetPaths={block.assetPaths} caption={block.caption} />}
-        <footer>{!node.proofText && node.kind !== 'definition' ? <span className="source-no-proof">No attached proof</span> : null}<button onClick={(event) => { event.stopPropagation(); setSelectedNodeId(node.id); openAssistant(); }}>Ask AI · note · edit</button>{node.dependencies.length > 0 && <span>{node.dependencies.length} logical prerequisite{node.dependencies.length === 1 ? '' : 's'}</span>}</footer>
+        <footer>{!node.proofText && node.kind !== 'definition' ? <span className="source-no-proof">No attached proof</span> : null}<button onClick={(event) => { event.stopPropagation(); setSelectedNodeId(node.id); openAssistant(); }}>Ask AI · note</button></footer>
         {node.dependencies.length > 0 && <details className="source-dependencies"><summary>Logical dependencies</summary><div>{node.dependencies.map((dependency) => <UnitPreviewButton key={dependency} target={nodes.find((item) => item.id === dependency)} fallback="Referenced prerequisite" openNode={setSelectedNodeId} />)}</div></details>}
         {!node.proofText && citations.length > 0 && <CitationSources citations={citations} onExpand={(citation) => expandCitation(node, citation)} onOpen={openReference} onAttach={attachCitation} />}
       </section>;
@@ -606,6 +609,56 @@ function latexCompileError(value: string) {
   return '';
 }
 
+function visibleProofSourceLines(nodeId: string) {
+  if (typeof document === 'undefined') return [];
+  const proof = document.querySelector<HTMLElement>(`.source-proof[data-node-id="${CSS.escape(nodeId)}"]:not(.source-proof-collapsed)`);
+  const content = proof?.querySelector<HTMLElement>('.proof-line-content');
+  const root = content?.querySelector<HTMLElement>(':scope > .math-text');
+  if (!content || !root) return [];
+  const lineTops = Array.from(proof.querySelectorAll<HTMLElement>('.proof-line-gutter > span')).map((label) => Number(label.style.top.replace('px', ''))).filter(Number.isFinite);
+  if (!lineTops.length) return [];
+  const lines = lineTops.map(() => '');
+  const origin = content.getBoundingClientRect().top;
+  const style = window.getComputedStyle(root);
+  const fontSize = Number(style.fontSize.replace('px', '')) || 16;
+  const lineHeight = Number(style.lineHeight.replace('px', '')) || fontSize * 1.7;
+  const nearestLine = (top: number) => lineTops.reduce((best, candidate, index) => Math.abs(candidate - top) < Math.abs(lineTops[best] - top) ? index : best, 0);
+  const append = (line: number, source: string) => { if (source) lines[line] += source; };
+
+  for (const child of Array.from(root.children)) {
+    const element = child as HTMLElement;
+    const rect = element.getBoundingClientRect();
+    if (element.classList.contains('math-display')) {
+      const targetTop = rect.top - origin + Math.max(0, (rect.height - lineHeight) / 2);
+      append(nearestLine(targetTop), element.dataset.source || element.textContent || '');
+      continue;
+    }
+    if (element.classList.contains('math-inline') || element.classList.contains('inline-citation')) {
+      append(nearestLine(rect.top - origin), element.dataset.source || element.textContent || '');
+      continue;
+    }
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let textNode = walker.nextNode() as Text | null;
+    while (textNode) {
+      const source = textNode.data;
+      for (const match of source.matchAll(/\S+\s*/g)) {
+        const start = match.index ?? 0;
+        const range = document.createRange();
+        range.setStart(textNode, start);
+        range.setEnd(textNode, start + match[0].length);
+        const tokenRect = Array.from(range.getClientRects()).find((item) => item.height > 0 && item.width > 0);
+        if (tokenRect) append(nearestLine(tokenRect.top - origin), match[0]);
+      }
+      textNode = walker.nextNode() as Text | null;
+    }
+  }
+  return lines.map((line) => line.replace(/[\t ]+/g, ' ').trim());
+}
+
+function indexedVisibleProof(nodeId: string) {
+  return visibleProofSourceLines(nodeId).map((line, index) => `L${index + 1}: ${line}`).join('\n');
+}
+
 function VisualLineNumbers({ children }: { children: ReactNode }) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [lineTops, setLineTops] = useState<number[]>([]);
@@ -616,22 +669,52 @@ function VisualLineNumbers({ children }: { children: ReactNode }) {
     const measure = () => {
       frame = 0;
       const origin = content.getBoundingClientRect().top;
-      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
-      const tops: number[] = [];
-      let textNode = walker.nextNode();
-      while (textNode) {
-        if (textNode.textContent?.trim()) {
-          const range = document.createRange();
-          range.selectNodeContents(textNode);
-          for (const rect of Array.from(range.getClientRects())) {
-            const top = Math.round((rect.top - origin) * 2) / 2;
-            if (rect.height > 0 && !tops.some((value) => Math.abs(value - top) < 2)) tops.push(top);
-          }
+      const root = content.querySelector<HTMLElement>(':scope > .math-text') ?? content;
+      const style = window.getComputedStyle(root);
+      const fontSize = Number(style.fontSize.replace('px', '')) || 16;
+      const lineHeight = Number(style.lineHeight.replace('px', '')) || fontSize * 1.7;
+      const proseTops: number[] = [];
+      const inlineRects: DOMRect[] = [];
+      const displayRects: DOMRect[] = [];
+      const proseTolerance = Math.max(3, fontSize * .3);
+
+      // MathText deliberately emits one top-level span per source fragment.
+      // Measure only those fragments: descending into KaTeX would count every
+      // numerator, denominator, script, and glyph as a separate visible line.
+      for (const child of Array.from(root.children)) {
+        const element = child as HTMLElement;
+        if (element.classList.contains('math-display')) {
+          displayRects.push(element.getBoundingClientRect());
+          continue;
         }
-        textNode = walker.nextNode();
+        if (element.classList.contains('math-inline') || element.classList.contains('inline-citation')) {
+          inlineRects.push(element.getBoundingClientRect());
+          continue;
+        }
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        for (const rect of Array.from(range.getClientRects())) {
+          if (rect.height <= 0 || rect.width <= 0) continue;
+          const top = rect.top - origin;
+          if (!proseTops.some((value) => Math.abs(value - top) < proseTolerance)) proseTops.push(top);
+        }
       }
+
+      const tops = [...proseTops];
+      for (const rect of inlineRects) {
+        const top = rect.top - origin;
+        const bottom = rect.bottom - origin;
+        const sharesProseLine = tops.some((value) => value < bottom && value + lineHeight > top);
+        if (!sharesProseLine) tops.push(top);
+      }
+      // A displayed equation is one reader-visible line, regardless of the
+      // number of rows or nested boxes in KaTeX's internal DOM.
+      for (const rect of displayRects) tops.push(rect.top - origin + Math.max(0, (rect.height - lineHeight) / 2));
+
       tops.sort((left, right) => left - right);
-      setLineTops(tops);
+      const mergeTolerance = Math.max(5, fontSize * .45);
+      const merged = tops.filter((top, index) => index === 0 || Math.abs(top - tops[index - 1]) >= mergeTolerance);
+      setLineTops(merged.map((top) => Math.round(top * 2) / 2));
     };
     const schedule = () => { window.cancelAnimationFrame(frame); frame = window.requestAnimationFrame(measure); };
     const observer = new ResizeObserver(schedule);
@@ -678,7 +761,7 @@ function ProofMap({ node, citations, nodes, openNode, expandStep }: { node: Audi
   const [details, setDetails] = useState<Record<number, string>>({}); const [loading, setLoading] = useState<number | null>(null); const [errors, setErrors] = useState<Record<number, string>>({});
   async function openDetail(index: number, step: string) { if (details[index] || loading === index) return; setLoading(index); setErrors((current) => ({ ...current, [index]: '' })); try { const expanded = await expandStep(node, step, index); setDetails((current) => ({ ...current, [index]: expanded })); } catch (error) { setErrors((current) => ({ ...current, [index]: error instanceof Error ? error.message : 'This step could not be expanded.' })); } finally { setLoading(null); } }
   if (node.proofText.trim().length < 520 || node.proofSketch.length < 2) return null;
-  return <details className="proof-map"><summary><span>AI proof map</span></summary><div className="proof-map-body">{node.dependencies.length > 0 && <div className="proof-map-inputs"><b>Inputs used</b>{node.dependencies.map((dependency) => <UnitPreviewButton key={dependency} target={nodes.find((item) => item.id === dependency)} fallback="Referenced prerequisite" openNode={openNode} />)}</div>}<ol>{node.proofSketch.map((step, index) => <li key={index}><details className="proof-step" onToggle={(event) => { if (event.currentTarget.open) void openDetail(index, step); }}><summary><span><b>Step {index + 1}</b><i /></span><MathText value={step} citations={citations} /></summary><div className="proof-step-detail">{loading === index && <div className="proof-ai-progress"><span /><span /><span /><p>Expanding this step from the complete proof…</p></div>}{errors[index] && <p className="proof-step-error">{errors[index]} <button onClick={() => void openDetail(index, step)}>Try again</button></p>}{details[index] && <MathText value={details[index]} block citations={citations} />}</div></details></li>)}</ol></div></details>;
+  return <details className="proof-map"><summary><span>AI proof map</span><small>{node.proofSketch.length} expandable steps</small></summary><div className="proof-map-body">{node.dependencies.length > 0 && <div className="proof-map-inputs"><b>Inputs used</b>{node.dependencies.map((dependency) => <UnitPreviewButton key={dependency} target={nodes.find((item) => item.id === dependency)} fallback="Referenced prerequisite" openNode={openNode} />)}</div>}<ol>{node.proofSketch.map((step, index) => <li key={index}><details className="proof-step" onToggle={(event) => { if (event.currentTarget.open) void openDetail(index, step); }}><summary><span className="proof-step-number"><b>{index + 1}</b><i /></span><span className="proof-step-summary"><MathText value={step} citations={citations} /><small>Open for complete detail</small></span></summary><div className="proof-step-detail">{loading === index && <div className="proof-ai-progress"><span /><span /><span /><p>Expanding this step from the complete proof…</p></div>}{errors[index] && <p className="proof-step-error">{errors[index]} <button onClick={() => void openDetail(index, step)}>Try again</button></p>}{details[index] && <MathText value={details[index]} block citations={citations} />}</div></details></li>)}</ol></div></details>;
 }
 
 function CitationUploadButton({ citation, onAttach }: { citation: CitationReference; onAttach: (citation: CitationReference, file: File) => Promise<string> }) {
@@ -792,7 +875,7 @@ function AssistantProofExpander({ node, expand }: { node: AuditNode; expand: (no
   useEffect(() => { const timer = window.setTimeout(() => { const count = document.querySelectorAll(`.source-proof[data-node-id="${CSS.escape(node.id)}"] .proof-line-gutter > span`).length || Math.max(1, node.proofText.split(/\n+/).filter((line) => line.trim()).length); setLineCount(count); setStart(1); setEnd(count); }, 80); return () => window.clearTimeout(timer); }, [node.id, node.proofText]);
   if (!formal || !node.proofText.trim()) return null;
   async function run() { const from = Math.max(1, Math.min(start, lineCount)); const to = Math.max(from, Math.min(end, lineCount)); setBusy(true); setError(''); setAnswer(''); try { setAnswer(await expand(node, `Expand the author proof from visible line L${from} through L${to} in complete detail. The visible line range is the reader's requested scope; include every intermediate implication and equation needed to understand that range.`)); } catch (cause) { setError(cause instanceof Error ? cause.message : 'The proof range could not be expanded.'); } finally { setBusy(false); } }
-  return <section className="assistant-proof-expander"><header><b>Expand proof</b><span>{lineCount} visible lines</span></header><div><label>From <input type="number" min="1" max={lineCount} value={start} onChange={(event) => setStart(Number(event.target.value))} /></label><label>to <input type="number" min="1" max={lineCount} value={end} onChange={(event) => setEnd(Number(event.target.value))} /></label><button onClick={() => void run()} disabled={busy}>{busy ? 'Expanding…' : 'Expand'}</button></div>{busy && <div className="proof-ai-progress"><span /><span /><span /><p>Reading the selected proof lines…</p></div>}{error && <p className="proof-step-error">{error}</p>}{answer && <details open><summary>Detailed expansion · L{start}–L{end}</summary><MathText value={answer} block citations={node.citations ?? []} /></details>}</section>;
+  return <section className="assistant-proof-expander"><header><b>Expand proof</b><span>{lineCount} visible lines</span></header><div><label>From <span className="proof-line-prefix">L</span><input type="number" min="1" max={lineCount} value={start} onChange={(event) => setStart(Number(event.target.value))} /></label><label>to <span className="proof-line-prefix">L</span><input type="number" min="1" max={lineCount} value={end} onChange={(event) => setEnd(Number(event.target.value))} /></label><button onClick={() => void run()} disabled={busy}>{busy ? 'Expanding…' : 'Expand'}</button></div>{busy && <div className="proof-ai-progress"><span /><span /><span /><p>Reading the selected proof lines…</p></div>}{error && <p className="proof-step-error">{error}</p>}{answer && <details open><summary>Detailed expansion · L{start}–L{end}</summary><MathText value={answer} block citations={node.citations ?? []} /></details>}</section>;
 }
 
 type InspectorProps = { paper: Paper; node: AuditNode; originalNode?: AuditNode; edition: EditionMode; patches: WorkingPatch[]; savePatches: (patches: WorkingPatch[]) => Promise<void>; suggestEdit: (node: AuditNode) => Promise<EditorialSuggestion>; expanded: boolean; setExpanded: (value: boolean) => void; expandProof: (node: AuditNode, request: string) => Promise<string>; readerNote: string; setReaderNote: (value: string) => void; answer?: string; question: string; setQuestion: (value: string) => void; asking: boolean; ask: () => void; saveNote: (anchor: string, nodeId: string, text: string, latex: string) => void; graph: Graph; addLink: (link: Omit<CrossLink, 'id' | 'source' | 'createdAt'>) => Promise<void>; removeLink: (linkId: string) => Promise<void>; openUnit: (paperId: string, nodeId: string) => void };
