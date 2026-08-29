@@ -3,7 +3,7 @@ import 'katex/dist/katex.min.css';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Proofroom · Mathematics Paper Reader',
+  title: 'arXivpecker · Mathematics Paper Reader',
   description: 'Read mathematics papers with structure maps, proof paths, and personal notes.',
 };
 

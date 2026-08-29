@@ -115,9 +115,9 @@ async function saveCompleteLatexExport(paperId, exportRecord) {
   const edition = exportRecord?.edition === 'original' ? 'author' : 'working';
   const sourceRoot = await vault.sourceDirectory(String(paperId));
   let texFiles = []; try { texFiles = await collectTexFiles(sourceRoot); } catch { /* A generated single-file export remains available. */ }
-  if (texFiles.length <= 1) { const fileName = `proofroom-${edition}-edition.tex`; const file = path.join(exportDirectory, fileName); await writeFile(file, content, 'utf8'); return { fileName, relativePath: path.relative(vault.root, file), format: 'tex', bytes: Buffer.byteLength(content, 'utf8') }; }
-  const fileName = `proofroom-${edition}-edition-source.zip`; const file = path.join(exportDirectory, fileName); const staging = await mkdtemp(path.join(exportDirectory, '.latex-export-'));
-  try { await cp(sourceRoot, path.join(staging, 'original-source'), { recursive: true }); await writeFile(path.join(staging, `proofroom-${edition}-edition.tex`), content, 'utf8'); await runProgram('ditto', ['-c', '-k', '--sequesterRsrc', staging, file]); }
+  if (texFiles.length <= 1) { const fileName = `arxivpecker-${edition}-edition.tex`; const file = path.join(exportDirectory, fileName); await writeFile(file, content, 'utf8'); return { fileName, relativePath: path.relative(vault.root, file), format: 'tex', bytes: Buffer.byteLength(content, 'utf8') }; }
+  const fileName = `arxivpecker-${edition}-edition-source.zip`; const file = path.join(exportDirectory, fileName); const staging = await mkdtemp(path.join(exportDirectory, '.latex-export-'));
+  try { await cp(sourceRoot, path.join(staging, 'original-source'), { recursive: true }); await writeFile(path.join(staging, `arxivpecker-${edition}-edition.tex`), content, 'utf8'); await runProgram('ditto', ['-c', '-k', '--sequesterRsrc', staging, file]); }
   finally { await rm(staging, { recursive: true, force: true }); }
   return { fileName, relativePath: path.relative(vault.root, file), format: 'zip', sourceFiles: texFiles.length };
 }
@@ -137,12 +137,31 @@ async function acquireArxivSource(paper, requestedArxivId = paper.arxivId, versi
   await mkdir(sourceDirectory, { recursive: true });
   const archive = path.join(sourceDirectory, 'arxiv-source.tar');
   const encodedArxivId = String(requestedArxivId).split('/').map(encodeURIComponent).join('/');
-  const response = await fetch(`https://export.arxiv.org/e-print/${encodedArxivId}`, {
-    redirect: 'follow',
-    signal: AbortSignal.timeout(90_000),
-    headers: { 'User-Agent': 'Proofroom/0.2 (local mathematics paper reader)' },
-  });
-  if (!response.ok) throw new Error(`arXiv TeX source returned ${response.status}.`);
+  let response = null; let sourceError = null;
+  const sourceUrls = [
+    `https://export.arxiv.org/e-print/${encodedArxivId}`,
+    `https://arxiv.org/e-print/${encodedArxivId}`,
+    `https://arxiv.org/src/${encodedArxivId}`,
+    `https://browse.arxiv.org/e-print/${encodedArxivId}`,
+  ];
+  for (const sourceUrl of sourceUrls) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const candidate = await fetch(sourceUrl, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(90_000),
+          headers: { 'User-Agent': 'arXivpecker/0.2 (local mathematics paper reader; TeX-first)' },
+        });
+        if (!candidate.ok) throw new Error(`returned ${candidate.status}`);
+        response = candidate; break;
+      } catch (error) {
+        sourceError = error;
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    }
+    if (response) break;
+  }
+  if (!response) throw new Error(`arXiv TeX source could not be retrieved${sourceError instanceof Error ? `: ${sourceError.message}` : '.'}`);
   const declared = Number(response.headers.get('content-length') || 0);
   if (declared > MAX_SOURCE_BYTES) throw new Error('arXiv TeX source is larger than the local safety limit.');
   const payload = Buffer.from(await response.arrayBuffer());
@@ -172,7 +191,7 @@ This is a transcription task, not a rewrite. Read every page. Preserve the title
 Return only one complete compilable LaTeX document, beginning with \\documentclass and ending with \\end{document}. Do not use Markdown fences or add commentary outside the document.`;
 }
 
-function extractLatexDocument(text) {
+function extractLatexDocument(text, paper = null) {
   const clean = String(text || '').trim().replace(/^```(?:latex|tex)?\s*/i, '').replace(/\s*```$/i, '');
   const start = clean.indexOf('\\documentclass');
   const endMarker = '\\end{document}';
@@ -180,16 +199,26 @@ function extractLatexDocument(text) {
   if (start < 0 || end < start) throw new Error('Codex did not return a complete LaTeX document.');
   const document = clean.slice(start, end + endMarker.length).trim();
   if (Buffer.byteLength(document, 'utf8') > 12 * 1024 * 1024) throw new Error('The AI-converted LaTeX document exceeds the local safety limit.');
+  const body = document.match(/\\begin\{document\}([\s\S]*)\\end\{document\}/)?.[1]?.trim() ?? '';
+  const refusal = /cannot (?:provide|transcribe|convert)|can't (?:provide|transcribe|convert)|copyright(?:ed)? paper|unable to (?:access|provide|transcribe)|I (?:can|could) help (?:with|you) (?:a )?(?:short|brief|summary)/i;
+  const hasStructure = /\\(?:section|chapter|part)\*?\s*\{|\\begin\{(?:abstract|theorem|lemma|proposition|definition|proof)\}/.test(body);
+  if (refusal.test(body) || Buffer.byteLength(body, 'utf8') < 2_000 || !hasStructure) {
+    const label = paper?.arxivId ? `arXiv:${paper.arxivId}` : 'this paper';
+    throw new Error(`AI could not create a complete LaTeX reading source for ${label}. Upload the author TeX (use ZIP for a multi-file project) or the original PDF and try again.`);
+  }
   return `${document}\n`;
 }
 
 async function saveAiLatexSource(paper, converted) {
+  // Validate before creating or replacing any local source files. A provider
+  // refusal can contain a syntactically complete, tiny LaTeX wrapper; saving
+  // that wrapper would make the reader treat an error message as the paper.
+  const latex = extractLatexDocument(converted.text, paper);
   const sourceRoot = await vault.sourceDirectory(paper.id);
   const sourceDirectory = path.join(sourceRoot, 'ai-converted');
   await mkdir(sourceDirectory, { recursive: true });
   const entryFile = path.join(sourceDirectory, 'main.tex');
   const manifestFile = path.join(sourceDirectory, 'proofroom-ai-source.json');
-  const latex = extractLatexDocument(converted.text);
   await writeFile(entryFile, latex, 'utf8');
   const manifest = { kind: 'ai-tex', arxivId: paper.arxivId, entryFile, sourceDirectory, fileCount: 1, convertedAt: new Date().toISOString(), conversionThreadId: converted.threadId, cached: false };
   await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -209,7 +238,7 @@ async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 
     const requested = match[1].trim();
     const candidate = path.resolve(path.dirname(entryFile), /\.[A-Za-z0-9]+$/.test(requested) ? requested : `${requested}.tex`);
     try { expanded += await readExpandedTex(candidate, sourceRoot, seen, depth + 1); }
-    catch { expanded += `\n% Proofroom could not resolve ${requested}\n`; }
+    catch { expanded += `\n% arXivpecker could not resolve ${requested}\n`; }
     cursor = (match.index ?? 0) + match[0].length;
   }
   expanded += source.slice(cursor);
@@ -523,9 +552,25 @@ function graphicPaths(source) {
   return [...String(source || '').matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].map((match) => match[1].trim()).filter(Boolean);
 }
 
+function literalSourceRanges(source) {
+  const value = String(source || ''); const ranges = [];
+  for (const match of value.matchAll(/\\begin\{(verbatim\*?|Verbatim|lstlisting|minted|comment|alltt)\}(?:\[[^\]]*\])?(?:\{[^}]*\})?[\s\S]*?\\end\{\1\}/g)) {
+    const start = match.index ?? 0; ranges.push([start, start + match[0].length]);
+  }
+  for (const match of value.matchAll(/\\verb\*?([^A-Za-z0-9\s])[\s\S]*?\1/g)) {
+    const start = match.index ?? 0; ranges.push([start, start + match[0].length]);
+  }
+  return ranges;
+}
+
+function insideSourceRanges(index, ranges) {
+  return ranges.some(([start, end]) => start <= index && index < end);
+}
+
 function extractSourceUnits(source) {
   const originalSource = String(source || '');
   const normalizedSource = expandAuthorMacros(originalSource);
+  const literalRanges = literalSourceRanges(normalizedSource);
   const environments = new Map([
     ['theorem', 'theorem'], ['thm', 'theorem'], ['lemma', 'lemma'], ['lem', 'lemma'],
     ['proposition', 'proposition'], ['prop', 'proposition'], ['corollary', 'corollary'], ['cor', 'corollary'],
@@ -543,6 +588,7 @@ function extractSourceUnits(source) {
   const units = [];
   for (const match of normalizedSource.matchAll(unitPattern)) {
     const start = match.index ?? 0; const end = start + match[0].length;
+    if (insideSourceRanges(start, literalRanges)) continue;
     const label = /\\label\s*\{([^}]+)\}/.exec(match[3])?.[1] || '';
     const embeddedProofs = [...match[3].matchAll(embeddedProofPattern)];
     const statementSource = match[3].replace(embeddedProofPattern, '');
@@ -552,6 +598,7 @@ function extractSourceUnits(source) {
   const proofPattern = /\\begin\{proof\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{proof\}/g;
   for (const proof of normalizedSource.matchAll(proofPattern)) {
     const proofStart = proof.index ?? 0;
+    if (insideSourceRanges(proofStart, literalRanges)) continue;
     if (units.some((unit) => unit.start < proofStart && proofStart < unit.end)) continue;
     const nearest = units.filter((unit) => unit.end <= proofStart).at(-1) || null;
     const prelude = normalizedSource.slice(Math.max(nearest?.end ?? 0, proofStart - 2200), proofStart);
@@ -579,10 +626,11 @@ function citationReference(mention, bibliography, aiCitations = []) {
 }
 
 function sectionEvents(source) {
-  const events = [];
+  const events = []; const literalRanges = literalSourceRanges(source);
   const pattern = /\\(part|section|subsection|subsubsection)\*?(?:\[[^\]]*\])?\s*\{/g;
   const levels = { part: 0, section: 1, subsection: 2, subsubsection: 3 };
   for (const match of String(source || '').matchAll(pattern)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges)) continue;
     const title = balancedGroup(source, (match.index ?? 0) + match[0].length - 1);
     if (!title) continue;
     events.push({ type: 'section', start: match.index ?? 0, end: title.end, level: levels[match[1]] ?? 1, title: readableLatex(title.content) });
@@ -595,6 +643,8 @@ function readableBodyFragment(source) {
     .replace(/\\begin\{abstract\}[\s\S]*?\\end\{abstract\}/g, '')
     .replace(/\\(?:title|author|address|email|subjclass|date|dedicatory|keywords|thanks)(?:\[[^\]]*\])?\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, '')
     .replace(/\\(?:maketitle|tableofcontents|clearpage|newpage|printbibliography|centering)\b/g, '')
+    .replace(/\\(?:nocite|label|pagestyle|thispagestyle|pagenumbering)\s*\{[^}]*\}/g, '')
+    .replace(/\\setcounter\s*\{[^}]*\}\s*\{[^}]*\}/g, '')
     .replace(/\\(?:bibliography|bibliographystyle|addbibresource)\s*\{[^}]*\}/g, '')
     .replace(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]*)\}/g, (_match, file) => `\n[Figure from the original source: ${file}]\n`)
     .replace(/\\begin\{(?:center|flushleft|flushright|quote|quotation|figure\*?|table\*?|minipage)\}(?:\[[^\]]*\])?(?:\{[^}]*\})?/g, '')
@@ -618,9 +668,11 @@ function sourceParagraphBlocks(source, bibliography, state) {
 
 function buildSourceBlocks(source, units, bibliography) {
   const normalized = expandAuthorMacros(String(source || ''));
-  const documentBegin = normalized.indexOf('\\begin{document}');
-  const bodyStart = documentBegin >= 0 ? documentBegin + '\\begin{document}'.length : 0;
-  const documentEnd = normalized.lastIndexOf('\\end{document}');
+  const beginMatch = /^[ \t]*\\begin\{document\}[ \t]*(?:%[^\r\n]*)?/m.exec(normalized);
+  const documentBegin = beginMatch?.index ?? -1;
+  const bodyStart = documentBegin >= 0 ? documentBegin + (beginMatch?.[0].length ?? '\\begin{document}'.length) : 0;
+  const endMatches = [...normalized.matchAll(/^[ \t]*\\end\{document\}[ \t]*(?:%[^\r\n]*)?/gm)];
+  const documentEnd = endMatches.at(-1)?.index ?? -1;
   const bodyEnd = documentEnd > bodyStart ? documentEnd : normalized.length;
   const events = [
     ...sectionEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
@@ -654,7 +706,7 @@ function buildSourceBlocks(source, units, bibliography) {
 }
 
 function figureEvents(source) {
-  const events = []; const covered = [];
+  const events = []; const covered = []; const literalRanges = literalSourceRanges(source);
   const images = (fragment) => graphicPaths(fragment);
   const caption = (fragment) => {
     const match = /\\caption(?:\[[^\]]*\])?\s*\{/.exec(fragment);
@@ -662,12 +714,13 @@ function figureEvents(source) {
     return readableLatex(balancedGroup(fragment, (match.index ?? 0) + match[0].length - 1)?.content || '');
   };
   for (const match of String(source || '').matchAll(/\\begin\{figure\*?\}([\s\S]*?)\\end\{figure\*?\}/g)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges)) continue;
     const assetPaths = images(match[0]); if (!assetPaths.length) continue;
     const start = match.index ?? 0; const end = start + match[0].length; covered.push([start, end]);
     events.push({ type: 'figure', start, end, assetPaths, caption: caption(match[0]), citations: citationMentions(match[0]) });
   }
   for (const match of String(source || '').matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)) {
-    const start = match.index ?? 0; if (covered.some(([left, right]) => left <= start && start < right)) continue;
+    const start = match.index ?? 0; if (insideSourceRanges(start, literalRanges) || covered.some(([left, right]) => left <= start && start < right)) continue;
     events.push({ type: 'figure', start, end: start + match[0].length, assetPaths: [match[1].trim()], caption: '', citations: [] });
   }
   return events;
@@ -878,12 +931,12 @@ Read that local LaTeX document first, but treat the original PDF at https://arxi
     ? `The host application deterministically attaches complete theorem statements and proof environments from the local LaTeX tree after your turn. Set proofText to an empty string for every node; spend the response budget on accurate dependency analysis and proofSketch explanations. Do not warn about proof payload length.`
     : `For every theorem, lemma, proposition, corollary, and proof node, statement must be a source-faithful transcription of the complete printed statement, not a summary, and proofText must contain the complete proof from the PDF, including all equations, cases, and cited intermediate results. Do not shorten a proof. Use an empty proofText only when the source genuinely has no proof or the complete proof cannot be accessed, and explain that limitation in the verification warnings.`;
   const correctnessInstructions = correctnessAudit
-    ? `CORRECTNESS AUDIT REQUESTED: For every formal environment, actively check whether the statement is well-formed under the declared hypotheses and whether its proof supports the exact conclusion. Trace dependencies, inspect cited prerequisites when accessible, and use status "verified" only when this check succeeds. Use "needs-verification" for a specific gap, ambiguity, unchecked external dependency, or possible error, and explain the issue in role or verificationWarnings. Never repair or silently strengthen an argument.`
+    ? `CORRECTNESS AUDIT REQUESTED: Treat this as an adversarial mathematical referee pass, not a summary. For every formal environment, actively check whether the statement is well-formed under the declared hypotheses and whether its proof supports the exact conclusion. Try the smallest natural examples and counterexamples against universal claims. Check every division, normalization, extension across a singular set, change of quantifiers, use of compactness or a maximum principle, and transition between pointwise, local, and global assertions. In geometry and sheaf theory, explicitly distinguish a locally free sheaf from a subbundle, a sheaf injection from a fibrewise injection or nowhere-vanishing section, and an arbitrary subsheaf from a saturated one; verify that any quotient has the regularity the proof uses. Trace dependencies, inspect cited prerequisites when accessible, and use status "verified" only when this check succeeds. Use "needs-verification" for a specific gap, ambiguity, unchecked external dependency, or possible error, explain the exact failure and a concrete test case in role or verificationWarnings, and propagate the warning to downstream results that use it. Never repair or silently strengthen an argument.`
     : `CORRECTNESS AUDIT NOT REQUESTED: Preserve the complete document structure and source text, build logical dependencies, and mark source-transcribed environments as verified only in the limited sense that their text was located in the primary source. Do not claim that the mathematics or proof has been checked for correctness.`;
   const depthInstructions = detailedAudit
     ? `DETAILED AUDIT MODE: Build a retrieval queue for every citation locator that names a theorem, lemma, proposition, corollary, definition, equation, section, or numbered result. For each queue item, resolve the cited paper from its bibliography record, fetch the cited paper's primary TeX source when it is on arXiv (use its PDF only when TeX is unavailable), search that source for the exact locator, and recover the complete statement before finishing this audit. Also recover every nearby definition needed to interpret its nonstandard notation and hypotheses. Populate citations.statement and citations.definitions only with material verified in that cited primary source. Continue through the full queue within the available audit time instead of deferring retrieval to a later question. Do not return a placeholder saying that a record is not cached; either provide verified source detail or leave the field empty and give a precise verification warning naming what access or locator failed.`
     : `STANDARD AUDIT MODE: Preserve citation keys, locators, titles, and direct primary-source links, but do not spend the audit budget following every external theorem.`;
-  return `You are Proofroom's mathematical-paper audit engine. Work for a ${profile.level} interested in ${profile.areas.join(', ')}, whose goal is "${profile.goal}".
+  return `You are arXivpecker's mathematical-paper audit engine. Work for a ${profile.level} interested in ${profile.areas.join(', ')}, whose goal is "${profile.goal}".
 
 FIRST: Read the WHOLE primary source before making a guide. Inspect the introduction, every section heading, all named definitions, assumptions, propositions, lemmas, theorems, corollaries, and the proof architecture. Do not use only the abstract. If full text is unavailable, report partial-text-read or blocked and do not invent missing mathematical statements.
 
@@ -1009,7 +1062,7 @@ class CodexAppServer {
       (async () => {
         try {
           await this.call('initialize', {
-            clientInfo: { name: 'proofroom_local_reader', title: 'Proofroom local reader', version: '0.1.0' },
+            clientInfo: { name: 'arxivpecker_local_reader', title: 'arXivpecker local reader', version: '0.2.0' },
           }, 18000);
           this.notify('initialized', {});
           const [accountResult, modelsResult] = await Promise.all([
@@ -1299,7 +1352,7 @@ function enqueue(work) {
   return scheduled;
 }
 
-const figureExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf', '.eps'];
+const figureExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf', '.eps', '.ps', '.tif', '.tiff', '.bmp'];
 
 async function collectFigureFiles(directory, root = directory, depth = 0) {
   if (depth > 8) return [];
@@ -1332,12 +1385,13 @@ async function figureAsset(paperId, requestedPath) {
   }
   if (!candidate) throw new Error('The referenced figure asset is not present in this paper source.');
   const sourceExtension = path.extname(candidate).toLowerCase();
-  if (sourceExtension === '.pdf' || sourceExtension === '.eps') {
+  if (['.pdf', '.eps', '.ps', '.tif', '.tiff', '.bmp'].includes(sourceExtension)) {
     const previewDirectory = path.join(sourceRoot, '.proofroom-previews'); await mkdir(previewDirectory, { recursive: true });
     const token = Buffer.from(path.relative(sourceRoot, candidate)).toString('base64url').slice(0, 72); const preview = path.join(previewDirectory, `${token}.png`);
     try { await stat(preview); }
     catch {
       if (sourceExtension === '.pdf') await runProgram('pdftoppm', ['-png', '-singlefile', '-r', '180', candidate, preview.slice(0, -4)]);
+      else if (sourceExtension === '.eps' || sourceExtension === '.ps') await runProgram('gs', ['-dSAFER', '-dBATCH', '-dNOPAUSE', '-sDEVICE=pngalpha', '-r180', `-sOutputFile=${preview}`, candidate]);
       else await runProgram('sips', ['-s', 'format', 'png', candidate, '--out', preview]);
     }
     candidate = preview;
@@ -1478,7 +1532,7 @@ const server = createServer(async (request, response) => {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   server.listen(PORT, HOST, () => {
-    console.log(`Proofroom Codex bridge listening on http://${HOST}:${PORT}`);
+    console.log(`arXivpecker Codex bridge listening on http://${HOST}:${PORT}`);
     console.log('Uses your local Codex/ChatGPT sign-in. No OpenAI API key is used.');
   });
 
@@ -1491,4 +1545,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
 }
 
-export { enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractSourceUnits, readExpandedTex };
+export { enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readExpandedTex };

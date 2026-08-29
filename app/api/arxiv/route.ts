@@ -60,6 +60,163 @@ function parseFeed(xml: string): ArxivPaper[] {
   }).filter((paper) => paper.arxivId && paper.title);
 }
 
+function valueOfHtml(html: string, className: string) {
+  const escaped = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return decodeXml(html.match(new RegExp(`<[^>]+class=["'][^"']*\\b${escaped}\\b[^"']*["'][^>]*>([\\s\\S]*?)<\\/[^>]+>`, 'i'))?.[1] ?? '');
+}
+
+function parseAbstractPage(html: string, requestedId: string): ArxivPaper | null {
+  const title = valueOfHtml(html, 'title').replace(/^Title:\s*/i, '');
+  const abstract = valueOfHtml(html, 'abstract').replace(/^Abstract:\s*/i, '');
+  const authorBlock = html.match(/<div[^>]+class=["'][^"']*authors[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? '';
+  const authors = [...authorBlock.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)].map((match) => decodeXml(match[1])).filter(Boolean);
+  const primary = html.match(/<span[^>]+class=["'][^"']*primary-subject[^"']*["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? '';
+  const category = decodeXml(primary).match(/\((math\.[A-Z]{2})\)\s*$/)?.[1] ?? 'math';
+  const categories = [...html.matchAll(/(?:primary-subject|subjects)[\s\S]{0,180}?\((math\.[A-Z]{2})\)/gi)].map((match) => match[1]);
+  if (!title) return null;
+  return {
+    id: `arxiv-${requestedId.replace(/[^a-z0-9]+/gi, '-')}`,
+    title,
+    authors: authors.join(' · ') || 'Unknown authors',
+    category,
+    arxivId: requestedId,
+    abstract,
+    state: 'To read',
+    tags: [...new Set([category, ...categories])].filter((item) => item.startsWith('math.')).slice(0, 4),
+  };
+}
+
+function metaContent(html: string, name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tag = html.match(new RegExp(`<meta\\s+[^>]*name=["']${escaped}["'][^>]*>`, 'i'))?.[0] ?? '';
+  return decodeXml(tag.match(/content=["']([\s\S]*?)["']/i)?.[1] ?? '');
+}
+
+function parseMetadataMirror(html: string, requestedId: string): ArxivPaper | null {
+  const title = metaContent(html, 'citation_title');
+  if (!title) return null;
+  const authorText = metaContent(html, 'citation_authors');
+  const category = metaContent(html, 'citation_publisher').match(/\b(math\.[A-Z]{2})\b/)?.[1] ?? 'math';
+  return {
+    id: `arxiv-${requestedId.replace(/[^a-z0-9]+/gi, '-')}`,
+    title,
+    authors: authorText.split(/\s*;\s*/).filter(Boolean).join(' · ') || 'Unknown authors',
+    category,
+    arxivId: requestedId,
+    abstract: metaContent(html, 'citation_abstract'),
+    state: 'To read',
+    tags: category.startsWith('math.') ? [category] : [],
+  };
+}
+
+async function fetchText(url: string, attempts = 2) {
+  let lastError: unknown = new Error('arXiv is unavailable.');
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        cache: 'no-store',
+        redirect: 'follow',
+        signal: AbortSignal.timeout(25_000),
+        headers: { 'User-Agent': 'arXivpecker/0.2 (local mathematics paper reader; TeX-first)' },
+      });
+      if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
+      return await response.text();
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+function abstractFromInvertedIndex(value: unknown) {
+  if (!value || typeof value !== 'object') return '';
+  const positions: { word: string; index: number }[] = [];
+  for (const [word, indices] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(indices)) continue;
+    for (const index of indices) if (typeof index === 'number') positions.push({ word, index });
+  }
+  return positions.sort((a, b) => a.index - b.index).map((item) => item.word).join(' ');
+}
+
+function openAlexCategory(result: Record<string, unknown>) {
+  const topic = result.primary_topic && typeof result.primary_topic === 'object' ? result.primary_topic as Record<string, unknown> : {};
+  const subfield = topic.subfield && typeof topic.subfield === 'object' ? topic.subfield as Record<string, unknown> : {};
+  const text = `${String(topic.display_name || '')} ${String(subfield.display_name || '')}`.toLowerCase();
+  if (/complex manifold|differential geometry|curvature|riemannian/.test(text)) return 'math.DG';
+  if (/algebraic geometry/.test(text)) return 'math.AG';
+  if (/number theory/.test(text)) return 'math.NT';
+  if (/combinator/.test(text)) return 'math.CO';
+  if (/probability|stochastic/.test(text)) return 'math.PR';
+  if (/partial differential|pde|analysis/.test(text)) return 'math.AP';
+  if (/optimization|operations research/.test(text)) return 'math.OC';
+  if (/numerical/.test(text)) return 'math.NA';
+  if (/logic|foundations/.test(text)) return 'math.LO';
+  if (/topology/.test(text)) return 'math.GT';
+  return 'math';
+}
+
+async function fetchPaperFromOpenAlex(arxivId: string) {
+  const baseId = arxivId.replace(/v\d+$/i, '');
+  const filter = encodeURIComponent(`locations.landing_page_url:https://arxiv.org/abs/${baseId}`);
+  const select = encodeURIComponent('title,authorships,abstract_inverted_index,primary_topic,topics');
+  const payload = JSON.parse(await fetchText(`https://api.openalex.org/works?filter=${filter}&select=${select}`, 1)) as Record<string, unknown>;
+  const result = Array.isArray(payload.results) && payload.results[0] && typeof payload.results[0] === 'object' ? payload.results[0] as Record<string, unknown> : null;
+  if (!result) return null;
+  const category = openAlexCategory(result);
+  const authorships = Array.isArray(result.authorships) ? result.authorships : [];
+  const authors = authorships.map((item) => {
+    const entry = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const author = entry.author && typeof entry.author === 'object' ? entry.author as Record<string, unknown> : {};
+    return String(author.display_name || entry.raw_author_name || '').trim();
+  }).filter(Boolean);
+  const title = String(result.title || '').trim();
+  if (!title) return null;
+  return {
+    id: `arxiv-${arxivId.replace(/[^a-z0-9]+/gi, '-')}`,
+    title,
+    authors: authors.join(' · ') || 'Unknown authors',
+    category,
+    arxivId,
+    abstract: abstractFromInvertedIndex(result.abstract_inverted_index),
+    state: 'To read' as const,
+    tags: category.startsWith('math.') ? [category] : [],
+  } satisfies ArxivPaper;
+}
+
+async function fetchPaper(arxivId: string) {
+  const encoded = arxivId.split('/').map(encodeURIComponent).join('/');
+  const errors: string[] = [];
+  for (const url of [
+    `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}`,
+    `https://arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}`,
+  ]) {
+    try {
+      const papers = parseFeed(await fetchText(url));
+      if (papers[0]) return papers[0];
+      errors.push('metadata feed returned no matching entry');
+    } catch (error) { errors.push(error instanceof Error ? error.message : 'metadata feed failed'); }
+  }
+  for (const url of [`https://arxiv.org/abs/${encoded}`, `https://export.arxiv.org/abs/${encoded}`]) {
+    try {
+      const paper = parseAbstractPage(await fetchText(url), arxivId);
+      if (paper) return paper;
+      errors.push('abstract page contained no paper metadata');
+    } catch (error) { errors.push(error instanceof Error ? error.message : 'abstract page failed'); }
+  }
+  try {
+    const paper = parseMetadataMirror(await fetchText(`https://papers.cool/arxiv/${encoded}`, 1), arxivId);
+    if (paper) return paper;
+    errors.push('metadata mirror contained no paper metadata');
+  } catch (error) { errors.push(error instanceof Error ? error.message : 'metadata mirror failed'); }
+  try {
+    const paper = await fetchPaperFromOpenAlex(arxivId);
+    if (paper) return paper;
+    errors.push('OpenAlex contained no matching arXiv record');
+  } catch (error) { errors.push(error instanceof Error ? error.message : 'OpenAlex metadata failed'); }
+  throw new Error(`Could not retrieve arXiv:${arxivId}. ${[...new Set(errors)].join(' · ')}`);
+}
+
 export async function GET(request: NextRequest) {
   const arxivId = normalizeArxivId(request.nextUrl.searchParams.get('id') ?? '');
   const categories = (request.nextUrl.searchParams.get('categories') || request.nextUrl.searchParams.get('category') || 'math')
@@ -71,14 +228,12 @@ export async function GET(request: NextRequest) {
 
   try {
     if (arxivId) {
-      const response = await fetch(`https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}`, { cache: 'no-store', headers: { 'User-Agent': 'Proofroom/0.1 (local mathematics paper reader)' } });
-      if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
-      return NextResponse.json({ papers: parseFeed(await response.text()) });
+      return NextResponse.json({ papers: [await fetchPaper(arxivId)] });
     }
     const pageSize = allToday ? 250 : 24; const papers: ArxivPaper[] = []; let start = 0; let total = pageSize;
     do {
       const query = `search_query=${encodeURIComponent(searchQuery)}&sortBy=submittedDate&sortOrder=descending&start=${start}&max_results=${pageSize}`;
-      const response = await fetch(`https://export.arxiv.org/api/query?${query}`, { cache: 'no-store', headers: { 'User-Agent': 'Proofroom/0.1 (local mathematics paper reader)' } });
+      const response = await fetch(`https://export.arxiv.org/api/query?${query}`, { cache: 'no-store', headers: { 'User-Agent': 'arXivpecker/0.2 (local mathematics paper reader)' } });
       if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
       const xml = await response.text(); const page = parseFeed(xml); papers.push(...page);
       total = Number(valueOf(xml, 'opensearch:totalResults')) || page.length; start += pageSize;

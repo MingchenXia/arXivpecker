@@ -5,18 +5,27 @@ import katex from 'katex';
 const root = 'proofroom-library';
 const formulaPattern = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\$([^$]+?)\$|\\\(([\s\S]+?)\\\)/g;
 let total = 0;
+let auditedPapers = 0;
+let skippedPapers = 0;
 const failed = [];
 
 for (const folder of (await fs.readdir(root)).filter((name) => name.startsWith('arxiv-'))) {
-  const audit = JSON.parse(await fs.readFile(path.join(root, folder, 'audit.json'), 'utf8'));
+  let audit;
+  try { audit = JSON.parse(await fs.readFile(path.join(root, folder, 'audit.json'), 'utf8')); }
+  catch (error) {
+    if (error?.code === 'ENOENT') { skippedPapers += 1; continue; }
+    throw error;
+  }
+  auditedPapers += 1;
   const documents = [
     ...(audit.nodes ?? []).flatMap((node) => [['statement', node.statement, node.title], ['proof', node.proofText, node.title]]),
     ...(audit.sourceBlocks ?? []).flatMap((block) => [['source content', block.content, block.title || block.id], ['source proof', block.proofText, block.title || block.id]]),
   ];
   for (const [field, value, label] of documents) {
-      for (const match of String(value || '').matchAll(formulaPattern)) {
+      const source = String(value || '').replace(/\\verb\*?([^A-Za-z0-9\s])([\s\S]*?)\1/g, (_match, _delimiter, content) => content.replace(/\$/g, '\uE000')).replace(/\\\$/g, '\uE000');
+      for (const match of source.matchAll(formulaPattern)) {
         total += 1;
-        const expression = match[1] ?? match[2] ?? match[3] ?? match[4] ?? '';
+        const expression = (match[1] ?? match[2] ?? match[3] ?? match[4] ?? '').replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}');
         try {
           katex.renderToString(expression, {
             throwOnError: true,
@@ -36,4 +45,4 @@ for (const folder of (await fs.readdir(root)).filter((name) => name.startsWith('
   }
 }
 
-console.log(JSON.stringify({ total, failedCount: failed.length, failed }, null, 2));
+console.log(JSON.stringify({ auditedPapers, skippedPapers, total, failedCount: failed.length, failed }, null, 2));

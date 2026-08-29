@@ -1,6 +1,6 @@
-# Proofroom
+# arXivpecker
 
-Proofroom is a local-first mathematics paper reader designed around how mathematicians actually read.
+arXivpecker is a local-first mathematics paper reader designed around how mathematicians actually read.
 
 It imports papers directly from arXiv, asks the user's existing local Codex subscription to audit the full paper, and turns the result into an interactive reading layer with:
 

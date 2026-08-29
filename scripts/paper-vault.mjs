@@ -55,7 +55,7 @@ function readmeFor(paper) {
     `- **arXiv:** ${paper.arxivId}\n` +
     `- **Authors:** ${paper.authors}\n` +
     `- **Category:** ${paper.category}\n\n` +
-    `This folder is managed by Proofroom. It keeps the source record, full-paper audit, reader state, and cross-paper links together.\n`;
+    `This folder is managed by arXivpecker. It keeps the source record, full-paper audit, reader state, and cross-paper links together.\n`;
 }
 
 export class PaperVault {
