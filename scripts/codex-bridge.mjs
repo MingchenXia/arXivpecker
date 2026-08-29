@@ -1532,7 +1532,8 @@ class CodexAppServer {
 }
 
 const codex = new CodexAppServer();
-let queue = Promise.resolve();
+const threadQueues = new Map();
+let vaultMutationQueue = Promise.resolve();
 
 function validatePaper(value) {
   return value && typeof value.title === 'string' && typeof value.arxivId === 'string' && typeof value.abstract === 'string';
@@ -1563,9 +1564,18 @@ function readBody(request, maxChars = 1_000_000) {
   });
 }
 
-function enqueue(work) {
-  const scheduled = queue.then(work, work);
-  queue = scheduled.catch(() => {});
+function enqueueThread(threadId, work) {
+  const previous = threadQueues.get(threadId) ?? Promise.resolve();
+  const scheduled = previous.then(work, work);
+  const tail = scheduled.catch(() => {});
+  threadQueues.set(threadId, tail);
+  void tail.finally(() => { if (threadQueues.get(threadId) === tail) threadQueues.delete(threadId); });
+  return scheduled;
+}
+
+function enqueueVaultMutation(work) {
+  const scheduled = vaultMutationQueue.then(work, work);
+  vaultMutationQueue = scheduled.catch(() => {});
   return scheduled;
 }
 
@@ -1659,23 +1669,22 @@ const server = createServer(async (request, response) => {
     const body = await readBody(request, ['/vault/source-upload', '/vault/citation-asset'].includes(pathname) ? 112_000_000 : ['/vault/latex-export', '/vault/paper/update-commit'].includes(pathname) ? 24_000_000 : 1_000_000);
     if (pathname === '/cloud/share') return sendJson(response, 200, { share: await createCloudShare(vault, body) }, origin);
     if (pathname === '/vault/profile') return sendJson(response, 200, { profile: await vault.saveProfile(normalizeProfile(body.profile)) }, origin);
-    if (pathname === '/vault/link') return sendJson(response, 200, { link: await vault.addLink(body.link), graph: await vault.rebuildGraph() }, origin);
-    if (pathname === '/vault/link/delete') { await vault.removeLink(String(body.linkId || '')); return sendJson(response, 200, { graph: await vault.rebuildGraph() }, origin); }
+    if (pathname === '/vault/link') return sendJson(response, 200, await enqueueVaultMutation(async () => ({ link: await vault.addLink(body.link), graph: await vault.rebuildGraph() })), origin);
+    if (pathname === '/vault/link/delete') return sendJson(response, 200, await enqueueVaultMutation(async () => { await vault.removeLink(String(body.linkId || '')); return { graph: await vault.rebuildGraph() }; }), origin);
     if (pathname === '/vault/paper/delete') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
-      const removed = await vault.removePaper(String(body.paperId));
-      return sendJson(response, 200, { removed, snapshot: await vault.snapshot() }, origin);
+      const removed = await enqueueVaultMutation(async () => { const record = await vault.removePaper(String(body.paperId)); return { removed: record, snapshot: await vault.snapshot() }; });
+      return sendJson(response, 200, removed, origin);
     }
-    if (pathname === '/vault/paper/order') return sendJson(response, 200, { order: await vault.reorderPapers(body.paperIds) }, origin);
+    if (pathname === '/vault/paper/order') return sendJson(response, 200, { order: await enqueueVaultMutation(() => vault.reorderPapers(body.paperIds)) }, origin);
     if (pathname === '/vault/reader') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
       return sendJson(response, 200, { reader: await vault.saveReader(String(body.paperId), body.reader ?? {}) }, origin);
     }
     if (pathname === '/vault/patches') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
-      const patches = await vault.savePatches(String(body.paperId), body.patches ?? []);
-      const snapshot = await vault.snapshot();
-      return sendJson(response, 200, { patches, graph: snapshot.graph }, origin);
+      const saved = await enqueueVaultMutation(async () => { const patches = await vault.savePatches(String(body.paperId), body.patches ?? []); const snapshot = await vault.snapshot(); return { patches, graph: snapshot.graph }; });
+      return sendJson(response, 200, saved, origin);
     }
     if (pathname === '/vault/export') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
@@ -1691,21 +1700,20 @@ const server = createServer(async (request, response) => {
     }
     if (pathname === '/vault/source-upload') {
       if (!validatePaper(body.paper)) return sendJson(response, 400, { error: 'A paper title and local source record are required.' }, origin);
-      return sendJson(response, 200, await saveUploadedPaperSource(body.paper, body.upload ?? {}), origin);
+      return sendJson(response, 200, await enqueueVaultMutation(() => saveUploadedPaperSource(body.paper, body.upload ?? {})), origin);
     }
     if (!validatePaper(body.paper)) return sendJson(response, 400, { error: 'A paper with title, arXiv id, and abstract is required.' }, origin);
-    if (pathname === '/vault/paper/update-commit') return sendJson(response, 200, await vault.commitPaperUpdate(body), origin);
-    if (pathname === '/vault/paper' || pathname === '/vault/paper/update') return sendJson(response, 200, { paper: await vault.upsertPaper(body.paper) }, origin);
+    if (pathname === '/vault/paper/update-commit') return sendJson(response, 200, await enqueueVaultMutation(() => vault.commitPaperUpdate(body)), origin);
+    if (pathname === '/vault/paper' || pathname === '/vault/paper/update') return sendJson(response, 200, { paper: await enqueueVaultMutation(() => vault.upsertPaper(body.paper)) }, origin);
     if (pathname === '/vault/audit') {
       if (!body.audit || !Array.isArray(body.audit.nodes)) return sendJson(response, 400, { error: 'A structured audit is required.' }, origin);
-      const paper = await vault.saveAudit(body.paper, body.audit);
-      const snapshot = await vault.snapshot();
-      return sendJson(response, 200, { paper, graph: snapshot.graph, links: snapshot.links }, origin);
+      const saved = await enqueueVaultMutation(async () => { const paper = await vault.saveAudit(body.paper, body.audit); const snapshot = await vault.snapshot(); return { paper, graph: snapshot.graph, links: snapshot.links }; });
+      return sendJson(response, 200, saved, origin);
     }
     const profile = normalizeProfile(body.profile);
-    const output = await enqueue(async () => {
+    const runAiWork = async () => {
       if (pathname === '/compare-versions') {
-        const paper = body.updateMode ? { ...body.paper, id: String(body.paper.id) } : await vault.upsertPaper(body.paper);
+        const paper = { ...body.paper, id: String(body.paper.id) }; await vault.recordFor(paper.id);
         const fromVersion = normalizeArxivVersion(body.fromVersion);
         const toVersion = normalizeArxivVersion(body.toVersion);
         if (!fromVersion || !toVersion) throw new Error('Two valid arXiv versions are required.');
@@ -1716,8 +1724,7 @@ const server = createServer(async (request, response) => {
         return { ...compared, fromVersion, toVersion, sources: { from: fromSource.kind, to: toSource.kind } };
       }
       if (pathname === '/analyze') {
-        const paper = body.updateMode ? { ...body.paper, id: String(body.paper.id) } : await vault.upsertPaper(body.paper);
-        if (body.updateMode) await vault.recordFor(paper.id);
+        const paper = { ...body.paper, id: String(body.paper.id) }; await vault.recordFor(paper.id);
         const localInventory = await vault.compactInventory();
         let primarySource;
         try {
@@ -1750,7 +1757,12 @@ const server = createServer(async (request, response) => {
       if (pathname === '/node-edit/suggest') return codex.suggestEditorialPatch({ paper: body.paper, profile, node: body.node, threadId: body.threadId });
       if (typeof body.question !== 'string') throw new Error('A question is required.');
       return codex.answerNode({ paper: body.paper, profile, node: body.node, question: body.question, threadId: body.threadId });
-    });
+    };
+    // Independent audits and version comparisons each create their own Codex
+    // thread and may run concurrently. Continuations on one existing paper
+    // thread stay ordered so two questions cannot corrupt that thread's context.
+    const continuingThread = ['/paper-question', '/node-question', '/node-edit/suggest'].includes(pathname);
+    const output = continuingThread ? await enqueueThread(String(body.threadId || ''), runAiWork) : await runAiWork();
     return sendJson(response, 200, output, origin);
   } catch (error) {
     return sendJson(response, 500, { error: error instanceof Error ? error.message : 'Local Codex bridge failed.' }, origin);

@@ -306,7 +306,7 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .app-header-actions { display: flex; flex: none; align-items: center; gap: 8px; }
 .header-import { border: 1px solid #d7cbc0; border-radius: 5px; background: #fff; padding: 6px 9px; color: #821d2a; font-size: 9px; font-weight: 800; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
 .header-import:hover { transform: translateY(-1px); border-color: #a46068; background: #fff8f6; }
-.notice-banner { position: fixed; z-index: 80; bottom: 18px; left: 18px; max-width: min(520px, calc(100vw - 36px)); border: 1px solid rgb(199 177 145 / 82%); border-radius: 7px; background: rgb(255 248 232 / 90%); padding: 10px 13px; box-shadow: 0 12px 38px rgb(48 34 27 / 18%); color: #6f4b25; font-size: 10px; line-height: 1.45; animation: notice-in .25s ease both; backdrop-filter: blur(14px); }
+.notice-banner { position: fixed; z-index: 80; top: 64px; right: 18px; bottom: auto; left: auto; max-width: min(520px, calc(100vw - 36px)); border: 1px solid rgb(199 177 145 / 82%); border-radius: 7px; background: rgb(255 248 232 / 90%); padding: 10px 13px; box-shadow: 0 12px 38px rgb(48 34 27 / 18%); color: #6f4b25; font-size: 10px; line-height: 1.45; animation: notice-in .25s ease both; backdrop-filter: blur(14px); }
 
 .model-controls { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 8px; }
 .model-controls label > span { display: block; margin-bottom: 4px; color: #766e68; font-size: 8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
@@ -874,6 +874,7 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .library-auditing b { font-size: inherit; }
 .library-paper-auditing { border-color: rgb(210 157 36 / 44%); box-shadow: 0 0 0 3px rgb(210 157 36 / 7%); }
 .library-paper-auditing .library-drag-handle { cursor: default; opacity: .2; }
+.library-paper-auditing .library-paper-actions button:disabled, .library-paper-auditing .library-version-chip:disabled { border-color: #dedbd5; background: #f1f0ed; box-shadow: none; color: #aaa49e; cursor: not-allowed; filter: grayscale(1); opacity: .48; transform: none; }
 
 /* Clicked citations stay open so their contents can be selected and copied. */
 .inline-citation.citation-pinned .citation-hover-card { display: grid; gap: 6px; user-select: text; animation: details-open .14s ease both; }
