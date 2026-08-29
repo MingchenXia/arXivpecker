@@ -378,6 +378,7 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 
 .math-text { white-space: pre-wrap; }
 .math-text .katex { color: inherit; font-size: 1.04em; }
+.math-text .katex .katex-mathml { contain: layout paint size; max-width: 1px; max-height: 1px; overflow: hidden; }
 .math-inline { display: inline-block; max-width: 100%; padding-inline: .05em; vertical-align: -.08em; }
 .math-display { display: block; max-width: 100%; margin: .65em 0; overflow-x: auto; overflow-y: hidden; }
 .math-text-block { display: block; }

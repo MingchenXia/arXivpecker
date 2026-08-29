@@ -273,7 +273,7 @@ function normalizeMathTextCommands(source) {
 
 function unwrapLatexTextCommands(source) {
   let text = String(source || '');
-  const command = /\\(footnote|footnotetext|caption|emph|textbf|textit|textrm)\s*\{/g;
+  const command = /\\(footnote|footnotetext|caption|emph|textbf|textit|texttt|textsc|textrm|textsf|underline|centerline|mbox|url|path)(?:\[[^\]]*\])?\s*\{/g;
   for (let pass = 0; pass < 4; pass += 1) {
     let output = ''; let cursor = 0; let changed = false;
     for (const match of text.matchAll(command)) {
@@ -290,18 +290,101 @@ function unwrapLatexTextCommands(source) {
   return text;
 }
 
+function unwrapLatexTwoArgumentCommands(source) {
+  let text = String(source || '');
+  const command = /\\(texorpdfstring|foreignlanguage|href)\s*\{/g;
+  for (let pass = 0; pass < 3; pass += 1) {
+    let output = ''; let cursor = 0; let changed = false;
+    for (const match of text.matchAll(command)) {
+      if ((match.index ?? 0) < cursor) continue;
+      const first = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+      if (!first) continue;
+      let secondStart = first.end; while (/\s/.test(text[secondStart] || '')) secondStart += 1;
+      const second = balancedGroup(text, secondStart);
+      if (!second) continue;
+      const replacement = match[1] === 'foreignlanguage' || match[1] === 'href' ? second.content : first.content;
+      output += text.slice(cursor, match.index ?? 0) + replacement;
+      cursor = second.end; changed = true;
+    }
+    if (!changed) break;
+    text = output + text.slice(cursor);
+  }
+  return text;
+}
+
+function normalizePrescriptCommands(source) {
+  const text = String(source || ''); const command = /\\prescript\s*\{/g;
+  let output = ''; let cursor = 0;
+  for (const match of text.matchAll(command)) {
+    if ((match.index ?? 0) < cursor) continue;
+    const superscript = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    if (!superscript) continue;
+    let position = superscript.end; while (/\s/.test(text[position] || '')) position += 1;
+    const subscript = balancedGroup(text, position); if (!subscript) continue;
+    position = subscript.end; while (/\s/.test(text[position] || '')) position += 1;
+    const base = balancedGroup(text, position); if (!base) continue;
+    output += text.slice(cursor, match.index ?? 0) + `{}^{${superscript.content}}_{${subscript.content}}{${base.content}}`;
+    cursor = base.end;
+  }
+  return output + text.slice(cursor);
+}
+
+function normalizeXyMatrices(source) {
+  const text = String(source || ''); const command = /\\xymatrix(?:@[^\s{]+)?\s*\{/g;
+  let output = ''; let cursor = 0;
+  for (const match of text.matchAll(command)) {
+    if ((match.index ?? 0) < cursor) continue;
+    const matrix = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    if (!matrix) continue;
+    const content = matrix.content
+      .replace(/@\{\|?->\}\[[^\]]*\]/g, '\\longmapsto ')
+      .replace(/@\{[^}]*\}\[[^\]]*\]/g, '\\longrightarrow ')
+      .replace(/\\cr\b/g, '\\\\');
+    output += text.slice(cursor, match.index ?? 0) + `\\begin{array}{cccccccc}${content}\\end{array}`;
+    cursor = matrix.end;
+  }
+  return output + text.slice(cursor);
+}
+
+function normalizeTextLineBreaks(source) {
+  const text = String(source || ''); let output = ''; let cursor = 0; let math = '';
+  while (cursor < text.length) {
+    if (!math && text.startsWith('$$', cursor)) { math = '$$'; output += '$$'; cursor += 2; continue; }
+    if (math === '$$' && text.startsWith('$$', cursor)) { math = ''; output += '$$'; cursor += 2; continue; }
+    if (!math && text.startsWith('\\[', cursor)) { math = '\\]'; output += '\\['; cursor += 2; continue; }
+    if (math === '\\]' && text.startsWith('\\]', cursor)) { math = ''; output += '\\]'; cursor += 2; continue; }
+    if (!math && text.startsWith('\\(', cursor)) { math = '\\)'; output += '\\('; cursor += 2; continue; }
+    if (math === '\\)' && text.startsWith('\\)', cursor)) { math = ''; output += '\\)'; cursor += 2; continue; }
+    if (!math && text[cursor] === '$' && text[cursor - 1] !== '\\') { math = '$'; output += '$'; cursor += 1; continue; }
+    if (math === '$' && text[cursor] === '$' && text[cursor - 1] !== '\\') { math = ''; output += '$'; cursor += 1; continue; }
+    if (!math && text.startsWith('\\\\', cursor)) {
+      output += '\n'; cursor += 2;
+      const optional = /^\[[^\]]*\]/.exec(text.slice(cursor)); if (optional) cursor += optional[0].length;
+      continue;
+    }
+    output += text[cursor]; cursor += 1;
+  }
+  return output;
+}
+
 function readableLatex(source) {
-  const readable = unwrapLatexTextCommands(normalizeMathTextCommands(String(source || '')))
+  const prepared = normalizeXyMatrices(normalizePrescriptCommands(String(source || '')));
+  const readable = unwrapLatexTwoArgumentCommands(unwrapLatexTextCommands(normalizeMathTextCommands(prepared)))
     .replace(/(^|[^\\])%[^\n]*/g, '$1')
+    .replace(/\\selectlanguage\s*\{[^}]*\}/g, '')
+    .replace(/\\begin\{(?:otherlanguage\*?|thebibliography)\}(?:\{[^}]*\})?/g, '')
+    .replace(/\\end\{(?:otherlanguage\*?|thebibliography)\}/g, '')
+    .replace(/\\(?:tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge)\b/g, '')
     .replace(/\\label\s*\{[^}]*\}/g, '')
     .replace(/\\(?:eqref|ref|autoref|cref|Cref)\s*\{[^}]*\}/g, 'the referenced result')
     .replace(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/g, (_match, locator, keys) => String(keys).split(',').map((key) => `[[cite:${key.trim()}${locator ? `|${locator.trim()}` : ''}]]`).join(' '))
     .replace(/\\begin\{tikzcd\}(?:\[[^\]]*\])?/g, '\\begin{array}{cccccccccccc}')
     .replace(/\\end\{tikzcd\}/g, '\\end{array}')
-    .replace(/\\ar(?:\[[^\]]*\])?\s*\{[^}]*\}/g, '')
+    .replace(/\\ar(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/g, '')
     .replace(/\\footnotemark\b/g, '')
     .replace(/\\includegraphics(?:\[[^\]]*\])?\s*\{[^}]+\}/g, '')
     .replace(/\\hfil\b/g, '')
+    .replace(/\\displaylimits(?![A-Za-z@])/g, '\\limits')
     .replace(/\\'\{?e\}?/g, 'é')
     .replace(/\\'\{?E\}?/g, 'É')
     .replace(/\\"\{?([aeiouAEIOU])\}?/g, (_match, letter) => ({ a: 'ä', e: 'ë', i: 'ï', o: 'ö', u: 'ü', A: 'Ä', E: 'Ë', I: 'Ï', O: 'Ö', U: 'Ü' }[letter] || letter))
@@ -310,8 +393,9 @@ function readableLatex(source) {
     .replace(/\\v\{?([cszCSZ])\}?/g, (_match, letter) => ({ c: 'č', s: 'š', z: 'ž', C: 'Č', S: 'Š', Z: 'Ž' }[letter] || letter))
     .replace(/\\o\{\}/g, 'ø')
     .replace(/\\O\{\}/g, 'Ø')
-    .replace(/\\begin\{(?:equation|equation\*)\}/g, () => '$$')
-    .replace(/\\end\{(?:equation|equation\*)\}/g, () => '$$')
+    .replace(/\\iddots(?![A-Za-z@])/g, '\\mathinner{\\raisebox{-.4em}{$\\cdot$}\\mkern2mu\\cdot\\mkern2mu\\raisebox{.4em}{$\\cdot$}}')
+    .replace(/\\\[\s*\\\]/g, '')
+    .replace(/\\begin\{equation\*?\}([\s\S]*?)\\end\{equation\*?\}/g, (_match, content) => /\$/.test(content) ? `\n${content}\n` : `\n$$${content}$$\n`)
     // `aligned` is an inner math environment and is commonly already wrapped
     // in \[...\]. Converting it to another pair of delimiters creates invalid
     // nested math such as \[$$...$$\]. Only promote top-level environments.
@@ -320,7 +404,7 @@ function readableLatex(source) {
     .replace(/\\begin\{(?:enumerate|itemize|description)\}(?:\[[^\]]*\])?/g, '')
     .replace(/\\end\{(?:enumerate|itemize|description)\}/g, '')
     .replace(/\\item(?:\[[^\]]*\])?/g, '\n• ')
-    .replace(/\\(?:emph|textbf|textit|textrm)\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\\(?:emph|textbf|textit|texttt|textsc|textrm|textsf|underline|centerline|mbox)\s*\{([^{}]*)\}/g, '$1')
     .replace(/\\(?:medskip|smallskip|bigskip|noindent|par)\b/g, '\n')
     .replace(/~+/g, ' ')
     .replace(/\n[ \t]+/g, '\n')
@@ -329,7 +413,7 @@ function readableLatex(source) {
   // Author TeX is line-wrapped for source control, not for typography. Preserve
   // paragraph breaks and explicit TeX `\\`, but reflow soft source newlines so
   // proofs read like the typeset paper instead of a code listing.
-  return readable
+  return normalizeTextLineBreaks(readable)
     .replace(/\n\s*•/g, '\n\n•')
     .split(/\n\s*\n/)
     .map((paragraph) => paragraph.replace(/[ \t]*\n[ \t]*/g, ' ').replace(/[ \t]{2,}/g, ' ').trim())
@@ -469,12 +553,18 @@ function authorMacroTable(source) {
   }
   for (const match of text.matchAll(/\\def\s*\\([A-Za-z@]+)\s*((?:#\d\s*)*)\{/g)) {
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
-    const arity = Math.max(0, ...[...String(match[2] || '').matchAll(/#(\d)/g)].map((item) => Number(item[1])));
-    if (group) macros.set(match[1], { replacement: group.content, arity });
+    let arity = Math.max(0, ...[...String(match[2] || '').matchAll(/#(\d)/g)].map((item) => Number(item[1])));
+    let replacement = group?.content || '';
+    if (arity === 0 && /^\\(?:widehat|widetilde|overline|underline)$/.test(replacement.trim())) { arity = 1; replacement = `${replacement.trim()}{#1}`; }
+    if (group) macros.set(match[1], { replacement, arity });
   }
   for (const match of text.matchAll(/\\DeclareMathOperator\*?\s*\{\\([A-Za-z@]+)\}\s*\{/g)) {
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
     if (group) macros.set(match[1], { replacement: `\\operatorname{${group.content}}`, arity: 0 });
+  }
+  for (const match of text.matchAll(/\\let\s*\\([A-Za-z@]+)\s*(?:=\s*)?\\([A-Za-z@]+)/g)) {
+    const takesArgument = /^(?:widehat|widetilde|overline|underline)$/.test(match[2]);
+    macros.set(match[1], { replacement: takesArgument ? `\\${match[2]}{#1}` : `\\${match[2]}`, arity: takesArgument ? 1 : 0 });
   }
   return macros;
 }
@@ -538,19 +628,20 @@ function expandAuthorMacros(source) {
 }
 
 function theoremKind(title, environment) {
-  const value = `${title} ${environment}`.toLowerCase();
-  if (value.includes('theorem') || /(^|-)thm/.test(value)) return 'theorem';
-  if (value.includes('lemma') || /(^|-)lem/.test(value)) return 'lemma';
-  if (value.includes('proposition') || /(^|-)prop/.test(value)) return 'proposition';
-  if (value.includes('corollary') || /(^|-)cor/.test(value)) return 'corollary';
-  if (value.includes('definition') || /(^|-)def/.test(value)) return 'definition';
-  if (value.includes('remark') || /(^|-)rem/.test(value)) return 'remark';
-  if (value.includes('example') || /(^|-)ex/.test(value)) return 'example';
+  const value = `${title} ${environment}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const environmentName = String(environment || '').toLowerCase();
+  if (/theorem|theoreme|satz/.test(value) || /^thm/.test(environmentName)) return 'theorem';
+  if (/lemma|lemme/.test(value) || /^lem/.test(environmentName)) return 'lemma';
+  if (/proposition/.test(value) || /^prop/.test(environmentName)) return 'proposition';
+  if (/corollary|corollaire|korollar/.test(value) || /^cor/.test(environmentName)) return 'corollary';
+  if (/definition/.test(value) || /^def/.test(environmentName)) return 'definition';
+  if (/remark|remarque|bemerkung/.test(value) || /^rem/.test(environmentName)) return 'remark';
+  if (/example|exemple|beispiel/.test(value) || /^ex/.test(environmentName)) return 'example';
   return null;
 }
 
 function graphicPaths(source) {
-  return [...String(source || '').matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].map((match) => match[1].trim()).filter(Boolean);
+  return [...String(source || '').matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].map((match) => match[1].trim().replace(/^["']|["']$/g, '')).filter(Boolean);
 }
 
 function literalSourceRanges(source) {
@@ -644,6 +735,8 @@ function readableBodyFragment(source) {
     .replace(/\\begin\{abstract\}[\s\S]*?\\end\{abstract\}/g, '')
     .replace(/\\(?:title|author|address|email|subjclass|date|dedicatory|keywords|thanks)(?:\[[^\]]*\])?\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, '')
     .replace(/\\(?:maketitle|tableofcontents|clearpage|newpage|printbibliography|centering)\b/g, '')
+    .replace(/\\selectlanguage\s*\{[^}]*\}/g, '')
+    .replace(/\\begin\{otherlanguage\*?\}\s*\{[^}]*\}|\\end\{otherlanguage\*?\}/g, '')
     .replace(/\\(?:nocite|label|pagestyle|thispagestyle|pagenumbering)\s*\{[^}]*\}/g, '')
     .replace(/\\setcounter\s*\{[^}]*\}\s*\{[^}]*\}/g, '')
     .replace(/\\(?:bibliography|bibliographystyle|addbibresource)\s*\{[^}]*\}/g, '')
@@ -652,8 +745,7 @@ function readableBodyFragment(source) {
     .replace(/\\end\{(?:center|flushleft|flushright|quote|quotation|figure\*?|table\*?|minipage)\}/g, '')
     .replace(/\\begin\{tabular\}(?:\[[^\]]*\])?\s*\{[^}]*\}/g, '\n')
     .replace(/\\end\{tabular\}/g, '\n')
-    .replace(/(^|\n)\s*&/g, '$1')
-    .replace(/&/g, '  ·  ');
+    .replace(/\\&/g, '&');
   return readableLatex(cleaned).replace(/\\(?:vspace|hspace)\*?\s*\{[^}]*\}/g, ' ').trim();
 }
 
@@ -684,7 +776,25 @@ function tableEvents(source) {
 function sourceParagraphBlocks(source, bibliography, state) {
   const readable = readableBodyFragment(source);
   if (!readable) return [];
-  return readable.split(/\n\s*\n+/).map((content) => content.trim()).filter((content) => content && !/^\\(?:begin|end)\{document\}/.test(content)).map((content) => {
+  const paragraphs = []; let cursor = 0; let start = 0; let math = '';
+  while (cursor < readable.length) {
+    if (!math && readable.startsWith('$$', cursor)) { math = '$$'; cursor += 2; continue; }
+    if (math === '$$' && readable.startsWith('$$', cursor)) { math = ''; cursor += 2; continue; }
+    if (!math && readable.startsWith('\\[', cursor)) { math = '\\]'; cursor += 2; continue; }
+    if (math === '\\]' && readable.startsWith('\\]', cursor)) { math = ''; cursor += 2; continue; }
+    if (!math && readable.startsWith('\\(', cursor)) { math = '\\)'; cursor += 2; continue; }
+    if (math === '\\)' && readable.startsWith('\\)', cursor)) { math = ''; cursor += 2; continue; }
+    if (!math && readable[cursor] === '$' && readable[cursor - 1] !== '\\') { math = '$'; cursor += 1; continue; }
+    if (math === '$' && readable[cursor] === '$' && readable[cursor - 1] !== '\\') { math = ''; cursor += 1; continue; }
+    if (!math && readable[cursor] === '\n' && /^\n\s*\n/.test(readable.slice(cursor))) {
+      paragraphs.push(readable.slice(start, cursor));
+      const separator = /^\n\s*\n+/.exec(readable.slice(cursor))?.[0] || '\n\n';
+      cursor += separator.length; start = cursor; continue;
+    }
+    cursor += 1;
+  }
+  paragraphs.push(readable.slice(start));
+  return paragraphs.map((content) => content.trim()).filter((content) => content && !/^\\(?:begin|end)\{document\}/.test(content)).map((content) => {
     state.paragraph += 1;
     const mentions = [...content.matchAll(/\[\[cite:([^|\]]+)(?:\|([^\]]*))?\]\]/g)].map((match) => ({ key: match[1], locator: match[2] || '' }));
     return { id: `source-paragraph-${state.paragraph}`, kind: 'paragraph', level: 4, title: '', content, proofText: '', nodeId: '', resultKind: '', citations: mentions.map((mention) => citationReference(mention, bibliography)) };
@@ -695,7 +805,13 @@ function buildSourceBlocks(source, units, bibliography) {
   const normalized = expandAuthorMacros(String(source || ''));
   const beginMatch = /^[ \t]*\\begin\{document\}[ \t]*(?:%[^\r\n]*)?/m.exec(normalized);
   const documentBegin = beginMatch?.index ?? -1;
-  const bodyStart = documentBegin >= 0 ? documentBegin + (beginMatch?.[0].length ?? '\\begin{document}'.length) : 0;
+  let bodyStart = documentBegin >= 0 ? documentBegin + (beginMatch?.[0].length ?? '\\begin{document}'.length) : 0;
+  const firstSection = /\\(?:part|section|chapter)\*?(?:\[[^\]]*\])?\s*\{/.exec(normalized.slice(bodyStart));
+  const abstractStart = normalized.indexOf('\\begin{abstract}', bodyStart);
+  if (abstractStart >= bodyStart && (!firstSection || abstractStart < bodyStart + (firstSection.index ?? 0))) {
+    const abstractEnd = normalized.indexOf('\\end{abstract}', abstractStart);
+    if (abstractEnd >= abstractStart) bodyStart = abstractEnd + '\\end{abstract}'.length;
+  }
   const endMatches = [...normalized.matchAll(/^[ \t]*\\end\{document\}[ \t]*(?:%[^\r\n]*)?/gm)];
   const documentEnd = endMatches.at(-1)?.index ?? -1;
   const bodyEnd = documentEnd > bodyStart ? documentEnd : normalized.length;
@@ -750,7 +866,7 @@ function figureEvents(source) {
   }
   for (const match of String(source || '').matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)) {
     const start = match.index ?? 0; if (insideSourceRanges(start, literalRanges) || covered.some(([left, right]) => left <= start && start < right)) continue;
-    events.push({ type: 'figure', start, end: start + match[0].length, assetPaths: [match[1].trim()], caption: '', citations: [] });
+    events.push({ type: 'figure', start, end: start + match[0].length, assetPaths: [match[1].trim().replace(/^["']|["']$/g, '')], caption: '', citations: [] });
   }
   return events;
 }

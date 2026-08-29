@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import katex from 'katex';
 
-const root = 'proofroom-library';
+const root = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || 'proofroom-library');
 const formulaPattern = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\$([^$]+?)\$|\\\(([\s\S]+?)\\\)/g;
 let total = 0;
 let auditedPapers = 0;
