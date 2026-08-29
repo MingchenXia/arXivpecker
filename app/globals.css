@@ -204,10 +204,13 @@ button { cursor: pointer; }
 .library-paper > small { margin-top: 5px; color: #879087; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 8px; }
 .library-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
 .library-tags span { border: 1px solid #e0e5df; border-radius: 4px; padding: 3px 5px; color: #727c72; font-size: 8px; }
-.library-paper-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: auto; padding-top: 16px; }
+.library-paper-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 10px; margin-top: auto; padding-top: 16px; }
+.library-primary-actions, .library-record-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.library-primary-actions { min-width: 0; }
+.library-record-actions { flex: none; margin-left: auto; }
 .library-paper-actions button { border: 1px solid #d6dfd5; border-radius: 5px; padding: 5px 7px; color: #45634f; font-size: 9px; font-weight: 800; }
-.library-paper-actions button:first-child { border-color: #35674e; background: #35674e; color: #fff; }
-.library-paper-actions .library-remove { margin-left: auto; border-color: transparent; color: #9a6752; }
+.library-primary-actions > button:first-child { border-color: #35674e; background: #35674e; color: #fff; }
+.library-paper-actions .library-remove { border-color: transparent; color: #9a6752; }
 .library-delete-confirmation { margin-top: 10px; border: 1px solid #e1bcb0; border-radius: 7px; background: #fff6f2; padding: 10px 11px; color: #75463d; animation: notice-in .16s ease both; }
 .library-delete-confirmation b { display: block; font-size: 10px; }.library-delete-confirmation p { margin: 4px 0 0; font-size: 8px; line-height: 1.5; }.library-delete-confirmation > div { display: flex; justify-content: flex-end; gap: 6px; margin-top: 9px; }.library-delete-confirmation button { border: 1px solid #d7c4bc; border-radius: 5px; background: #fff; padding: 5px 7px; color: #6d5d56; font-size: 8px; font-weight: 800; }.library-delete-confirmation .library-confirm-delete { border-color: #a95642; background: #a95642; color: #fff; }
 .library-empty { margin-top: 18px; border: 1px dashed #d9dfd7; border-radius: 9px; padding: 35px; color: #7c857c; font-size: 12px; text-align: center; }
