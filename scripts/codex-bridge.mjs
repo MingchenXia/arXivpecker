@@ -349,6 +349,17 @@ function normalizeXyMatrices(source) {
 function normalizeTextLineBreaks(source) {
   const text = String(source || ''); let output = ''; let cursor = 0; let math = '';
   while (cursor < text.length) {
+    if (text.startsWith('\\verb', cursor)) {
+      let delimiterIndex = cursor + '\\verb'.length;
+      if (text[delimiterIndex] === '*') delimiterIndex += 1;
+      const delimiter = text[delimiterIndex];
+      if (delimiter && !/[A-Za-z0-9\s]/.test(delimiter)) {
+        const literalEnd = text.indexOf(delimiter, delimiterIndex + 1);
+        if (literalEnd >= 0) {
+          output += text.slice(cursor, literalEnd + 1); cursor = literalEnd + 1; continue;
+        }
+      }
+    }
     if (!math && text.startsWith('$$', cursor)) { math = '$$'; output += '$$'; cursor += 2; continue; }
     if (math === '$$' && text.startsWith('$$', cursor)) { math = ''; output += '$$'; cursor += 2; continue; }
     if (!math && text.startsWith('\\[', cursor)) { math = '\\]'; output += '\\['; cursor += 2; continue; }
@@ -393,6 +404,13 @@ function readableLatex(source) {
     .replace(/\\v\{?([cszCSZ])\}?/g, (_match, letter) => ({ c: 'č', s: 'š', z: 'ž', C: 'Č', S: 'Š', Z: 'Ž' }[letter] || letter))
     .replace(/\\o\{\}/g, 'ø')
     .replace(/\\O\{\}/g, 'Ø')
+    .replace(/\\ss\b/g, 'ß')
+    .replace(/\\ae\b/g, 'æ')
+    .replace(/\\AE\b/g, 'Æ')
+    .replace(/\\oe\b/g, 'œ')
+    .replace(/\\OE\b/g, 'Œ')
+    .replace(/\\aa\b/g, 'å')
+    .replace(/\\AA\b/g, 'Å')
     .replace(/\\iddots(?![A-Za-z@])/g, '\\mathinner{\\raisebox{-.4em}{$\\cdot$}\\mkern2mu\\cdot\\mkern2mu\\raisebox{.4em}{$\\cdot$}}')
     .replace(/\\\[\s*\\\]/g, '')
     .replace(/\\begin\{equation\*?\}([\s\S]*?)\\end\{equation\*?\}/g, (_match, content) => /\$/.test(content) ? `\n${content}\n` : `\n$$${content}$$\n`)
@@ -487,6 +505,10 @@ function cleanBibtexField(value) {
   return readableLatex(String(value || '').replace(/[{}]/g, '').replace(/\\&/g, '&')).replace(/\s+/g, ' ').trim();
 }
 
+function cleanBibtexUrl(value) {
+  return String(value || '').trim().replace(/^\{+|\}+$/g, '').replace(/\\([%#&_{}])/g, '$1');
+}
+
 function extractBibtex(source) {
   const references = new Map();
   const pattern = /@(?!comment|preamble|string)([A-Za-z]+)\s*\{/gi;
@@ -503,7 +525,7 @@ function extractBibtex(source) {
     const journal = cleanBibtexField(bibtexField(entry, 'journal') || bibtexField(entry, 'booktitle'));
     const doi = cleanBibtexField(bibtexField(entry, 'doi'));
     const eprint = cleanBibtexField(bibtexField(entry, 'eprint'));
-    const explicitUrl = cleanBibtexField(bibtexField(entry, 'url'));
+    const explicitUrl = cleanBibtexUrl(bibtexField(entry, 'url'));
     const arxivId = /^(?:[a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?$/i.test(eprint) ? eprint.replace(/v\d+$/i, '') : '';
     const text = [authors, title, journal, year].filter(Boolean).join('. ');
     const searchUrl = `https://scholar.google.com/scholar?q=${encodeURIComponent([title, authors].filter(Boolean).join(' '))}`;
@@ -634,10 +656,25 @@ function theoremKind(title, environment) {
   if (/lemma|lemme/.test(value) || /^lem/.test(environmentName)) return 'lemma';
   if (/proposition/.test(value) || /^prop/.test(environmentName)) return 'proposition';
   if (/corollary|corollaire|korollar/.test(value) || /^cor/.test(environmentName)) return 'corollary';
+  if (/conjecture|conjecture|vermutung/.test(value) || /^conj/.test(environmentName)) return 'conjecture';
   if (/definition/.test(value) || /^def/.test(environmentName)) return 'definition';
+  if (/assumption|hypothesis|hypothese|annahme/.test(value) || /^assum/.test(environmentName)) return 'assumption';
+  if (/notation|convention/.test(value) || /^nota/.test(environmentName)) return 'notation';
   if (/remark|remarque|bemerkung/.test(value) || /^rem/.test(environmentName)) return 'remark';
   if (/example|exemple|beispiel/.test(value) || /^ex/.test(environmentName)) return 'example';
-  return null;
+  if (/axiom|postulate|condition/.test(value)) return 'assumption';
+  if (/claim|fact|observation|problem|question|exercise/.test(value)) return 'proposition';
+  // A command declared through \newtheorem is theorem-like even when its
+  // author-facing name is domain-specific. Keep it as a formal proposition
+  // while retaining the exact printed name separately for the reader.
+  return 'proposition';
+}
+
+function environmentDisplayLabel(label, displayName, printedNumber = '') {
+  const name = readableLatex(displayName || '').trim();
+  if (!name) return String(label || '');
+  const number = printedNumber || /\b(?:\d+(?:\.\d+)*|[IVX]+(?:\.[IVX]+)*)\b/i.exec(String(label || ''))?.[0] || '';
+  return number ? `${name} ${number}` : name;
 }
 
 function graphicPaths(source) {
@@ -666,17 +703,30 @@ function extractSourceUnits(source) {
   const environments = new Map([
     ['theorem', 'theorem'], ['thm', 'theorem'], ['lemma', 'lemma'], ['lem', 'lemma'],
     ['proposition', 'proposition'], ['prop', 'proposition'], ['corollary', 'corollary'], ['cor', 'corollary'],
-    ['definition', 'definition'], ['defn', 'definition'], ['remark', 'remark'], ['rem', 'remark'], ['example', 'example'],
+    ['conjecture', 'conjecture'], ['conj', 'conjecture'], ['definition', 'definition'], ['defn', 'definition'],
+    ['assumption', 'assumption'], ['notation', 'notation'], ['remark', 'remark'], ['rem', 'remark'], ['example', 'example'],
   ]);
-  const declarations = /\\newtheorem\*?\s*\{([^}]+)\}(?:\[[^\]]+\])?\s*\{([^}]+)\}(?:\[[^\]]+\])?/g;
+  const displayNames = new Map([
+    ['theorem', 'Theorem'], ['thm', 'Theorem'], ['lemma', 'Lemma'], ['lem', 'Lemma'],
+    ['proposition', 'Proposition'], ['prop', 'Proposition'], ['corollary', 'Corollary'], ['cor', 'Corollary'],
+    ['conjecture', 'Conjecture'], ['conj', 'Conjecture'], ['definition', 'Definition'], ['defn', 'Definition'],
+    ['assumption', 'Assumption'], ['notation', 'Notation'], ['remark', 'Remark'], ['rem', 'Remark'], ['example', 'Example'],
+  ]);
+  const theoremCounters = new Map();
+  const declarations = /\\newtheorem(\*)?\s*\{([^}]+)\}(?:\[([^\]]+)\])?\s*\{([^}]+)\}(?:\[([^\]]+)\])?/g;
   for (const match of originalSource.matchAll(declarations)) {
-    const kind = theoremKind(match[2], match[1]);
-    if (kind) environments.set(match[1], kind);
+    const environment = match[2]; const sharedCounter = String(match[3] || '').trim(); const displayName = readableLatex(match[4]); const within = String(match[5] || '').trim();
+    const kind = theoremKind(displayName, environment);
+    environments.set(environment, kind);
+    displayNames.set(environment, displayName);
+    theoremCounters.set(environment, { root: sharedCounter || environment, within, numbered: !match[1] });
   }
   const names = [...environments.keys()].sort((a, b) => b.length - a.length).map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   if (!names) return [];
   const unitPattern = new RegExp(`\\\\begin\\{(${names})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
   const embeddedProofPattern = /\\begin\{proof\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{proof\}/g;
+  const sectionStarts = [...normalizedSource.matchAll(/\\section(?!\*)\s*(?:\[[^\]]*\])?\s*\{/g)].filter((match) => !insideSourceRanges(match.index ?? 0, literalRanges)).map((match) => match.index ?? 0);
+  const counterValues = new Map();
   const units = [];
   for (const match of normalizedSource.matchAll(unitPattern)) {
     const start = match.index ?? 0; const end = start + match[0].length;
@@ -684,7 +734,8 @@ function extractSourceUnits(source) {
     const label = /\\label\s*\{([^}]+)\}/.exec(match[3])?.[1] || '';
     const embeddedProofs = [...match[3].matchAll(embeddedProofPattern)];
     const statementSource = match[3].replace(embeddedProofPattern, '');
-    units.push({ environment: match[1], kind: environments.get(match[1]), title: match[2] || '', texLabel: label, start, end, statement: readableLatex(statementSource), proofText: embeddedProofs.map((proof) => readableLatex(proof[1])).filter(Boolean).join('\n\n'), assetPaths: graphicPaths(statementSource), proofAssetPaths: embeddedProofs.flatMap((proof) => graphicPaths(proof[1])), embeddedProof: embeddedProofs.length > 0, citationMentions: citationMentions(`${match[2] || ''} ${match[3]}`), citationKeys: citationKeys(`${match[2] || ''} ${match[3]}`) });
+    const counter = theoremCounters.get(match[1]); const owner = theoremCounters.get(counter?.root) || counter; const sectionNumber = sectionStarts.filter((sectionStart) => sectionStart < start).length; const scope = owner?.within === 'section' ? sectionNumber : 0; const counterKey = `${counter?.root || match[1]}:${scope}`; const nextNumber = (counterValues.get(counterKey) || 0) + 1; if (counter?.numbered !== false) counterValues.set(counterKey, nextNumber); const printedNumber = counter?.numbered === false ? '' : owner?.within === 'section' ? `${sectionNumber}.${nextNumber}` : `${nextNumber}`;
+    units.push({ environment: match[1], kind: environments.get(match[1]), displayName: displayNames.get(match[1]) || readableLatex(match[1]), printedNumber, title: match[2] || '', texLabel: label, start, end, statement: readableLatex(statementSource), proofText: embeddedProofs.map((proof) => readableLatex(proof[1])).filter(Boolean).join('\n\n'), assetPaths: graphicPaths(statementSource), proofAssetPaths: embeddedProofs.flatMap((proof) => graphicPaths(proof[1])), embeddedProof: embeddedProofs.length > 0, citationMentions: citationMentions(`${match[2] || ''} ${match[3]}`), citationKeys: citationKeys(`${match[2] || ''} ${match[3]}`) });
   }
   const byLabel = new Map(units.filter((unit) => unit.texLabel).map((unit) => [unit.texLabel, unit]));
   const proofPattern = /\\begin\{proof\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{proof\}/g;
@@ -778,6 +829,18 @@ function sourceParagraphBlocks(source, bibliography, state) {
   if (!readable) return [];
   const paragraphs = []; let cursor = 0; let start = 0; let math = '';
   while (cursor < readable.length) {
+    // Literal examples such as \verb|$$...$$| are prose, not delimiters. Skip
+    // their payload while tracking math state so tutorial-style papers cannot
+    // split an actual display equation into several malformed paragraphs.
+    if (readable.startsWith('\\verb', cursor)) {
+      let delimiterIndex = cursor + '\\verb'.length;
+      if (readable[delimiterIndex] === '*') delimiterIndex += 1;
+      const delimiter = readable[delimiterIndex];
+      if (delimiter && !/[A-Za-z0-9\s]/.test(delimiter)) {
+        const literalEnd = readable.indexOf(delimiter, delimiterIndex + 1);
+        if (literalEnd >= 0) { cursor = literalEnd + 1; continue; }
+      }
+    }
     if (!math && readable.startsWith('$$', cursor)) { math = '$$'; cursor += 2; continue; }
     if (math === '$$' && readable.startsWith('$$', cursor)) { math = ''; cursor += 2; continue; }
     if (!math && readable.startsWith('\\[', cursor)) { math = '\\]'; cursor += 2; continue; }
@@ -838,7 +901,7 @@ function buildSourceBlocks(source, units, bibliography) {
       blocks.push({ id: `source-table-${state.table}`, kind: 'table', level: 4, title: '', content: event.content, proofText: '', nodeId: '', resultKind: '', citations: event.citations || [], assetPaths: [], caption: event.caption });
     } else if (event.type === 'result') {
       state.result += 1;
-      blocks.push({ id: `source-result-${state.result}`, kind: 'result', level: 4, title: readableLatex(event.unit.title), content: event.unit.statement, proofText: '', nodeId: event.unit.nodeId || '', resultKind: event.unit.kind || 'theorem', citations: event.unit.citations || [], assetPaths: event.unit.assetPaths || [], caption: '' });
+      blocks.push({ id: `source-result-${state.result}`, kind: 'result', level: 4, title: readableLatex(event.unit.title), content: event.unit.statement, proofText: '', nodeId: event.unit.nodeId || '', resultKind: event.unit.displayName || event.unit.kind || 'Theorem', citations: event.unit.citations || [], assetPaths: event.unit.assetPaths || [], caption: '' });
       if (event.unit.proofText) {
         state.proof += 1;
         blocks.push({ id: `source-proof-${state.proof}`, kind: 'proof', level: 4, title: '', content: '', proofText: event.unit.proofText, nodeId: event.unit.nodeId || '', resultKind: event.unit.kind || 'theorem', citations: event.unit.citations || [], assetPaths: event.unit.proofAssetPaths || [], caption: '' });
@@ -895,6 +958,8 @@ async function enrichAuditFromTex(rawText, primarySource) {
     if (!sourceUnit) continue;
     cursors.set(kind, index + 1);
     if (sourceUnit.statement) node.statement = sourceUnit.statement;
+    node.displayName = sourceUnit.displayName || '';
+    node.label = environmentDisplayLabel(node.label, sourceUnit.displayName, sourceUnit.printedNumber);
     // The TeX tree is authoritative here. Clearing an absent proof matters when
     // re-enriching an older audit: otherwise a stale, positionally misassigned
     // proof can survive forever on an externally quoted result.
@@ -908,7 +973,7 @@ async function enrichAuditFromTex(rawText, primarySource) {
     const id = `source-unit-${index + 1}`;
     sourceUnit.nodeId = id;
     sourceUnit.citations = sourceUnit.citationMentions.map((mention) => citationReference(mention, bibliography));
-    audit.nodes.push({ id, kind: sourceUnit.kind || 'theorem', label: sourceUnit.kind || 'Result', title: readableLatex(sourceUnit.title) || `${String(sourceUnit.kind || 'result')[0].toUpperCase()}${String(sourceUnit.kind || 'result').slice(1)}`, statement: sourceUnit.statement, proofText: sourceUnit.proofText || '', citations: sourceUnit.citations, status: 'verified', anchor: { label: 'Author TeX source', page: null, confidence: 'verified' }, role: 'Source result preserved by the deterministic document parser.', dependencies: [], proofSketch: [], whyItMatters: 'This result belongs to the complete original document structure and was retained even though the AI audit did not create a separate analytical node for it.', expandable: true });
+    audit.nodes.push({ id, kind: sourceUnit.kind || 'proposition', displayName: sourceUnit.displayName || '', label: environmentDisplayLabel('', sourceUnit.displayName, sourceUnit.printedNumber) || 'Result', title: readableLatex(sourceUnit.title) || sourceUnit.displayName || 'Result', statement: sourceUnit.statement, proofText: sourceUnit.proofText || '', citations: sourceUnit.citations, status: 'verified', anchor: { label: 'Author TeX source', page: null, confidence: 'verified' }, role: 'Source result preserved by the deterministic document parser.', dependencies: [], proofSketch: [], whyItMatters: 'This result belongs to the complete original document structure and was retained even though the AI audit did not create a separate analytical node for it.', expandable: true });
   }
   audit.sourceBlocks = buildSourceBlocks(expanded, sourceUnits, bibliography);
   const captured = audit.nodes.filter((node) => typeof node.proofText === 'string' && node.proofText.trim()).length;
@@ -938,7 +1003,7 @@ function makeAuditSchema() {
     required: ['id', 'kind', 'label', 'title', 'statement', 'proofText', 'citations', 'status', 'anchor', 'role', 'dependencies', 'proofSketch', 'whyItMatters', 'expandable'],
     properties: {
       id: { type: 'string' },
-      kind: { enum: ['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'proof', 'equation', 'remark', 'example', 'section', 'external-result'] },
+      kind: { enum: ['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'conjecture', 'proof', 'equation', 'remark', 'example', 'section', 'external-result'] },
       label: { type: 'string' },
       title: { type: 'string' },
       statement: { type: 'string' },
@@ -1086,7 +1151,7 @@ Read that local LaTeX document first, but treat the original PDF at https://arxi
     : '';
   return `You are arXivpecker's mathematical-paper audit engine. Work for a ${profile.level} interested in ${profile.areas.join(', ')}, whose goal is "${profile.goal}".
 
-FIRST: Read the WHOLE primary source before making a guide. Inspect the introduction, every section heading, all named definitions, assumptions, propositions, lemmas, theorems, corollaries, and the proof architecture. Do not use only the abstract. If full text is unavailable, report partial-text-read or blocked and do not invent missing mathematical statements.
+FIRST: Read the WHOLE primary source before making a guide. Inspect the introduction, every section heading, all named definitions, assumptions, propositions, lemmas, theorems, corollaries, conjectures, and the proof architecture. Do not use only the abstract. If full text is unavailable, report partial-text-read or blocked and do not invent missing mathematical statements.
 
 ${sourceInstructions}
 

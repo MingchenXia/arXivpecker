@@ -4,6 +4,7 @@ import katex from 'katex';
 
 const root = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || 'proofroom-library');
 const formulaPattern = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\$([^$]+?)\$|\\\(([\s\S]+?)\\\)/g;
+const readerKatexMacros = { '\\qed': '\\square', '\\qedsymbol': '\\square', '\\qedhere': '\\square' };
 let total = 0;
 let auditedPapers = 0;
 let skippedPapers = 0;
@@ -31,6 +32,7 @@ for (const folder of (await fs.readdir(root)).filter((name) => name.startsWith('
             throwOnError: true,
             strict: 'ignore',
             displayMode: Boolean(match[1] || match[2]),
+            macros: readerKatexMacros,
           });
         } catch (error) {
           failed.push({
