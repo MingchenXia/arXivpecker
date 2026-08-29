@@ -917,7 +917,9 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 
 /* Persistent marginal state follows a long passage without covering the paper. */
 .unit-status-rail { position: sticky; z-index: 32; top: 78px; width: 100%; height: 0; pointer-events: none; }
-.unit-status-rail > div { position: absolute; top: 0; right: -54px; display: flex; flex-direction: column; align-items: flex-end; gap: 7px; pointer-events: auto; }
+.unit-status-rail > div { position: absolute; top: 0; display: flex; flex-direction: column; gap: 7px; pointer-events: auto; }
+.unit-status-notes { left: -54px; align-items: flex-start; }
+.unit-status-changes { right: -54px; align-items: flex-end; }
 .unit-status-rail .source-note-marker { width: 29px; height: 29px; border-color: #a9636d; background: rgb(255 253 249 / 94%); box-shadow: 0 4px 14px rgb(74 44 37 / 14%); color: #8f1d2c; }
 .unit-status-rail .source-note-marker svg { width: 15px; height: 15px; }
 .source-modified-marker { position: relative; display: flex; justify-content: flex-end; font-family: Inter, ui-sans-serif, sans-serif; font-style: normal; text-align: left; }
@@ -938,7 +940,8 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 body.assistant-resizing { cursor: nesw-resize !important; user-select: none !important; }
 
 @media (max-width: 720px) {
-  .unit-status-rail > div { right: -20px; }
+  .unit-status-notes { left: -20px; }
+  .unit-status-changes { right: -20px; }
   .source-modified-trigger { width: 27px; overflow: hidden; padding-inline: 4px; text-indent: -999px; }
   .source-modified-trigger::after { display: grid; place-items: center; content: 'M'; text-indent: 0; }
   .reader-inspector { max-width: calc(100vw - 16px) !important; max-height: calc(100vh - 60px) !important; }
