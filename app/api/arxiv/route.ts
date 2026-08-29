@@ -111,6 +111,54 @@ function parseMetadataMirror(html: string, requestedId: string): ArxivPaper | nu
   };
 }
 
+function parseLatestListing(html: string) {
+  const articles = html.match(/<dl[^>]+id=["']articles["'][^>]*>([\s\S]*?)<\/dl>/i)?.[1] ?? '';
+  const heading = articles.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
+  if (!heading) return { label: '', total: 0, papers: [] as ArxivPaper[] };
+  const afterHeading = articles.slice((heading.index ?? 0) + heading[0].length);
+  const latestSection = afterHeading.split(/<h3[^>]*>/i)[0] ?? '';
+  const label = decodeXml(heading[1]).replace(/\s*\(showing[\s\S]*$/i, '').trim();
+  const total = Number(decodeXml(heading[1]).match(/(?:of\s+)?(\d+)\s+entr(?:y|ies)/i)?.[1]) || 0;
+  const papers = [...latestSection.matchAll(/<dt[^>]*>([\s\S]*?)<\/dt>\s*<dd[^>]*>([\s\S]*?)<\/dd>/gi)].map((match) => {
+    const arxivId = normalizeArxivId(match[1].match(/href\s*=\s*["']\/abs\/([^"'?#]+)["']/i)?.[1] ?? '');
+    const authorsBlock = match[2].match(/<div[^>]+class=["'][^"']*\blist-authors\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? '';
+    const titleBlock = match[2].match(/<div[^>]+class=["'][^"']*\blist-title\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? '';
+    const subjectsBlock = match[2].match(/<div[^>]+class=["'][^"']*\blist-subjects\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] ?? '';
+    const authors = [...authorsBlock.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)].map((author) => decodeXml(author[1])).filter(Boolean);
+    const subjects = decodeXml(subjectsBlock).replace(/^Subjects:\s*/i, '');
+    const primaryCategory = match[2].match(/class=["'][^"']*primary-subject[^"']*["'][^>]*>[\s\S]*?\((math\.[A-Z]{2})\)/i)?.[1] ?? subjects.match(/\((math\.[A-Z]{2})\)/)?.[1] ?? 'math';
+    const categories = [...subjects.matchAll(/\((math\.[A-Z]{2})\)/g)].map((category) => category[1]);
+    return {
+      id: `arxiv-${arxivId.replace(/[^a-z0-9]+/gi, '-')}`,
+      title: decodeXml(titleBlock).replace(/^Title:\s*/i, ''),
+      authors: authors.join(' · ') || 'Unknown authors',
+      category: primaryCategory,
+      arxivId,
+      abstract: '',
+      state: 'To read' as const,
+      tags: [...new Set([primaryCategory, ...categories])].filter((item) => item.startsWith('math.')).slice(0, 4),
+    };
+  }).filter((paper) => paper.arxivId && paper.title);
+  return { label, total: total || papers.length, papers };
+}
+
+async function fetchLatestListing(category: string) {
+  const encodedCategory = encodeURIComponent(category);
+  const listing = parseLatestListing(await fetchText(`https://arxiv.org/list/${encodedCategory}/recent?skip=0&show=2000`));
+  if (!listing.papers.length) return listing;
+  try {
+    const ids = listing.papers.map((paper) => paper.arxivId).join(',');
+    const query = `id_list=${encodeURIComponent(ids)}&max_results=${listing.papers.length}`;
+    const xml = await fetchText(`https://export.arxiv.org/api/query?${query}`, 1);
+    const metadata = new Map(parseFeed(xml).map((paper) => [paper.arxivId.replace(/v\d+$/i, ''), paper]));
+    return { ...listing, papers: listing.papers.map((paper) => metadata.get(paper.arxivId.replace(/v\d+$/i, '')) ?? paper) };
+  } catch {
+    // The official recent listing still provides a complete, usable batch when
+    // the Atom metadata endpoint is temporarily unavailable.
+    return listing;
+  }
+}
+
 async function fetchText(url: string, attempts = 2) {
   let lastError: unknown = new Error('arXiv is unavailable.');
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -230,26 +278,23 @@ export async function GET(request: NextRequest) {
   const arxivId = normalizeArxivId(request.nextUrl.searchParams.get('id') ?? '');
   const categories = (request.nextUrl.searchParams.get('categories') || request.nextUrl.searchParams.get('category') || 'math')
     .split(',').map((value) => value.trim()).filter((value) => value === 'math' || /^math\.[A-Z]{2}$/.test(value));
-  const allToday = request.nextUrl.searchParams.get('allToday') === '1' && !arxivId;
-  const now = new Date(); const day = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}${String(now.getUTCDate()).padStart(2, '0')}`;
+  const latestBatch = request.nextUrl.searchParams.get('latest') === '1' && !arxivId;
   const categoryQuery = categories.length > 1 ? `(${categories.map((category) => `cat:${category}`).join(' OR ')})` : `cat:${categories[0] || 'math'}`;
-  const searchQuery = allToday ? `${categoryQuery} AND submittedDate:[${day}0000 TO ${day}2359]` : categoryQuery;
 
   try {
     if (arxivId) {
       return NextResponse.json({ papers: [await fetchPaper(arxivId)] });
     }
-    const pageSize = allToday ? 250 : 24; const papers: ArxivPaper[] = []; let start = 0; let total = pageSize;
-    do {
-      const query = `search_query=${encodeURIComponent(searchQuery)}&sortBy=submittedDate&sortOrder=descending&start=${start}&max_results=${pageSize}`;
-      const response = await fetch(`https://export.arxiv.org/api/query?${query}`, { cache: 'no-store', headers: { 'User-Agent': 'arXivpecker/0.2 (local mathematics paper reader)' } });
-      if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
-      const xml = await response.text(); const page = parseFeed(xml); papers.push(...page);
-      total = Number(valueOf(xml, 'opensearch:totalResults')) || page.length; start += pageSize;
-      if (!allToday || page.length < pageSize) break;
-    } while (start < total);
+    if (latestBatch) {
+      const batch = await fetchLatestListing(categories[0] || 'math');
+      return NextResponse.json({ papers: batch.papers, total: batch.total, mode: 'latest', batchLabel: batch.label, categories: [categories[0] || 'math'] });
+    }
+    const pageSize = 24; const query = `search_query=${encodeURIComponent(categoryQuery)}&sortBy=submittedDate&sortOrder=descending&start=0&max_results=${pageSize}`;
+    const response = await fetch(`https://export.arxiv.org/api/query?${query}`, { cache: 'no-store', headers: { 'User-Agent': 'arXivpecker/0.2 (local mathematics paper reader)' } });
+    if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
+    const papers = parseFeed(await response.text());
     const unique = [...new Map(papers.map((paper) => [paper.arxivId, paper])).values()];
-    return NextResponse.json({ papers: unique, total: allToday ? total : unique.length, mode: allToday ? 'today' : 'feed', day, categories });
+    return NextResponse.json({ papers: unique, total: unique.length, mode: 'feed', categories });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'arXiv is unavailable.', papers: [] },
