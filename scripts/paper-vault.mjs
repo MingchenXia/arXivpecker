@@ -272,6 +272,77 @@ export class PaperVault {
     return safePatches;
   }
 
+  async commitPaperUpdate(payload) {
+    const paperId = String(payload?.paper?.id || '');
+    const currentRecord = await this.recordFor(paperId);
+    const directory = this.paperDirectory(currentRecord);
+    const [previousPaper, previousAudit, previousReader, previousPatches, previousUpdates] = await Promise.all([
+      readJson(path.join(directory, 'paper.json'), null),
+      readJson(path.join(directory, 'audit.json'), null),
+      readJson(path.join(directory, 'reader.json'), { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} }),
+      readJson(path.join(directory, 'editions', 'working', 'patches.json'), { patches: [] }),
+      readJson(path.join(directory, 'updates.json'), { updates: [] }),
+    ]);
+    if (!previousPaper || !previousAudit) throw new Error('The current paper and its audit are required before updating versions.');
+    if (!payload?.audit || !Array.isArray(payload.audit.nodes) || !Array.isArray(payload.audit.sourceBlocks)) throw new Error('A complete latest-version audit is required.');
+    if (!payload?.update?.fromVersion || !payload?.update?.toVersion || !payload?.update?.comparison) throw new Error('A version comparison record is required.');
+    const previousIndex = structuredClone(await this.index());
+    const archiveName = `${new Date().toISOString().replace(/[:.]/g, '-')}--${slug(payload.update.fromVersion, 30)}-to-${slug(payload.update.toVersion, 30)}`;
+    const archiveDirectory = path.join(directory, 'history', 'updates', archiveName); await mkdir(archiveDirectory, { recursive: true });
+    await writeJson(path.join(archiveDirectory, 'snapshot.json'), { paper: previousPaper, audit: previousAudit, reader: previousReader, patches: previousPatches.patches ?? [], archivedAt: new Date().toISOString(), reason: `Before update ${payload.update.fromVersion} → ${payload.update.toVersion}` });
+
+    try {
+    const storedPaper = await this.upsertPaper({ ...payload.paper, id: paperId });
+    if (payload.sourceRecord && typeof payload.sourceRecord === 'object') await this.saveSourceRecord(paperId, payload.sourceRecord);
+    await writeJson(path.join(directory, 'audit.json'), payload.audit);
+    const reader = await this.saveReader(paperId, payload.reader ?? {});
+    const patches = await this.savePatches(paperId, payload.patches ?? []);
+    const updateRecord = {
+      ...payload.update,
+      id: String(payload.update.id || randomUUID()),
+      paperId,
+      status: 'updated',
+      createdAt: String(payload.update.createdAt || new Date().toISOString()),
+      archive: path.relative(this.root, archiveDirectory),
+    };
+    const updates = [updateRecord, ...(Array.isArray(previousUpdates.updates) ? previousUpdates.updates : [])].slice(0, 50);
+    await writeJson(path.join(directory, 'updates.json'), { version: VAULT_VERSION, updatedAt: new Date().toISOString(), updates });
+
+    const nodeMap = payload.nodeMap && typeof payload.nodeMap === 'object' ? payload.nodeMap : {};
+    const index = await this.index(); const touched = new Set([paperId]);
+    index.links = index.links.map((link) => {
+      const next = structuredClone(link);
+      if (next.from.paperId === paperId && nodeMap[next.from.nodeId]) { next.from.nodeId = String(nodeMap[next.from.nodeId]); touched.add(next.to.paperId); }
+      if (next.to.paperId === paperId && nodeMap[next.to.nodeId]) { next.to.nodeId = String(nodeMap[next.to.nodeId]); touched.add(next.from.paperId); }
+      return next;
+    });
+    await this.writeIndex(index);
+    for (const touchedPaperId of touched) {
+      const record = index.papers.find((item) => item.id === touchedPaperId); if (!record) continue;
+      const incident = index.links.filter((link) => link.from.paperId === touchedPaperId || link.to.paperId === touchedPaperId);
+      await writeJson(path.join(this.paperDirectory(record), 'links.json'), incident);
+    }
+    await this.rebuildGraph();
+    return { paper: storedPaper, reader, patches, update: updateRecord, snapshot: await this.snapshot() };
+    } catch (error) {
+      await Promise.all([
+        writeJson(path.join(directory, 'paper.json'), previousPaper),
+        writeJson(path.join(directory, 'audit.json'), previousAudit),
+        writeJson(path.join(directory, 'reader.json'), previousReader),
+        writeJson(path.join(directory, 'editions', 'working', 'patches.json'), previousPatches),
+        writeJson(path.join(directory, 'updates.json'), previousUpdates),
+        writeFile(path.join(directory, 'README.md'), readmeFor(previousPaper), 'utf8'),
+      ]);
+      await this.writeIndex(previousIndex);
+      for (const record of previousIndex.papers) {
+        const incident = previousIndex.links.filter((link) => link.from.paperId === record.id || link.to.paperId === record.id);
+        await writeJson(path.join(this.paperDirectory(record), 'links.json'), incident);
+      }
+      await this.rebuildGraph();
+      throw error;
+    }
+  }
+
   async saveProfile(profile) {
     await this.ensure();
     const saved = { ...profile, updatedAt: new Date().toISOString() };
@@ -284,13 +355,14 @@ export class PaperVault {
     const records = [];
     for (const record of index.papers) {
       const directory = this.paperDirectory(record);
-      const [paper, audit, reader, patches] = await Promise.all([
+      const [paper, audit, reader, patches, updates] = await Promise.all([
         readJson(path.join(directory, 'paper.json'), null),
         readJson(path.join(directory, 'audit.json'), null),
         readJson(path.join(directory, 'reader.json'), { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} }),
         readJson(path.join(directory, 'editions', 'working', 'patches.json'), { patches: [] }),
+        readJson(path.join(directory, 'updates.json'), { updates: [] }),
       ]);
-      if (paper) records.push({ paper, audit, reader, patches: Array.isArray(patches.patches) ? patches.patches : [], folder: record.folder });
+      if (paper) records.push({ paper, audit, reader, patches: Array.isArray(patches.patches) ? patches.patches : [], updates: Array.isArray(updates.updates) ? updates.updates : [], folder: record.folder });
     }
     return records;
   }
@@ -307,7 +379,8 @@ export class PaperVault {
     const expanded = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.expanded ?? {}]));
     const marks = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.marks ?? {}]));
     const patches = Object.fromEntries(records.map((record) => [record.paper.id, record.patches ?? []]));
-    return { papers, audits, notes, nodeNotes, nodeAnswers, expanded, marks, patches, profile, links: index.links, graph, vault: { folder: this.root, paperFolders: records.map((record) => ({ paperId: record.paper.id, folder: record.folder })) } };
+    const updates = Object.fromEntries(records.map((record) => [record.paper.id, record.updates ?? []]));
+    return { papers, audits, notes, nodeNotes, nodeAnswers, expanded, marks, patches, updates, profile, links: index.links, graph, vault: { folder: this.root, paperFolders: records.map((record) => ({ paperId: record.paper.id, folder: record.folder })) } };
   }
 
   async compactInventory() {

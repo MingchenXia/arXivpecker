@@ -73,13 +73,15 @@ function parseAbstractPage(html: string, requestedId: string): ArxivPaper | null
   const primary = html.match(/<span[^>]+class=["'][^"']*primary-subject[^"']*["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? '';
   const category = decodeXml(primary).match(/\((math\.[A-Z]{2})\)\s*$/)?.[1] ?? 'math';
   const categories = [...html.matchAll(/(?:primary-subject|subjects)[\s\S]{0,180}?\((math\.[A-Z]{2})\)/gi)].map((match) => match[1]);
+  const latestVersion = Math.max(0, ...[...html.matchAll(/\[v(\d+)\]/gi)].map((match) => Number(match[1])));
+  const resolvedId = /v\d+$/i.test(requestedId) || !latestVersion ? requestedId : `${requestedId}v${latestVersion}`;
   if (!title) return null;
   return {
-    id: `arxiv-${requestedId.replace(/[^a-z0-9]+/gi, '-')}`,
+    id: `arxiv-${resolvedId.replace(/[^a-z0-9]+/gi, '-')}`,
     title,
     authors: authors.join(' · ') || 'Unknown authors',
     category,
-    arxivId: requestedId,
+    arxivId: resolvedId,
     abstract,
     state: 'To read',
     tags: [...new Set([category, ...categories])].filter((item) => item.startsWith('math.')).slice(0, 4),
@@ -127,6 +129,20 @@ async function fetchText(url: string, attempts = 2) {
     }
   }
   throw lastError;
+}
+
+async function latestSourceVersion(arxivId: string) {
+  if (/v\d+$/i.test(arxivId)) return arxivId;
+  const baseId = arxivId.replace(/v\d+$/i, ''); const encoded = baseId.split('/').map(encodeURIComponent).join('/');
+  for (const url of [`https://export.arxiv.org/e-print/${encoded}`, `https://arxiv.org/e-print/${encoded}`]) {
+    try {
+      const response = await fetch(url, { method: 'HEAD', cache: 'no-store', redirect: 'follow', signal: AbortSignal.timeout(12_000), headers: { 'User-Agent': 'arXivpecker/0.2 (local mathematics paper reader; version check)' } });
+      if (!response.ok) continue;
+      const disposition = response.headers.get('content-disposition') || ''; const version = /(?:arXiv[-_])?[^";\s]*?v(\d+)\.(?:tar(?:\.gz)?|gz|pdf)/i.exec(disposition)?.[1];
+      if (version) return `${baseId}v${version}`;
+    } catch { /* Try the next official source host. */ }
+  }
+  return arxivId;
 }
 
 function abstractFromInvertedIndex(value: unknown) {
@@ -187,30 +203,23 @@ async function fetchPaperFromOpenAlex(arxivId: string) {
 async function fetchPaper(arxivId: string) {
   const encoded = arxivId.split('/').map(encodeURIComponent).join('/');
   const errors: string[] = [];
-  for (const url of [
+  const feedUrls = [
     `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}`,
     `https://arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}`,
-  ]) {
-    try {
-      const papers = parseFeed(await fetchText(url));
-      if (papers[0]) return papers[0];
-      errors.push('metadata feed returned no matching entry');
-    } catch (error) { errors.push(error instanceof Error ? error.message : 'metadata feed failed'); }
-  }
-  for (const url of [`https://arxiv.org/abs/${encoded}`, `https://export.arxiv.org/abs/${encoded}`]) {
-    try {
-      const paper = parseAbstractPage(await fetchText(url), arxivId);
-      if (paper) return paper;
-      errors.push('abstract page contained no paper metadata');
-    } catch (error) { errors.push(error instanceof Error ? error.message : 'abstract page failed'); }
-  }
+  ];
+  try { return await Promise.any(feedUrls.map(async (url) => { const paper = parseFeed(await fetchText(url, 1))[0]; if (!paper) throw new Error('metadata feed returned no matching entry'); return paper; })); }
+  catch (error) { errors.push(error instanceof Error ? error.message : 'metadata feeds failed'); }
+  const pageUrls = [`https://arxiv.org/abs/${encoded}`, `https://export.arxiv.org/abs/${encoded}`];
+  try { return await Promise.any(pageUrls.map(async (url) => { const paper = parseAbstractPage(await fetchText(url, 1), arxivId); if (!paper) throw new Error('abstract page contained no paper metadata'); return paper; })); }
+  catch (error) { errors.push(error instanceof Error ? error.message : 'abstract pages failed'); }
+  const fallbackId = await latestSourceVersion(arxivId);
   try {
-    const paper = parseMetadataMirror(await fetchText(`https://papers.cool/arxiv/${encoded}`, 1), arxivId);
+    const paper = parseMetadataMirror(await fetchText(`https://papers.cool/arxiv/${encoded}`, 1), fallbackId);
     if (paper) return paper;
     errors.push('metadata mirror contained no paper metadata');
   } catch (error) { errors.push(error instanceof Error ? error.message : 'metadata mirror failed'); }
   try {
-    const paper = await fetchPaperFromOpenAlex(arxivId);
+    const paper = await fetchPaperFromOpenAlex(fallbackId);
     if (paper) return paper;
     errors.push('OpenAlex contained no matching arXiv record');
   } catch (error) { errors.push(error instanceof Error ? error.message : 'OpenAlex metadata failed'); }

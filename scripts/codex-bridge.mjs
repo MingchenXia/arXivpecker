@@ -1052,7 +1052,7 @@ function makeVersionComparisonSchema() {
   };
 }
 
-function auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit = true, detailedAudit = true }) {
+function auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit = true, detailedAudit = true, updateContext = null }) {
   const libraryContext = localInventory.length
     ? JSON.stringify(localInventory, null, 2)
     : 'No other audited papers are available in the local vault yet.';
@@ -1081,6 +1081,9 @@ Read that local LaTeX document first, but treat the original PDF at https://arxi
   const depthInstructions = detailedAudit
     ? `DETAILED AUDIT MODE: Build a retrieval queue for every citation locator that names a theorem, lemma, proposition, corollary, definition, equation, section, or numbered result. For each queue item, resolve the cited paper from its bibliography record, fetch the cited paper's primary TeX source when it is on arXiv (use its PDF only when TeX is unavailable), search that source for the exact locator, and recover the complete statement before finishing this audit. Also recover every nearby definition needed to interpret its nonstandard notation and hypotheses. Populate citations.statement and citations.definitions only with material verified in that cited primary source. Continue through the full queue within the available audit time instead of deferring retrieval to a later question. Do not return a placeholder saying that a record is not cached; either provide verified source detail or leave the field empty and give a precise verification warning naming what access or locator failed.`
     : `STANDARD AUDIT MODE: Preserve citation keys, locators, titles, and direct primary-source links, but do not spend the audit budget following every external theorem.`;
+  const versionInstructions = updateContext
+    ? `VERSION UPDATE CONTEXT: This paper is replacing an earlier locally audited arXiv version. Read and audit the new primary source independently, then use this compact comparison only to make sure changed assumptions, results, proofs, notation, citations, and downstream dependencies receive special scrutiny. Do not copy stale statements or proof text from the previous audit. Do not discard a new source unit merely because it has no predecessor.\n${JSON.stringify(updateContext, null, 2)}`
+    : '';
   return `You are arXivpecker's mathematical-paper audit engine. Work for a ${profile.level} interested in ${profile.areas.join(', ')}, whose goal is "${profile.goal}".
 
 FIRST: Read the WHOLE primary source before making a guide. Inspect the introduction, every section heading, all named definitions, assumptions, propositions, lemmas, theorems, corollaries, and the proof architecture. Do not use only the abstract. If full text is unavailable, report partial-text-read or blocked and do not invent missing mathematical statements.
@@ -1105,6 +1108,8 @@ ${proofCaptureInstructions}
 ${correctnessInstructions}
 
 ${depthInstructions}
+
+${versionInstructions}
 
 The proofSketch is a separate short AI explanation of the proof route; it never substitutes for the complete source proof shown to the reader.
 
@@ -1149,7 +1154,7 @@ function editorialPrompt({ paper, node }) {
   return `The full-paper audit from the previous turn is controlling context. Inspect the primary source again at this selected unit before suggesting any change.\n\nPaper: ${paper.title} (arXiv:${paper.arxivId})\nSelected unit: ${JSON.stringify(node)}\n\nAct as a source-preserving mathematical editor. Identify only a genuine typo, notation inconsistency, or unambiguous local wording error. Do not rewrite for style, strengthen a claim, fill in a proof, or change a theorem's mathematics. Return JSON only with keys: hasIssue (boolean), replacement (string), rationale (string), confidence ("high"|"medium"|"low"). If no clear error is verifiable from the primary source, use hasIssue:false and an empty replacement.`;
 }
 
-function comparisonPrompt({ paper, fromVersion, toVersion, fromSource, toSource, profile }) {
+function comparisonPrompt({ paper, fromVersion, toVersion, fromSource, toSource, profile, readerContext = null }) {
   const describe = (version, source) => source?.kind === 'tex'
     ? `${version}: local TeX entry ${source.entryFile} (source directory ${source.sourceDirectory})`
     : `${version}: TeX unavailable; inspect https://arxiv.org/pdf/${version} (${source?.error || 'PDF fallback'})`;
@@ -1160,6 +1165,8 @@ Version A: ${describe(fromVersion, fromSource)}
 Version B: ${describe(toVersion, toSource)}
 
 Read both complete sources before reporting differences. Prefer the local TeX trees. Resolve \\input and \\include files, theorem environments, labels, references, equations, and bibliography changes. Use a structural mathematical comparison, not a raw line-by-line diff.
+
+${readerContext ? `The reader has durable work attached to Version A. Use it only to prioritize the comparison and explicitly mention changed units that could affect these notes, marks, or edits; never reinterpret the reader's text as author text:\n${JSON.stringify(readerContext, null, 2)}` : ''}
 
 Prioritize changes to definitions, assumptions, theorem/lemma/proposition statements, proof steps, counterexamples, hypotheses, conclusions, and logical dependencies. Distinguish a genuine strengthening or weakening from wording, renumbering, or moved text. For each changed unit, provide a compact before/after paraphrase and explain how its prerequisite or downstream dependency chain changes. Never infer a mathematical change from formatting alone. Put uncertain cases in warnings.
 
@@ -1319,7 +1326,7 @@ class CodexAppServer {
     });
   }
 
-  async analyze({ paper, profile, localInventory = [], primarySource = null, correctnessAudit = true, detailedAudit = true }) {
+  async analyze({ paper, profile, localInventory = [], primarySource = null, correctnessAudit = true, detailedAudit = true, updateContext = null }) {
     await this.start();
     const model = profile.model || this.models.find((item) => item.isDefault)?.model || undefined;
     const created = await this.call('thread/start', {
@@ -1334,7 +1341,7 @@ class CodexAppServer {
     this.loadedThreads.add(threadId);
     const output = await this.runTurn({
       threadId,
-      input: [{ type: 'text', text: auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit, detailedAudit }), text_elements: [] }],
+      input: [{ type: 'text', text: auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit, detailedAudit, updateContext }), text_elements: [] }],
       model,
       effort: profile.reasoning,
       approvalPolicy: 'never',
@@ -1368,7 +1375,7 @@ class CodexAppServer {
     return { threadId, ...output };
   }
 
-  async compareVersions({ paper, profile, fromVersion, toVersion, fromSource, toSource }) {
+  async compareVersions({ paper, profile, fromVersion, toVersion, fromSource, toSource, readerContext = null }) {
     await this.start();
     const model = profile.model || this.models.find((item) => item.isDefault)?.model || undefined;
     const created = await this.call('thread/start', {
@@ -1383,7 +1390,7 @@ class CodexAppServer {
     this.loadedThreads.add(threadId);
     const output = await this.runTurn({
       threadId,
-      input: [{ type: 'text', text: comparisonPrompt({ paper, fromVersion, toVersion, fromSource, toSource, profile }), text_elements: [] }],
+      input: [{ type: 'text', text: comparisonPrompt({ paper, fromVersion, toVersion, fromSource, toSource, profile, readerContext }), text_elements: [] }],
       model,
       effort: profile.reasoning,
       approvalPolicy: 'never',
@@ -1513,18 +1520,24 @@ async function collectFigureFiles(directory, root = directory, depth = 0) {
 
 async function figureAsset(paperId, requestedPath) {
   const sourceRoot = await vault.sourceDirectory(paperId);
+  const record = await vault.recordFor(paperId); const savedPaper = JSON.parse(await readFile(path.join(vault.paperDirectory(record), 'paper.json'), 'utf8'));
+  const configuredSource = typeof savedPaper?.source?.sourceDirectory === 'string' ? path.resolve(savedPaper.source.sourceDirectory) : sourceRoot;
+  const configuredRelative = path.relative(sourceRoot, configuredSource); const currentSourceRoot = configuredRelative.startsWith('..') || path.isAbsolute(configuredRelative) ? sourceRoot : configuredSource;
   const requested = String(requestedPath || '').replaceAll('\\', '/').replace(/^\.\//, '').trim();
   if (!requested || requested.includes('\0')) throw new Error('A valid figure path is required.');
   const extension = path.extname(requested).toLowerCase();
   const alternatives = extension ? [requested] : figureExtensions.map((suffix) => `${requested}${suffix}`);
   let candidate = null;
-  for (const alternative of alternatives) {
-    const absolute = path.resolve(sourceRoot, alternative); const relative = path.relative(sourceRoot, absolute);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
-    try { if ((await stat(absolute)).isFile()) { candidate = absolute; break; } } catch { /* Search by suffix below. */ }
+  for (const root of [...new Set([currentSourceRoot, sourceRoot])]) {
+    for (const alternative of alternatives) {
+      const absolute = path.resolve(root, alternative); const relative = path.relative(root, absolute);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+      try { if ((await stat(absolute)).isFile()) { candidate = absolute; break; } } catch { /* Search by suffix below. */ }
+    }
+    if (candidate) break;
   }
   if (!candidate) {
-    const files = await collectFigureFiles(sourceRoot); const normalized = requested.toLowerCase(); const basename = path.basename(normalized);
+    const files = [...await collectFigureFiles(currentSourceRoot), ...(currentSourceRoot === sourceRoot ? [] : await collectFigureFiles(sourceRoot))]; const normalized = requested.toLowerCase(); const basename = path.basename(normalized);
     const found = files.find((file) => alternatives.some((alternative) => file.relative.toLowerCase().endsWith(alternative.toLowerCase()))) || files.find((file) => path.basename(file.relative, path.extname(file.relative)).toLowerCase() === path.basename(basename, path.extname(basename)));
     candidate = found?.absolute || null;
   }
@@ -1575,10 +1588,10 @@ const server = createServer(async (request, response) => {
       try { await codex.start(); } catch { /* status returns useful error below */ }
       return sendJson(response, 200, codex.status(), origin);
     }
-    if (request.method !== 'POST' || !['/analyze', '/compare-versions', '/paper-question', '/node-question', '/node-edit/suggest', '/vault/paper', '/vault/paper/update', '/vault/paper/delete', '/vault/paper/order', '/vault/audit', '/vault/reader', '/vault/patches', '/vault/profile', '/vault/link', '/vault/link/delete', '/vault/export', '/vault/latex-export', '/vault/citation-asset', '/vault/source-upload', '/cloud/share'].includes(pathname)) {
+    if (request.method !== 'POST' || !['/analyze', '/compare-versions', '/paper-question', '/node-question', '/node-edit/suggest', '/vault/paper', '/vault/paper/update', '/vault/paper/update-commit', '/vault/paper/delete', '/vault/paper/order', '/vault/audit', '/vault/reader', '/vault/patches', '/vault/profile', '/vault/link', '/vault/link/delete', '/vault/export', '/vault/latex-export', '/vault/citation-asset', '/vault/source-upload', '/cloud/share'].includes(pathname)) {
       return sendJson(response, 404, { error: 'Not found.' }, origin);
     }
-    const body = await readBody(request, ['/vault/source-upload', '/vault/citation-asset'].includes(pathname) ? 112_000_000 : pathname === '/vault/latex-export' ? 24_000_000 : 1_000_000);
+    const body = await readBody(request, ['/vault/source-upload', '/vault/citation-asset'].includes(pathname) ? 112_000_000 : ['/vault/latex-export', '/vault/paper/update-commit'].includes(pathname) ? 24_000_000 : 1_000_000);
     if (pathname === '/cloud/share') return sendJson(response, 200, { share: await createCloudShare(vault, body) }, origin);
     if (pathname === '/vault/profile') return sendJson(response, 200, { profile: await vault.saveProfile(normalizeProfile(body.profile)) }, origin);
     if (pathname === '/vault/link') return sendJson(response, 200, { link: await vault.addLink(body.link), graph: await vault.rebuildGraph() }, origin);
@@ -1616,6 +1629,7 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 200, await saveUploadedPaperSource(body.paper, body.upload ?? {}), origin);
     }
     if (!validatePaper(body.paper)) return sendJson(response, 400, { error: 'A paper with title, arXiv id, and abstract is required.' }, origin);
+    if (pathname === '/vault/paper/update-commit') return sendJson(response, 200, await vault.commitPaperUpdate(body), origin);
     if (pathname === '/vault/paper' || pathname === '/vault/paper/update') return sendJson(response, 200, { paper: await vault.upsertPaper(body.paper) }, origin);
     if (pathname === '/vault/audit') {
       if (!body.audit || !Array.isArray(body.audit.nodes)) return sendJson(response, 400, { error: 'A structured audit is required.' }, origin);
@@ -1626,23 +1640,24 @@ const server = createServer(async (request, response) => {
     const profile = normalizeProfile(body.profile);
     const output = await enqueue(async () => {
       if (pathname === '/compare-versions') {
-        const paper = await vault.upsertPaper(body.paper);
+        const paper = body.updateMode ? { ...body.paper, id: String(body.paper.id) } : await vault.upsertPaper(body.paper);
         const fromVersion = normalizeArxivVersion(body.fromVersion);
         const toVersion = normalizeArxivVersion(body.toVersion);
         if (!fromVersion || !toVersion) throw new Error('Two valid arXiv versions are required.');
         if (fromVersion.replace(/v\d+$/i, '') !== toVersion.replace(/v\d+$/i, '')) throw new Error('Version comparison requires two versions of the same arXiv paper.');
         const load = async (version) => { try { return await acquireArxivSource(paper, version, true); } catch (error) { return { kind: 'pdf', error: error instanceof Error ? error.message : 'TeX source unavailable' }; } };
         const [fromSource, toSource] = await Promise.all([load(fromVersion), load(toVersion)]);
-        const compared = await codex.compareVersions({ paper, profile, fromVersion, toVersion, fromSource, toSource });
+        const compared = await codex.compareVersions({ paper, profile, fromVersion, toVersion, fromSource, toSource, readerContext: body.readerContext ?? null });
         return { ...compared, fromVersion, toVersion, sources: { from: fromSource.kind, to: toSource.kind } };
       }
       if (pathname === '/analyze') {
-        const paper = await vault.upsertPaper(body.paper);
+        const paper = body.updateMode ? { ...body.paper, id: String(body.paper.id) } : await vault.upsertPaper(body.paper);
+        if (body.updateMode) await vault.recordFor(paper.id);
         const localInventory = await vault.compactInventory();
         let primarySource;
         try {
-          primarySource = await acquireArxivSource(paper);
-          await vault.saveSourceRecord(paper.id, { analysisFormat: 'tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.fetchedAt });
+          primarySource = await acquireArxivSource(paper, paper.arxivId, Boolean(body.updateMode));
+          if (!body.updateMode) await vault.saveSourceRecord(paper.id, { analysisFormat: 'tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.fetchedAt });
           if (primarySource.kind === 'uploaded-pdf' && body.convertPdfToLatex) {
             const converted = await codex.convertPdfToLatex({ paper, profile, pdfPath: primarySource.entryFile });
             primarySource = await saveAiLatexSource(paper, converted);
@@ -1656,11 +1671,11 @@ const server = createServer(async (request, response) => {
             const converted = await codex.convertPdfToLatex({ paper, profile });
             primarySource = await saveAiLatexSource(paper, converted);
             await vault.saveSourceRecord(paper.id, { analysisFormat: 'ai-tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.convertedAt, sourceError: 'Author TeX unavailable; saved AI transcription from the primary PDF.' });
-          } else await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
+          } else if (!body.updateMode) await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
         }
-        const analyzed = await codex.analyze({ paper, profile, primarySource, correctnessAudit: body.correctnessAudit !== false, detailedAudit: body.detailedAudit !== false, localInventory: localInventory.filter((item) => item.paperId !== paper.id) });
+        const analyzed = await codex.analyze({ paper, profile, primarySource, correctnessAudit: body.correctnessAudit !== false, detailedAudit: body.detailedAudit !== false, localInventory: localInventory.filter((item) => item.paperId !== paper.id), updateContext: body.updateContext ?? null });
         const text = primarySource.kind === 'tex' || primarySource.kind === 'ai-tex' ? await enrichAuditFromTex(analyzed.text, primarySource) : analyzed.text;
-        return { ...analyzed, text, paper, primarySource: { kind: primarySource.kind, fileCount: primarySource.fileCount ?? 0, cached: Boolean(primarySource.cached), error: primarySource.error ?? null } };
+        return { ...analyzed, text, paper, primarySource: { kind: primarySource.kind, fileCount: primarySource.fileCount ?? 0, cached: Boolean(primarySource.cached), error: primarySource.error ?? null }, ...(body.updateMode ? { sourceRecord: { analysisFormat: primarySource.kind === 'tex' ? 'tex' : primarySource.kind, sourceDirectory: primarySource.sourceDirectory ?? '', mainTex: primarySource.entryFile ?? '', sourceFetchedAt: primarySource.fetchedAt ?? primarySource.convertedAt ?? new Date().toISOString(), sourceError: primarySource.error ?? '' } } : {}) };
       }
       if (pathname === '/paper-question') {
         if (!body.threadId || typeof body.question !== 'string') throw new Error('threadId and a question are required.');

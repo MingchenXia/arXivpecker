@@ -23,6 +23,8 @@ type WorkingPatch = { id: string; kind: 'replace' | 'delete' | 'add'; nodeId: st
 type EditorialSuggestion = { hasIssue: boolean; replacement: string; rationale: string; confidence: 'high' | 'medium' | 'low' };
 type VersionChange = { label: string; changeType: 'added' | 'removed' | 'strengthened' | 'weakened' | 'corrected' | 'reorganized' | 'wording'; before: string; after: string; significance: 'mathematical' | 'proof-level' | 'expository' | 'uncertain'; dependencyImpact: string };
 type VersionComparison = { summary: string; changedUnits: VersionChange[]; proofChanges: string[]; notationChanges: string[]; editorialChanges: string[]; dependencyImpact: string[]; readingRecommendation: string; warnings: string[] };
+type UpdateMigrationItem = { type: 'note' | 'edit' | 'mark' | 'reader-context'; label: string; status: 'carried' | 'review' | 'paper-note'; detail: string; fromId: string; toId: string };
+type PaperUpdateRecord = { id: string; paperId: string; fromVersion: string; toVersion: string; createdAt: string; status: 'updated' | 'current'; comparison: VersionComparison; migration: { notesCarried: number; notesToPaper: number; marksCarried: number; editsCarried: number; editsReview: number; items: UpdateMigrationItem[]; conflicts: UpdateMigrationItem[] } };
 type CrossLink = { id: string; from: { paperId: string; nodeId: string }; to: { paperId: string; nodeId: string }; relation: 'uses' | 'extends' | 'background' | 'contrasts'; note: string; source: 'manual' | 'audit'; createdAt?: string };
 type AuditCrossLink = { fromNodeId: string; targetPaperId: string; targetNodeId: string; relation: CrossLink['relation']; rationale: string };
 type SourceBlockKind = 'section' | 'paragraph' | 'result' | 'proof' | 'figure' | 'table';
@@ -39,7 +41,7 @@ type ReferenceTarget = { title: string; url?: string; arxivId?: string; paperId?
 type AssistantSize = { width: number; height: number };
 type CloudProviderStatus = { id: string; label: string; available: boolean; connectUrl: string; detail: string };
 type CloudShareRecord = { id: string; title: string; provider: string; providerLabel: string; fileName: string; location: string; connectUrl: string; paperCount: number; createdAt: string };
-type VaultSnapshot = { papers: Paper[]; audits: Record<string, PaperAudit>; notes: Note[]; nodeNotes: Record<string, Record<string, string>>; nodeAnswers: Record<string, Record<string, string>>; expanded: Record<string, Record<string, boolean>>; marks: Record<string, Record<string, Exclude<ReadingMark, ''>>>; patches: Record<string, WorkingPatch[]>; profile: Profile | null; links: CrossLink[]; graph: Graph; vault: { paperFolders: { paperId: string; folder: string }[] } };
+type VaultSnapshot = { papers: Paper[]; audits: Record<string, PaperAudit>; notes: Note[]; nodeNotes: Record<string, Record<string, string>>; nodeAnswers: Record<string, Record<string, string>>; expanded: Record<string, Record<string, boolean>>; marks: Record<string, Record<string, Exclude<ReadingMark, ''>>>; patches: Record<string, WorkingPatch[]>; updates: Record<string, PaperUpdateRecord[]>; profile: Profile | null; links: CrossLink[]; graph: Graph; vault: { paperFolders: { paperId: string; folder: string }[] } };
 
 const bridgeUrl = 'http://127.0.0.1:4318';
 const preferenceKey = 'proofroom-reader-preferences-v1';
@@ -120,14 +122,14 @@ function Latex({ value, small = false }: { value: string; small?: boolean }) {
   return <div className={`${small ? 'text-sm' : 'text-base'} overflow-x-auto text-[#284235]`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-function MathText({ value, block = false, citations = [] }: { value: string; block?: boolean; citations?: CitationReference[] }) {
+function MathText({ value, block = false, citations = [], explicitOnly = false }: { value: string; block?: boolean; citations?: CitationReference[]; explicitOnly?: boolean }) {
   const parts = useMemo(() => {
     const source = cleanTeXProse(value || '');
     // Audits produced from source TeX are asked to preserve $...$ delimiters. The
     // final alternatives also recover compact TeX-like islands when an older audit
     // omitted them, keeping expressions such as χ|det|^s and L_v(χ_v,s)^{-1}
     // together instead of rendering only their superscripts.
-    const pattern = /(\[\[cite:[^\]]+\]\]|\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([\s\S]+?\\\)|\([^()$\n\[\]]{0,180}(?:\^|_|\\[A-Za-z]+|\{[^}]*\})[^()$\n\[\]]{0,180}\)|[A-Za-z0-9\u0370-\u03ff\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*(?:\^|_|\\|[|≤≥∈×=])[A-Za-z0-9\u0370-\u03ff\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*|(?:Re|Im|GL|SL|Sp|SO|SU|Spec|Hom|Ext|Tor|dim|ker|coker|rank|det|tr|vol|[A-Z])\([^()\s]{1,180}\)(?:(?:_|\^)(?:\{[^{}\n]{1,80}\}|[A-Za-z0-9\u0370-\u03ff+-]))*|[\u0370-\u03ff])/g;
+    const pattern = explicitOnly ? /(\[\[cite:[^\]]+\]\]|\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([\s\S]+?\\\))/g : /(\[\[cite:[^\]]+\]\]|\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([\s\S]+?\\\)|\([^()$\n\[\]]{0,180}(?:\^|_|\\[A-Za-z]+|\{[^}]*\})[^()$\n\[\]]{0,180}\)|[A-Za-z0-9\u0370-\u03ff\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*(?:\^|_|\\|[|≤≥∈×=])[A-Za-z0-9\u0370-\u03ff\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*|(?:Re|Im|GL|SL|Sp|SO|SU|Spec|Hom|Ext|Tor|dim|ker|coker|rank|det|tr|vol|[A-Z])\([^()\s]{1,180}\)(?:(?:_|\^)(?:\{[^{}\n]{1,80}\}|[A-Za-z0-9\u0370-\u03ff+-]))*|[\u0370-\u03ff])/g;
     const result: { text: string; math: boolean; display: boolean; source?: string; citation?: { key: string; locator: string } }[] = [];
     let cursor = 0;
     for (const match of source.matchAll(pattern)) {
@@ -143,7 +145,7 @@ function MathText({ value, block = false, citations = [] }: { value: string; blo
     }
     if (cursor < source.length) result.push({ text: source.slice(cursor).replace(/\uE000/g, '$'), math: false, display: false });
     return result;
-  }, [value]);
+  }, [value, explicitOnly]);
   const Tag = block ? 'div' : 'span';
   return <Tag className={`math-text ${block ? 'math-text-block' : ''}`}>{parts.map((part, index) => part.citation ? <InlineCitation key={index} mention={part.citation} citations={citations} /> : part.math ? <span key={index} className={part.display ? 'math-display' : 'math-inline'} data-source={part.source} dangerouslySetInnerHTML={{ __html: part.text }} /> : <span key={index}>{part.text}</span>)}</Tag>;
 }
@@ -243,6 +245,8 @@ function displayUnitLabel(unit: Pick<AuditNode, 'kind' | 'label' | 'title'> | Pi
 }
 function unitId(paperId: string, nodeId: string) { return `${paperId}::${nodeId}`; }
 function makeId() { return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `patch-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+function arxivBaseId(value: string) { return value.replace(/^arXiv:/i, '').replace(/v\d+$/i, ''); }
+function arxivVersionNumber(value: string) { return Number(/v(\d+)$/i.exec(value)?.[1] ?? 0); }
 function fileAsBase64(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('The reference file could not be read.')); reader.onload = () => resolve(String(reader.result || '').split(',')[1] || ''); reader.readAsDataURL(file); }); }
 function parseJsonObject(rawText: string) {
   const clean = rawText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -265,6 +269,121 @@ function sourceBlockAsNode(block: SourceBlock, patches: WorkingPatch[]): AuditNo
   const value = sourceBlockValue(block, patches);
   const kind: NodeKind = block.kind === 'section' ? 'section' : block.kind === 'figure' ? 'figure' : block.kind === 'table' ? 'table' : 'paragraph';
   return { id: sourceBlockUnitId(block), kind, label: kind === 'section' ? value : '', title: kind === 'section' ? value : kind === 'figure' ? value || 'Paper figure' : kind === 'table' ? block.caption || 'Paper table' : 'Author text', statement: value, proofText: '', citations: block.citations ?? [], status: 'verified', anchor: { label: kind === 'section' ? value : kind === 'table' ? 'Author table' : 'Author text', page: null, confidence: 'verified' }, role: kind === 'section' ? 'Section heading and the text that follows it.' : kind === 'figure' ? 'An original figure and its caption.' : kind === 'table' ? 'An original table from the paper.' : 'A paragraph of the original author text.', dependencies: [], proofSketch: [], whyItMatters: '', expandable: false };
+}
+
+function parseVersionComparison(rawText: string): VersionComparison {
+  const parsed = parseJsonObject(rawText);
+  const changeTypes = new Set<VersionChange['changeType']>(['added', 'removed', 'strengthened', 'weakened', 'corrected', 'reorganized', 'wording']);
+  const significances = new Set<VersionChange['significance']>(['mathematical', 'proof-level', 'expository', 'uncertain']);
+  return {
+    summary: readString(parsed.summary),
+    changedUnits: asArray(parsed.changedUnits).map((item): VersionChange => { const change = item as Record<string, unknown>; return { label: readString(change.label, 'Changed unit'), changeType: changeTypes.has(change.changeType as VersionChange['changeType']) ? change.changeType as VersionChange['changeType'] : 'wording', before: readString(change.before), after: readString(change.after), significance: significances.has(change.significance as VersionChange['significance']) ? change.significance as VersionChange['significance'] : 'uncertain', dependencyImpact: readString(change.dependencyImpact) }; }),
+    proofChanges: asArray(parsed.proofChanges).map(String), notationChanges: asArray(parsed.notationChanges).map(String), editorialChanges: asArray(parsed.editorialChanges).map(String), dependencyImpact: asArray(parsed.dependencyImpact).map(String), readingRecommendation: readString(parsed.readingRecommendation), warnings: asArray(parsed.warnings).map(String),
+  };
+}
+
+function updateMatchText(value: string) {
+  return cleanTeXProse(value || '').toLowerCase().replace(/\\[a-z]+/g, ' ').replace(/[^a-z0-9\u00c0-\u024f\u0370-\u03ff]+/g, ' ').trim();
+}
+function updateSimilarity(left: string, right: string) {
+  const a = new Set(updateMatchText(left).split(/\s+/).filter((token) => token.length > 1)); const b = new Set(updateMatchText(right).split(/\s+/).filter((token) => token.length > 1));
+  if (!a.size && !b.size) return 1; if (!a.size || !b.size) return 0;
+  let shared = 0; for (const token of a) if (b.has(token)) shared += 1;
+  return (2 * shared) / (a.size + b.size);
+}
+function updateNodeText(node: AuditNode) { return [node.label, node.title, node.statement, node.proofText.slice(0, 1200)].filter(Boolean).join(' '); }
+function updateBlockText(block: SourceBlock) { return [block.title, block.caption, block.content, block.proofText].filter(Boolean).join(' '); }
+
+function buildUpdateUnitMap(previous: PaperAudit, next: PaperAudit) {
+  const nodeMap: Record<string, string> = {}; const usedNodes = new Set<string>();
+  previous.nodes.forEach((oldNode, oldIndex) => {
+    const candidates = next.nodes.map((newNode, newIndex) => {
+      if (oldNode.kind !== newNode.kind) return { node: newNode, score: -1 };
+      const oldLabel = updateMatchText(oldNode.label); const newLabel = updateMatchText(newNode.label); const oldTitle = updateMatchText(oldNode.title); const newTitle = updateMatchText(newNode.title);
+      const labelScore = oldLabel && oldLabel === newLabel ? 0.46 : 0; const titleScore = oldTitle && oldTitle === newTitle ? 0.24 : 0;
+      const textScore = updateSimilarity(updateNodeText(oldNode), updateNodeText(newNode)) * 0.55; const positionScore = Math.max(0, 0.08 - Math.abs(oldIndex / Math.max(1, previous.nodes.length) - newIndex / Math.max(1, next.nodes.length)) * 0.08);
+      return { node: newNode, score: labelScore + titleScore + textScore + positionScore };
+    }).filter((item) => !usedNodes.has(item.node.id)).sort((left, right) => right.score - left.score);
+    if (candidates[0] && candidates[0].score >= 0.38) { nodeMap[oldNode.id] = candidates[0].node.id; usedNodes.add(candidates[0].node.id); }
+  });
+  const blockMap: Record<string, string> = {}; const usedBlocks = new Set<string>();
+  previous.sourceBlocks.forEach((oldBlock, oldIndex) => {
+    let candidates = next.sourceBlocks.filter((block) => block.kind === oldBlock.kind && !usedBlocks.has(block.id));
+    if ((oldBlock.kind === 'result' || oldBlock.kind === 'proof') && oldBlock.nodeId && nodeMap[oldBlock.nodeId]) candidates = candidates.filter((block) => block.nodeId === nodeMap[oldBlock.nodeId]);
+    const ranked = candidates.map((newBlock, newIndex) => {
+      const exactTitle = updateMatchText(oldBlock.title || oldBlock.caption) && updateMatchText(oldBlock.title || oldBlock.caption) === updateMatchText(newBlock.title || newBlock.caption) ? 0.5 : 0;
+      const textScore = updateSimilarity(updateBlockText(oldBlock), updateBlockText(newBlock)) * 0.65; const positionScore = Math.max(0, 0.08 - Math.abs(oldIndex / Math.max(1, previous.sourceBlocks.length) - newIndex / Math.max(1, next.sourceBlocks.length)) * 0.08);
+      return { block: newBlock, score: exactTitle + textScore + positionScore };
+    }).sort((left, right) => right.score - left.score);
+    const threshold = oldBlock.kind === 'result' || oldBlock.kind === 'proof' ? 0.18 : oldBlock.kind === 'paragraph' ? 0.48 : 0.34;
+    if (ranked[0] && ranked[0].score >= threshold) { blockMap[oldBlock.id] = ranked[0].block.id; usedBlocks.add(ranked[0].block.id); }
+  });
+  const unitMap = { ...nodeMap }; for (const [from, to] of Object.entries(blockMap)) unitMap[sourceBlockUnitId(previous.sourceBlocks.find((block) => block.id === from)!)] = sourceBlockUnitId(next.sourceBlocks.find((block) => block.id === to)!);
+  return { nodeMap, blockMap, unitMap };
+}
+
+function mergeUpdatedField(original: string, edited: string, latest: string) {
+  if (edited === original) return { value: latest, conflict: false }; if (latest === original) return { value: edited, conflict: false };
+  let prefix = 0; while (prefix < original.length && prefix < edited.length && original[prefix] === edited[prefix]) prefix += 1;
+  let suffix = 0; while (suffix < original.length - prefix && suffix < edited.length - prefix && original[original.length - 1 - suffix] === edited[edited.length - 1 - suffix]) suffix += 1;
+  const removed = original.slice(prefix, original.length - suffix); const inserted = edited.slice(prefix, edited.length - suffix);
+  if (removed && latest.split(removed).length === 2) return { value: latest.replace(removed, inserted), conflict: false };
+  if (!removed && prefix <= latest.length && latest.slice(Math.max(0, prefix - 20), prefix) === original.slice(Math.max(0, prefix - 20), prefix)) return { value: `${latest.slice(0, prefix)}${inserted}${latest.slice(prefix)}`, conflict: false };
+  return { value: latest, conflict: true };
+}
+
+function unitBaseline(audit: PaperAudit, id: string) {
+  const node = audit.nodes.find((item) => item.id === id); if (node) return { title: node.title, statement: node.statement, proofText: node.proofText, nodeKind: node.kind };
+  const block = audit.sourceBlocks.find((item) => sourceBlockUnitId(item) === id); if (!block) return null;
+  return { title: block.title, statement: originalSourceBlockValue(block), proofText: '', nodeKind: block.kind === 'section' ? 'section' as const : block.kind === 'figure' ? 'figure' as const : block.kind === 'table' ? 'table' as const : 'paragraph' as const };
+}
+
+function migrateReaderWork({ paper, previous, next, notes, nodeNotes, nodeAnswers, expanded, marks, patches }: { paper: Paper; previous: PaperAudit; next: PaperAudit; notes: Note[]; nodeNotes: Record<string, string>; nodeAnswers: Record<string, string>; expanded: Record<string, boolean>; marks: Record<string, Exclude<ReadingMark, ''>>; patches: WorkingPatch[] }) {
+  const maps = buildUpdateUnitMap(previous, next); const items: UpdateMigrationItem[] = []; const conflicts: UpdateMigrationItem[] = [];
+  const migratedNotes: Note[] = []; let notesCarried = 0; let notesToPaper = 0;
+  for (const note of notes) {
+    if (note.nodeId === '__paper__') { migratedNotes.push(note); notesCarried += 1; continue; }
+    const target = maps.unitMap[note.nodeId];
+    if (target) { migratedNotes.push({ ...note, nodeId: target }); notesCarried += 1; items.push({ type: 'note', label: note.anchor || 'Reader note', status: 'carried', detail: 'Reattached to the matching unit in the latest version.', fromId: note.nodeId, toId: target }); }
+    else { const preserved = { ...note, id: makeId(), nodeId: '__paper__', anchor: `From ${paper.arxivId} · ${note.anchor}`, text: `Previous-version note (${note.anchor}):\n\n${note.text}` }; migratedNotes.push(preserved); notesToPaper += 1; const item = { type: 'note' as const, label: note.anchor || 'Reader note', status: 'paper-note' as const, detail: 'The original anchor changed, so this was preserved as a paper-level note.', fromId: note.nodeId, toId: '__paper__' }; items.push(item); conflicts.push(item); }
+  }
+  const migratedNodeNotes: Record<string, string> = {}; for (const [id, value] of Object.entries(nodeNotes)) { const target = maps.unitMap[id]; if (target) migratedNodeNotes[target] = value; else if (value.trim()) { migratedNotes.push({ id: makeId(), paperId: paper.id, nodeId: '__paper__', anchor: `From ${paper.arxivId}`, text: `Previous-version note:\n\n${value}`, latex: '', createdAt: new Date().toISOString() }); notesToPaper += 1; } }
+  // AI answers belong to the old audit thread. They remain in the archived
+  // snapshot but are not shown as if they had been checked against new text.
+  const migratedAnswers: Record<string, string> = {}; void nodeAnswers;
+  const migratedExpanded: Record<string, boolean> = {}; for (const [id, value] of Object.entries(expanded)) { const target = maps.unitMap[id]; if (target) migratedExpanded[target] = value; }
+  const migratedMarks: Record<string, Exclude<ReadingMark, ''>> = {}; let marksCarried = 0; for (const [id, value] of Object.entries(marks)) { const target = maps.blockMap[id] ?? maps.unitMap[id]; if (target) { migratedMarks[target] = value; marksCarried += 1; items.push({ type: 'mark', label: 'Reading mark', status: 'carried', detail: 'Moved to the matching environment.', fromId: id, toId: target }); } }
+  const migratedPatches: WorkingPatch[] = []; let editsCarried = 0; let editsReview = 0;
+  for (const patch of patches.filter((item) => item.source === 'manual')) {
+    if (patch.kind === 'add') { const afterNodeId = maps.unitMap[patch.afterNodeId] ?? next.nodes.at(-1)?.id ?? ''; migratedPatches.push({ ...patch, afterNodeId }); editsCarried += 1; items.push({ type: 'edit', label: patch.title || 'Reader addition', status: 'carried', detail: 'Reader-added content was retained in the working edition.', fromId: patch.afterNodeId, toId: afterNodeId }); continue; }
+    const targetId = maps.unitMap[patch.nodeId]; const oldBase = unitBaseline(previous, patch.nodeId); const newBase = targetId ? unitBaseline(next, targetId) : null;
+    if (!targetId || !oldBase || !newBase) { editsReview += 1; const item = { type: 'edit' as const, label: patch.title || 'Working edit', status: 'review' as const, detail: 'The edited source unit has no safe match in the latest version. The edit remains in the archived version for review.', fromId: patch.nodeId, toId: '' }; items.push(item); conflicts.push(item); continue; }
+    if (patch.kind === 'delete') { migratedPatches.push({ ...patch, nodeId: targetId }); editsCarried += 1; items.push({ type: 'edit', label: patch.title || 'Deleted unit', status: 'carried', detail: 'The reader deletion was applied to the matching latest-version unit.', fromId: patch.nodeId, toId: targetId }); continue; }
+    const title = mergeUpdatedField(oldBase.title, patch.title, newBase.title); const statement = mergeUpdatedField(oldBase.statement, patch.statement, newBase.statement); const proofText = mergeUpdatedField(oldBase.proofText, patch.proofText, newBase.proofText);
+    if (title.conflict || statement.conflict || proofText.conflict) { editsReview += 1; const item = { type: 'edit' as const, label: patch.title || 'Working edit', status: 'review' as const, detail: 'Both the author and reader changed the same text. The new author text is kept; the archived edit is flagged for review.', fromId: patch.nodeId, toId: targetId }; items.push(item); conflicts.push(item); continue; }
+    migratedPatches.push({ ...patch, nodeId: targetId, title: title.value, statement: statement.value, proofText: proofText.value }); editsCarried += 1; items.push({ type: 'edit', label: patch.title || 'Working edit', status: 'carried', detail: 'Merged onto the latest author text with a three-way source comparison.', fromId: patch.nodeId, toId: targetId });
+  }
+  return { maps, reader: { notes: migratedNotes, nodeNotes: migratedNodeNotes, nodeAnswers: migratedAnswers, expanded: migratedExpanded, marks: migratedMarks }, patches: migratedPatches, migration: { notesCarried, notesToPaper, marksCarried, editsCarried, editsReview, items, conflicts } };
+}
+
+function automaticEditorialPatches(audit: PaperAudit, existing: WorkingPatch[]) {
+  const manualReplacements = new Set(existing.filter((patch) => patch.kind === 'replace' && patch.source === 'manual').map((patch) => patch.nodeId)); const automatic = new Map<string, WorkingPatch>();
+  for (const correction of audit.editorialCorrections ?? []) {
+    const sourceNode = audit.nodes.find((item) => item.id === correction.nodeId); if (!sourceNode || correction.confidence !== 'high' || !correction.replacement.trim()) continue;
+    const directBlock = audit.sourceBlocks.find((block) => block.nodeId === sourceNode.id && (correction.field !== 'proofText' || block.kind === 'proof'));
+    const originalNeedles = [correction.original.trim(), correction.field === 'proofText' ? sourceNode.proofText.trim() : sourceNode.statement.trim()].filter(Boolean);
+    const embeddedBlock = directBlock ? undefined : audit.sourceBlocks.find((block) => { const value = originalSourceBlockValue(block); return originalNeedles.some((needle) => value.includes(needle)); });
+    if (embeddedBlock) {
+      const targetId = sourceBlockUnitId(embeddedBlock); if (manualReplacements.has(targetId)) continue;
+      const original = originalSourceBlockValue(embeddedBlock); const current = automatic.get(targetId) ?? { id: makeId(), kind: 'replace' as const, nodeId: targetId, title: embeddedBlock.title || sourceNode.title, statement: original, proofText: '', nodeKind: embeddedBlock.kind === 'section' ? 'section' as const : embeddedBlock.kind === 'figure' ? 'figure' as const : embeddedBlock.kind === 'table' ? 'table' as const : 'paragraph' as const, afterNodeId: '', rationale: '', dependencies: [], proofSketch: [], source: 'ai' as const, createdAt: new Date().toISOString() };
+      const needle = originalNeedles.find((candidate) => current.statement.includes(candidate)); if (!needle) continue;
+      current.statement = current.statement.replace(needle, correction.replacement.trim()); current.rationale = [current.rationale, correction.rationale].filter(Boolean).join(' '); automatic.set(targetId, current); continue;
+    }
+    if (manualReplacements.has(sourceNode.id)) continue;
+    const current = automatic.get(sourceNode.id) ?? { id: makeId(), kind: 'replace' as const, nodeId: sourceNode.id, title: sourceNode.title, statement: sourceNode.statement, proofText: sourceNode.proofText, nodeKind: sourceNode.kind, afterNodeId: '', rationale: '', dependencies: sourceNode.dependencies, proofSketch: sourceNode.proofSketch, source: 'ai' as const, createdAt: new Date().toISOString() };
+    current[correction.field] = correction.replacement.trim(); current.rationale = [current.rationale, correction.rationale].filter(Boolean).join(' '); automatic.set(sourceNode.id, current);
+  }
+  return [...automatic.values()];
 }
 
 function resolveSourceBlockIndex(requestedId: string, requestedNode: AuditNode | undefined, sourceBlocks: SourceBlock[], patches: WorkingPatch[]) {
@@ -376,6 +495,8 @@ export default function Home() {
   const [expanded, setExpanded] = useState<Record<string, Record<string, boolean>>>({});
   const [marks, setMarks] = useState<Record<string, Record<string, Exclude<ReadingMark, ''>>>>({});
   const [patches, setPatches] = useState<Record<string, WorkingPatch[]>>({});
+  const [updates, setUpdates] = useState<Record<string, PaperUpdateRecord[]>>({});
+  const [updatePanel, setUpdatePanel] = useState<PaperUpdateRecord | null>(null);
   const [, setLinks] = useState<CrossLink[]>([]);
   const [graph, setGraph] = useState<Graph>(emptyGraph);
   const [profile, setProfile] = useState<Profile>(defaultProfile);
@@ -385,6 +506,7 @@ export default function Home() {
   const [vaultSidebarOpen, setVaultSidebarOpen] = useState(true);
   const [importing, setImporting] = useState(false);
   const [analysingId, setAnalysingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [askingId, setAskingId] = useState<string | null>(null);
   const [bridge, setBridge] = useState<Bridge | null>(null);
   const [vaultReady, setVaultReady] = useState(false);
@@ -398,7 +520,7 @@ export default function Home() {
 
   function notify(message: string) { setNotice(message); window.setTimeout(() => setNotice(''), 8500); }
   function applySnapshot(snapshot: VaultSnapshot) {
-    setPapers(snapshot.papers); setAudits(Object.fromEntries(Object.entries(snapshot.audits).map(([paperId, paperAudit]) => [paperId, normalizeAuditCitations(paperAudit)]))); setNotes(normalizeNotes(snapshot.notes)); setNodeNotes(snapshot.nodeNotes); setNodeAnswers(snapshot.nodeAnswers); setExpanded(snapshot.expanded); setMarks(snapshot.marks ?? {}); setPatches(snapshot.patches ?? {}); setLinks(snapshot.links); setGraph(snapshot.graph ?? emptyGraph);
+    setPapers(snapshot.papers); setAudits(Object.fromEntries(Object.entries(snapshot.audits).map(([paperId, paperAudit]) => [paperId, normalizeAuditCitations(paperAudit)]))); setNotes(normalizeNotes(snapshot.notes)); setNodeNotes(snapshot.nodeNotes); setNodeAnswers(snapshot.nodeAnswers); setExpanded(snapshot.expanded); setMarks(snapshot.marks ?? {}); setPatches(snapshot.patches ?? {}); setUpdates(snapshot.updates ?? {}); setLinks(snapshot.links); setGraph(snapshot.graph ?? emptyGraph);
     if (snapshot.profile) { const next = normalizeReaderProfile(snapshot.profile); if (!window.localStorage.getItem(reasoningDefaultMigrationKey)) window.localStorage.setItem(reasoningDefaultMigrationKey, 'applied'); setProfile(next); }
     setSelectedPaperId((current) => snapshot.papers.some((item) => item.id === current) ? current : snapshot.papers[0]?.id ?? '');
   }
@@ -412,10 +534,10 @@ export default function Home() {
   }, []);
   useEffect(() => { if (!vaultReady || onboardingOpen) return; localStorage.setItem(preferenceKey, JSON.stringify(profile)); void fetch(`${bridgeUrl}/vault/profile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }) }); }, [profile, vaultReady, onboardingOpen]);
   useEffect(() => {
-    if (!vaultReady || !paper) return;
+    if (!vaultReady || !paper || analysingId === paper.id) return;
     const timer = window.setTimeout(() => { void fetch(`${bridgeUrl}/vault/reader`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paperId: paper.id, reader: { notes: notes.filter((item) => item.paperId === paper.id), nodeNotes: nodeNotes[paper.id] ?? {}, nodeAnswers: nodeAnswers[paper.id] ?? {}, expanded: expanded[paper.id] ?? {}, marks: marks[paper.id] ?? {} } }) }); }, 500);
     return () => window.clearTimeout(timer);
-  }, [vaultReady, paper, notes, nodeNotes, nodeAnswers, expanded, marks]);
+  }, [vaultReady, paper, notes, nodeNotes, nodeAnswers, expanded, marks, analysingId]);
 
   async function savePaper(incoming: Paper) {
     const response = await fetch(`${bridgeUrl}/vault/paper`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paper: incoming }) });
@@ -472,6 +594,44 @@ export default function Home() {
     } catch (error) { const message = error instanceof Error ? error.message : 'Analysis failed.'; reportReaderProcess({ id: 'paper-analysis', label: 'AI audit stopped', detail: message, status: 'error' }); notify(message.includes('wait limit') ? `${message} The paper and TeX source are preserved; retry from the library with a faster model or lower effort.` : `${message} Check the local Codex connection and try again.`); void refreshBridge(); }
     finally { setAnalysingId(null); setAnalysisProgress(null); }
   }
+  async function refreshArxivPaper(target: Paper) {
+    const previousAudit = audits[target.id]; if (!previousAudit) { notify('Run the first AI audit before updating this paper.'); return; }
+    if (target.arxivId.startsWith('local-')) { notify('Version refresh is available for arXiv papers.'); return; }
+    const processId = `paper-update:${target.id}`; setAnalysingId(target.id); setUpdatingId(target.id); setAnalysisProgress({ title: target.title, arxivId: target.arxivId, phase: 'metadata', startedAt: Date.now() });
+    try {
+      reportReaderProcess({ id: processId, label: 'Checking latest arXiv version', detail: target.title, status: 'running' });
+      const metadataResponse = await fetch(`/api/arxiv?id=${encodeURIComponent(arxivBaseId(target.arxivId))}`); const metadata = await metadataResponse.json();
+      if (!metadataResponse.ok || !metadata.papers?.[0]) throw new Error(readString(metadata.error, 'The latest arXiv record could not be read.'));
+      const latest = { ...(metadata.papers[0] as Paper), id: target.id, folder: target.folder, state: target.state, tags: target.tags };
+      const currentVersion = arxivVersionNumber(target.arxivId); const latestVersion = arxivVersionNumber(latest.arxivId);
+      if (arxivBaseId(latest.arxivId) !== arxivBaseId(target.arxivId)) throw new Error('arXiv returned a different paper record. Nothing was changed.');
+      if (!latestVersion || latestVersion <= currentVersion) { reportReaderProcess({ id: processId, label: 'Paper is current', detail: `arXiv:${target.arxivId}`, status: 'complete' }); notify(`arXiv:${target.arxivId} is already the latest version.`); return; }
+
+      setAnalysisProgress((current) => ({ title: target.title, arxivId: latest.arxivId, phase: 'analyzing', startedAt: current?.startedAt ?? Date.now() }));
+      reportReaderProcess({ id: processId, label: `Comparing v${currentVersion} → v${latestVersion}`, detail: 'Reading both complete source trees with AI.', status: 'running' });
+      const readerContext = { notes: notes.filter((item) => item.paperId === target.id).map((item) => ({ anchor: item.anchor, text: item.text.slice(0, 600) })), marks: marks[target.id] ?? {}, edits: (patches[target.id] ?? []).filter((item) => item.source === 'manual').map((item) => ({ kind: item.kind, nodeId: item.nodeId, title: item.title, rationale: item.rationale })) };
+      const comparisonResponse = await fetch(`${bridgeUrl}/compare-versions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paper: target, profile, fromVersion: target.arxivId, toVersion: latest.arxivId, readerContext, updateMode: true }) });
+      const comparisonData = await comparisonResponse.json(); if (!comparisonResponse.ok) throw new Error(comparisonData.error || 'AI version comparison failed.');
+      const comparison = parseVersionComparison(readString(comparisonData.text));
+
+      reportReaderProcess({ id: processId, label: `Auditing v${latestVersion}`, detail: 'Checking the latest statements, proofs, citations, and dependencies.', status: 'running' });
+      const analysisResponse = await fetch(`${bridgeUrl}/analyze`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paper: latest, profile, correctnessAudit: true, detailedAudit: true, updateMode: true, updateContext: { fromVersion: target.arxivId, toVersion: latest.arxivId, comparison, priorAudit: { centralQuestion: previousAudit.audit.centralQuestion, mainContribution: previousAudit.audit.mainContribution, verificationWarnings: previousAudit.audit.verificationWarnings } } }) });
+      const analysisData = await analysisResponse.json(); if (!analysisResponse.ok) throw new Error(analysisData.error || 'The latest-version AI audit failed.');
+      const latestAudit = parseAudit(readString(analysisData.text), readString(analysisData.threadId));
+
+      reportReaderProcess({ id: processId, label: 'Merging reader work', detail: 'Reattaching notes and marks; three-way merging working edits.', status: 'running' });
+      const migration = migrateReaderWork({ paper: target, previous: previousAudit, next: latestAudit, notes: notes.filter((item) => item.paperId === target.id), nodeNotes: nodeNotes[target.id] ?? {}, nodeAnswers: nodeAnswers[target.id] ?? {}, expanded: expanded[target.id] ?? {}, marks: marks[target.id] ?? {}, patches: patches[target.id] ?? [] });
+      const aiCorrections = automaticEditorialPatches(latestAudit, migration.patches); const nextPatches = [...migration.patches, ...aiCorrections];
+      const update: PaperUpdateRecord = { id: makeId(), paperId: target.id, fromVersion: target.arxivId, toVersion: latest.arxivId, createdAt: new Date().toISOString(), status: 'updated', comparison, migration: migration.migration };
+      const commitResponse = await fetch(`${bridgeUrl}/vault/paper/update-commit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paper: latest, audit: latestAudit, reader: migration.reader, patches: nextPatches, update, nodeMap: migration.maps.nodeMap, sourceRecord: analysisData.sourceRecord ?? {} }) });
+      const commitData = await commitResponse.json(); if (!commitResponse.ok) throw new Error(commitData.error || 'The latest version could not be committed locally.');
+      applySnapshot(commitData.snapshot as VaultSnapshot); setSelectedNodeId((current) => migration.maps.unitMap[current] ?? latestAudit.nodes[0]?.id ?? ''); setUpdatePanel(commitData.update as PaperUpdateRecord);
+      reportReaderProcess({ id: processId, label: `Updated to v${latestVersion}`, detail: `${comparison.changedUnits.length} source changes · ${migration.migration.notesCarried} notes · ${migration.migration.editsCarried} edits carried`, status: 'complete' });
+      notify(`Updated to arXiv:${latest.arxivId}. ${comparison.changedUnits.length} changed unit${comparison.changedUnits.length === 1 ? '' : 's'} found; ${migration.migration.conflicts.length ? `${migration.migration.conflicts.length} reader item${migration.migration.conflicts.length === 1 ? '' : 's'} need review.` : 'all reader work was integrated.'}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The paper update failed.'; reportReaderProcess({ id: processId, label: 'Paper update stopped', detail: `${message} The current version was kept.`, status: 'error' }); notify(`${message} The current paper, notes, and edits were not replaced.`);
+    } finally { setAnalysingId(null); setUpdatingId(null); setAnalysisProgress(null); }
+  }
   async function importArxiv(raw: string, convertPdfToLatex = false, correctnessAudit = true, detailedAudit = true) {
     setAnalysisProgress({ title: 'Looking up arXiv metadata', arxivId: raw, phase: 'metadata', startedAt: Date.now() });
     try {
@@ -519,11 +679,11 @@ export default function Home() {
     {view === 'discover' && <aside className={`local-vault-sidebar hidden min-h-screen flex-col border-r border-[#e2e6e0] bg-[#f0f2ed] p-4 lg:flex ${vaultSidebarOpen ? '' : 'collapsed'}`}><div className="flex items-start justify-between"><div><h1 className="text-lg font-bold tracking-[-.04em]">Papers</h1></div><div className="vault-head-actions"><button onClick={() => setVaultSidebarOpen(false)} title="Collapse papers" aria-label="Collapse papers">‹</button><button onClick={() => setImporting(true)} title="Import paper" aria-label="Import paper">+</button></div></div><button onClick={() => setImporting(true)} className="my-4 rounded-md bg-[#deebe1] px-3 py-2 text-left text-[11px] font-bold text-[#2d604b]">+ Import paper</button><div className="mb-2 flex justify-between text-[10px] font-bold text-[#677068]"><span>YOUR LIBRARY</span><span>{papers.length}</span></div><div className="min-h-0 flex-1 space-y-1 overflow-y-auto">{papers.length ? papers.map((item) => <button key={item.id} onClick={() => { setSelectedPaperId(item.id); setView('reader'); }} className="w-full rounded-lg p-2 text-left hover:bg-[#e7ebe6]"><span className="flex items-start gap-2"><i className={`mt-1 h-1.5 w-1.5 flex-none rounded-full ${audits[item.id] ? 'bg-[#499b70]' : 'bg-[#d6b756]'}`} /><span><b className="block text-[11px] leading-[1.35]">{item.title}</b><small className="mt-1 block text-[9px] text-[#788178]">{item.arxivId}</small></span></span></button>) : <p className="rounded-lg border border-dashed border-[#d5ddd5] p-3 text-[11px] leading-5 text-[#788178]">Import a paper to begin.</p>}</div></aside>}{!vaultSidebarOpen && view === 'discover' && <button className="vault-reopen hidden lg:grid" onClick={() => setVaultSidebarOpen(true)} title="Expand papers" aria-label="Expand papers">›</button>}
     <section className="min-w-0"><header className="app-header"><div className="app-header-title">{view === 'reader' && paper ? <><span />{paper.title}</> : view === 'graph' ? 'Local dependency graph' : view[0].toUpperCase() + view.slice(1)}</div><div className="app-header-actions"><ModelControls profile={profile} setProfile={setProfile} bridge={bridge} compact /><button onClick={() => setImporting(true)} className="header-import">+ Import</button></div></header>{notice && <div className="notice-banner">{notice}</div>}
       {view === 'reader' && <Reader paper={paper} audit={audit} openImport={() => setImporting(true)} selectedNodeId={selectedNodeId} setSelectedNodeId={setSelectedNodeId} expanded={paper ? expanded[paper.id] ?? {} : {}} setExpanded={(id, value) => paper && setExpanded((current) => ({ ...current, [paper.id]: { ...current[paper.id], [id]: value } }))} marks={paper ? marks[paper.id] ?? {} : {}} setMark={(id, value) => paper && setMarks((current) => { const paperMarks = { ...(current[paper.id] ?? {}) }; if (value) paperMarks[id] = value; else delete paperMarks[id]; return { ...current, [paper.id]: paperMarks }; })} readerNotes={paper ? nodeNotes[paper.id] ?? {} : {}} notes={paper ? notes.filter((item) => item.paperId === paper.id) : []} answers={paper ? nodeAnswers[paper.id] ?? {} : {}} patches={paper ? patches[paper.id] ?? [] : []} savePatches={(next) => paper ? saveWorkingPatches(paper.id, next) : Promise.resolve()} suggestEdit={suggestEditorialFix} graph={graph} analysing={analysingId === paper?.id} askingId={askingId} analyze={() => paper && void analyzePaper(paper)} askNode={askNode} saveNote={saveNote} updateNote={updateNote} addLink={addLink} removeLink={removeLink} openUnit={openUnit} profile={profile} />}
-      {view === 'library' && <Library papers={papers} audits={audits} patches={patches} busyId={analysingId} analyze={analyzePaper} updatePaper={updatePaperInfo} removePaper={removePaperFromVault} reorderPapers={reorderLibrary} openUnit={openUnit} openImport={() => setImporting(true)} />}
+      {view === 'library' && <Library papers={papers} audits={audits} patches={patches} updates={updates} busyId={analysingId} updatingId={updatingId} analyze={analyzePaper} refreshPaper={refreshArxivPaper} showUpdate={setUpdatePanel} updatePaper={updatePaperInfo} removePaper={removePaperFromVault} reorderPapers={reorderLibrary} openUnit={openUnit} openImport={() => setImporting(true)} />}
       {view === 'graph' && <GraphView graph={graph} papers={papers} openUnit={openUnit} />}
       {view === 'discover' && <Discover papers={discoveries} saved={papers} save={saveDiscovery} refresh={refreshDiscoveries} loading={loadingDiscoveries} selectedAreas={profile.areas} />}
       {view === 'settings' && <Settings profile={profile} setProfile={setProfile} bridge={bridge} />}
-    </section>{onboardingOpen && <OnboardingDialog profile={profile} setProfile={setProfile} bridge={bridge} finish={() => setOnboardingOpen(false)} />}{importing && <ImportDialog close={() => setImporting(false)} importArxiv={importArxiv} importLocalSource={importLocalSource} profile={profile} setProfile={setProfile} bridge={bridge} />}<ProcessTray analysis={analysisProgress} profile={profile} bridge={bridge} />
+    </section>{onboardingOpen && <OnboardingDialog profile={profile} setProfile={setProfile} bridge={bridge} finish={() => setOnboardingOpen(false)} />}{importing && <ImportDialog close={() => setImporting(false)} importArxiv={importArxiv} importLocalSource={importLocalSource} profile={profile} setProfile={setProfile} bridge={bridge} />}{updatePanel && <PaperUpdatePanel paper={papers.find((item) => item.id === updatePanel.paperId)} audit={audits[updatePanel.paperId]} update={updatePanel} openUnit={openUnit} close={() => setUpdatePanel(null)} />}<ProcessTray analysis={analysisProgress} profile={profile} bridge={bridge} />
   </main>;
 }
 
@@ -1203,8 +1363,7 @@ function VersionComparisonPanel({ paper, profile, audit, openUnit, close }: { pa
     try {
       const response = await fetch(`${bridgeUrl}/compare-versions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paper, profile, fromVersion, toVersion }) });
       const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Version comparison failed.');
-      const parsed = parseJsonObject(readString(data.text));
-      setResult({ summary: readString(parsed.summary), changedUnits: asArray(parsed.changedUnits) as VersionChange[], proofChanges: asArray(parsed.proofChanges).map(String), notationChanges: asArray(parsed.notationChanges).map(String), editorialChanges: asArray(parsed.editorialChanges).map(String), dependencyImpact: asArray(parsed.dependencyImpact).map(String), readingRecommendation: readString(parsed.readingRecommendation), warnings: asArray(parsed.warnings).map(String) });
+      setResult(parseVersionComparison(readString(data.text)));
       setSources(data.sources ?? null); reportReaderProcess({ id: processId, label: 'Version comparison ready', detail: `${fromVersion} → ${toVersion}`, status: 'complete' });
     } catch (cause) { const message = cause instanceof Error ? cause.message : 'Version comparison failed.'; setError(message); reportReaderProcess({ id: processId, label: 'Version comparison stopped', detail: message, status: 'error' }); } finally { setBusy(false); }
   }
@@ -1214,7 +1373,16 @@ function VersionComparisonPanel({ paper, profile, audit, openUnit, close }: { pa
   </section></div>;
 }
 
-function ComparisonList({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) { return <section className={`comparison-list ${warning ? 'comparison-warning' : ''}`}><div><b>{title}</b><span>{items.length}</span></div>{items.length ? <ul>{items.map((item, index) => <li key={index}>{item}</li>)}</ul> : <p>No material change identified.</p>}</section>; }
+function PaperUpdatePanel({ paper, audit, update, openUnit, close }: { paper?: Paper; audit?: PaperAudit; update: PaperUpdateRecord; openUnit: (paperId: string, nodeId: string) => void; close: () => void }) {
+  const [tab, setTab] = useState<'changes' | 'reader-work'>('changes'); const comparison = update.comparison; const migration = update.migration;
+  function matchingNode(change: VersionChange) { const needle = updateMatchText(change.label); return audit?.nodes.find((node) => updateMatchText(node.label) === needle || updateMatchText(node.title).includes(needle) || needle.includes(updateMatchText(node.label))); }
+  return <div className="edition-overlay" onMouseDown={(event) => { if (event.currentTarget === event.target) close(); }}><section className="paper-update-panel" role="dialog" aria-modal="true" aria-label="Latest arXiv version changes"><header><div><span>arXiv:{update.fromVersion} → arXiv:{update.toVersion}</span><h3>Latest version ready</h3><p>{paper?.title}</p></div><button onClick={close} aria-label="Close update details">×</button></header><nav><button className={tab === 'changes' ? 'active' : ''} onClick={() => setTab('changes')}>Source changes <span>{comparison.changedUnits.length}</span></button><button className={tab === 'reader-work' ? 'active' : ''} onClick={() => setTab('reader-work')}>Your work <span>{migration.conflicts.length ? `${migration.conflicts.length} review` : 'merged'}</span></button></nav>
+    {tab === 'changes' ? <div className="paper-update-body"><section className="paper-update-summary"><b>What changed</b><h4><MathText value={comparison.summary} explicitOnly /></h4><p><MathText value={comparison.readingRecommendation} explicitOnly /></p></section>{comparison.changedUnits.length ? <div className="paper-update-changes">{comparison.changedUnits.map((change, index) => { const match = matchingNode(change); return <article key={`${change.label}:${index}`} className={`update-significance-${change.significance}`}><header><span className={`version-change-type version-${change.changeType}`}>{change.changeType}</span><small>{change.significance}</small>{match && paper && <button onClick={() => { openUnit(paper.id, match.id); close(); }}>Open in paper</button>}</header><h5><MathText value={change.label} explicitOnly /></h5><div><section><b>Previous</b><MathText value={change.before || 'Not present.'} block explicitOnly /></section><span aria-hidden="true">→</span><section><b>Latest</b><MathText value={change.after || 'Removed.'} block explicitOnly /></section></div>{change.dependencyImpact && <footer><b>Logical impact</b><MathText value={change.dependencyImpact} explicitOnly /></footer>}</article>; })}</div> : <div className="paper-update-empty">AI found no material source changes.</div>}<div className="version-detail-grid"><ComparisonList title="Proof changes" items={comparison.proofChanges} /><ComparisonList title="Dependency changes" items={comparison.dependencyImpact} /><ComparisonList title="Notation changes" items={comparison.notationChanges} /><ComparisonList title="Editorial changes" items={comparison.editorialChanges} /></div>{comparison.warnings.length > 0 && <ComparisonList title="Verification warnings" items={comparison.warnings} warning />}</div>
+      : <div className="paper-update-body"><section className="migration-overview"><div><b>{migration.notesCarried}</b><span>notes carried</span></div><div><b>{migration.marksCarried}</b><span>marks carried</span></div><div><b>{migration.editsCarried}</b><span>edits merged</span></div><div className={migration.conflicts.length ? 'needs-review' : ''}><b>{migration.conflicts.length}</b><span>need review</span></div></section>{migration.conflicts.length > 0 && <section className="migration-conflicts"><header><b>Needs your review</b><span>The latest author text was kept.</span></header>{migration.conflicts.map((item, index) => <article key={`${item.type}:${item.fromId}:${index}`}><span>{item.type}</span><div><b>{item.label}</b><p>{item.detail}</p></div></article>)}</section>}<section className="migration-list"><header><b>Integration record</b><span>{migration.items.length}</span></header>{migration.items.length ? migration.items.map((item, index) => <article key={`${item.type}:${item.fromId}:${index}`}><i className={`migration-status-${item.status}`}>{item.status === 'carried' ? '✓' : item.status === 'paper-note' ? 'N' : '!'}</i><div><b>{item.label}</b><p>{item.detail}</p></div></article>) : <p>No reader notes, marks, or manual edits were attached to the previous version.</p>}</section><p className="migration-archive-note">The complete previous paper, audit, notes, and working edition remain archived in this paper’s local folder.</p></div>}
+  </section></div>;
+}
+
+function ComparisonList({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) { return <section className={`comparison-list ${warning ? 'comparison-warning' : ''}`}><div><b>{title}</b><span>{items.length}</span></div>{items.length ? <ul>{items.map((item, index) => <li key={index}><MathText value={item} explicitOnly /></li>)}</ul> : <p>No material change identified.</p>}</section>; }
 
 function WorkingEditionEditor({ node, originalNode, edition, patches, savePatches, suggestEdit }: { node: AuditNode; originalNode?: AuditNode; edition: EditionMode; patches: WorkingPatch[]; savePatches: (patches: WorkingPatch[]) => Promise<void>; suggestEdit: (node: AuditNode) => Promise<EditorialSuggestion> }) {
   const currentPatch = patchForNode(patches, node.id);
@@ -1348,7 +1516,7 @@ function CloudSharing({ papers }: { papers: Paper[] }) {
   return <section className={`cloud-sharing ${open ? 'open' : ''}`}><button className="cloud-sharing-disclosure" onClick={toggleOpen} aria-expanded={open}><span><b>Cloud sharing</b><small>{open ? 'Choose papers, reading data, and a destination.' : 'Save selected papers, notes, edits, and preferences.'}</small></span><span>{open ? '−' : '+'}</span></button>{open && <div className="cloud-sharing-body"><div className="cloud-provider-row" aria-label="Cloud destination">{providers.map((item) => <button key={item.id} className={provider === item.id ? 'active' : ''} onClick={() => { setProvider(item.id); setSaved(null); setError(''); }}><i className={item.available ? 'connected' : ''} /><span>{item.label}</span></button>)}{loading && <span className="cloud-provider-loading"><i />Checking…</span>}</div>{currentProvider && <div className="cloud-connection"><span><i className={currentProvider.available ? 'connected' : ''} />{currentProvider.detail}</span><div>{currentProvider.connectUrl && <a href={currentProvider.connectUrl} target="_blank" rel="noreferrer">{currentProvider.available ? 'Open cloud' : 'Sign in'}</a>}<button onClick={() => void refresh()} disabled={loading}>Refresh</button></div></div>}{provider === 'git' && <div className="cloud-git-fields"><label><span>Remote repository</span><input value={gitRemote} onChange={(event) => setGitRemote(event.target.value)} placeholder="git@github.com:you/reading-library.git" /></label><label><span>Branch</span><input value={gitBranch} onChange={(event) => setGitBranch(event.target.value)} /></label><p>Uses your existing SSH key or system Git credentials. <a href="https://github.com/login" target="_blank" rel="noreferrer">GitHub</a> · <a href="https://gitlab.com/users/sign_in" target="_blank" rel="noreferrer">GitLab</a> · <a href="https://bitbucket.org/account/signin/" target="_blank" rel="noreferrer">Bitbucket</a></p></div>}<div className="cloud-share-columns"><section><header><b>Papers</b><div><button onClick={() => setSelected(papers.map((paper) => paper.id))}>All</button><button onClick={() => setSelected([])}>None</button></div></header><div className="cloud-paper-list">{papers.map((paper) => <label key={paper.id}><input type="checkbox" checked={selected.includes(paper.id)} onChange={() => togglePaper(paper.id)} /><span><b>{paper.title}</b><small>arXiv:{paper.arxivId}</small></span></label>)}</div></section><section><header><b>Include</b><small>Paper records are always included.</small></header><div className="cloud-part-list">{partChoices.map(([key, label]) => <label key={key}><input type="checkbox" checked={parts[key]} onChange={(event) => setParts({ ...parts, [key]: event.target.checked })} /><span>{label}</span></label>)}</div><label className="cloud-share-title"><span>Share name</span><input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} /></label></section></div>{error && <p className="cloud-share-error">{error}</p>}{saved && <div className="cloud-share-saved"><div><b>Cloud copy saved</b><span>{saved.location}</span></div><button onClick={() => void copyLocation()}>{copied ? 'Copied' : 'Copy location'}</button>{saved.connectUrl && <a href={saved.connectUrl} target="_blank" rel="noreferrer">Open cloud</a>}</div>}<footer className="cloud-share-footer"><span>{selected.length} paper{selected.length === 1 ? '' : 's'} selected</span><button onClick={() => void createShare()} disabled={sharing || !selected.length || !currentProvider?.available || (provider === 'git' && !gitRemote.trim())}>{sharing ? <><i />Saving…</> : 'Create cloud copy'}</button></footer>{recent.length > 0 && <details className="cloud-share-history"><summary>Recent cloud copies <span>{recent.length}</span></summary><div>{recent.slice(0, 6).map((item) => <article key={item.id}><div><b>{item.title}</b><span>{item.providerLabel} · {item.paperCount} paper{item.paperCount === 1 ? '' : 's'}</span></div><small>{new Date(item.createdAt).toLocaleString()}</small></article>)}</div></details>}</div>}</section>;
 }
 
-function Library({ papers, audits, patches, busyId, analyze, updatePaper, removePaper, reorderPapers, openUnit, openImport }: { papers: Paper[]; audits: Record<string, PaperAudit>; patches: Record<string, WorkingPatch[]>; busyId: string | null; analyze: (paper: Paper) => Promise<void>; updatePaper: (paper: Paper) => Promise<void>; removePaper: (paperId: string) => Promise<void>; reorderPapers: (papers: Paper[]) => Promise<void>; openUnit: (paperId: string, nodeId: string) => void; openImport: () => void }) {
+function Library({ papers, audits, patches, updates, busyId, updatingId, analyze, refreshPaper, showUpdate, updatePaper, removePaper, reorderPapers, openUnit, openImport }: { papers: Paper[]; audits: Record<string, PaperAudit>; patches: Record<string, WorkingPatch[]>; updates: Record<string, PaperUpdateRecord[]>; busyId: string | null; updatingId: string | null; analyze: (paper: Paper) => Promise<void>; refreshPaper: (paper: Paper) => Promise<void>; showUpdate: (update: PaperUpdateRecord) => void; updatePaper: (paper: Paper) => Promise<void>; removePaper: (paperId: string) => Promise<void>; reorderPapers: (papers: Paper[]) => Promise<void>; openUnit: (paperId: string, nodeId: string) => void; openImport: () => void }) {
   const [query, setQuery] = useState(''); const [editing, setEditing] = useState<Paper | null>(null); const [confirming, setConfirming] = useState(''); const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const [draggingId, setDraggingId] = useState(''); const [dropId, setDropId] = useState('');
   const visible = useMemo(() => { const needle = query.trim().toLowerCase(); if (!needle) return papers; return papers.filter((paper) => [paper.title, paper.authors, paper.arxivId, paper.category, paper.state, ...paper.tags].join(' ').toLowerCase().includes(needle)); }, [papers, query]);
   async function saveEdit() { if (!editing?.title.trim()) return; setSaving(true); setError(''); try { await updatePaper(editing); setEditing(null); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not update this paper.'); } finally { setSaving(false); } }
@@ -1357,7 +1525,7 @@ function Library({ papers, audits, patches, busyId, analyze, updatePaper, remove
   return <div className="mx-auto max-w-6xl p-6 sm:p-10"><div className="flex flex-wrap items-end justify-between gap-3"><h2 className="text-3xl font-bold tracking-[-.055em]">Library</h2><button onClick={openImport} className="rounded-md bg-[#2d654f] px-3 py-2 text-xs font-bold text-white">+ Import paper</button></div>
     <CloudSharing papers={papers} />
     <div className="library-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search papers…" /><b>{visible.length} of {papers.length}</b></div>{error && <p className="library-error">{error}</p>}
-    <div className="library-grid">{visible.map((paper) => <article key={paper.id} draggable={busyId !== paper.id} onDragStart={(event) => { setDraggingId(paper.id); event.dataTransfer.effectAllowed = 'move'; }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropId(paper.id); }} onDragLeave={() => setDropId((current) => current === paper.id ? '' : current)} onDrop={(event) => { event.preventDefault(); finishDrop(paper.id); }} onDragEnd={() => { setDraggingId(''); setDropId(''); }} className={`library-paper ${draggingId === paper.id ? 'library-paper-dragging' : ''} ${dropId === paper.id && draggingId !== paper.id ? 'library-paper-drop' : ''} ${busyId === paper.id ? 'library-paper-auditing' : ''}`}><button className="library-drag-handle" aria-label={`Drag to reorder ${paper.title}`} title="Drag to reorder" disabled={busyId === paper.id}>⠿</button><div className="library-paper-top"><div className="flex flex-wrap gap-1"><span>{paper.category}</span>{(patches[paper.id]?.length ?? 0) > 0 && <span>{patches[paper.id].length} working change{patches[paper.id].length === 1 ? '' : 's'}</span>}</div><span className={busyId === paper.id ? 'library-auditing' : audits[paper.id] ? 'library-audited' : 'library-pending'}>{busyId === paper.id ? <><i /><b>Auditing</b></> : audits[paper.id] ? 'Audited' : 'Not audited'}</span></div><h3>{paper.title}</h3><p>{paper.authors}</p><small>arXiv:{paper.arxivId}</small><div className="library-tags">{paper.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><div className="library-paper-actions"><button onClick={() => openUnit(paper.id, audits[paper.id]?.nodes[0]?.id ?? '')}>Open reader</button><button onClick={() => void analyze(paper)} disabled={busyId === paper.id}>{busyId === paper.id ? 'Auditing…' : audits[paper.id] ? 'Re-audit' : 'Analyze'}</button><button onClick={() => { setEditing({ ...paper }); setError(''); }} disabled={busyId === paper.id}>Edit record</button>{confirming !== paper.id && <button className="library-remove" onClick={() => setConfirming(paper.id)} disabled={busyId === paper.id}>Remove</button>}</div>{confirming === paper.id && <div className="library-delete-confirmation" role="alert"><b>Remove this paper?</b><p>Its local notes, reading marks, edits, AI audit, uploaded references, and saved links will be removed with it.</p><div><button onClick={() => setConfirming('')} disabled={saving}>Cancel</button><button className="library-confirm-delete" onClick={() => void remove(paper.id)} disabled={saving}>{saving ? 'Removing…' : 'Remove paper and local data'}</button></div></div>}</article>)}</div>
+    <div className="library-grid">{visible.map((paper) => { const latestUpdate = updates[paper.id]?.[0]; const busy = busyId === paper.id; const updating = updatingId === paper.id; return <article key={paper.id} draggable={!busy} onDragStart={(event) => { setDraggingId(paper.id); event.dataTransfer.effectAllowed = 'move'; }} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropId(paper.id); }} onDragLeave={() => setDropId((current) => current === paper.id ? '' : current)} onDrop={(event) => { event.preventDefault(); finishDrop(paper.id); }} onDragEnd={() => { setDraggingId(''); setDropId(''); }} className={`library-paper ${draggingId === paper.id ? 'library-paper-dragging' : ''} ${dropId === paper.id && draggingId !== paper.id ? 'library-paper-drop' : ''} ${busy ? 'library-paper-auditing' : ''}`}><button className="library-drag-handle" aria-label={`Drag to reorder ${paper.title}`} title="Drag to reorder" disabled={busy}>⠿</button><div className="library-paper-top"><div className="flex flex-wrap gap-1"><span>{paper.category}</span>{(patches[paper.id]?.length ?? 0) > 0 && <span>{patches[paper.id].length} working change{patches[paper.id].length === 1 ? '' : 's'}</span>}{latestUpdate && <button className="library-version-chip" onClick={() => showUpdate(latestUpdate)}>{latestUpdate.fromVersion.replace(arxivBaseId(latestUpdate.fromVersion), '') || latestUpdate.fromVersion} → {latestUpdate.toVersion.replace(arxivBaseId(latestUpdate.toVersion), '') || latestUpdate.toVersion}</button>}</div><span className={busy ? 'library-auditing' : audits[paper.id] ? 'library-audited' : 'library-pending'}>{busy ? <><i /><b>{updating ? 'Updating' : 'Auditing'}</b></> : audits[paper.id] ? 'Audited' : 'Not audited'}</span></div><h3>{paper.title}</h3><p>{paper.authors}</p><small>arXiv:{paper.arxivId}</small><div className="library-tags">{paper.tags.map((tag) => <span key={tag}>{tag}</span>)}</div><div className="library-paper-actions"><button onClick={() => openUnit(paper.id, audits[paper.id]?.nodes[0]?.id ?? '')}>Open reader</button>{!paper.arxivId.startsWith('local-') && <button className="library-update" onClick={() => void refreshPaper(paper)} disabled={busy}>{updating ? 'Updating…' : 'Update'}</button>}<button onClick={() => void analyze(paper)} disabled={busy}>{busy && !updating ? 'Auditing…' : audits[paper.id] ? 'Re-audit' : 'Analyze'}</button>{latestUpdate && <button onClick={() => showUpdate(latestUpdate)}>View changes</button>}<button onClick={() => { setEditing({ ...paper }); setError(''); }} disabled={busy}>Edit record</button>{confirming !== paper.id && <button className="library-remove" onClick={() => setConfirming(paper.id)} disabled={busy}>Remove</button>}</div>{confirming === paper.id && <div className="library-delete-confirmation" role="alert"><b>Remove this paper?</b><p>Its local notes, reading marks, edits, AI audit, update history, uploaded references, and saved links will be removed with it.</p><div><button onClick={() => setConfirming('')} disabled={saving}>Cancel</button><button className="library-confirm-delete" onClick={() => void remove(paper.id)} disabled={saving}>{saving ? 'Removing…' : 'Remove paper and local data'}</button></div></div>}</article>; })}</div>
     {!visible.length && <div className="library-empty">No matches.</div>}
     {editing && <div className="edition-overlay" onMouseDown={(event) => { if (event.currentTarget === event.target) setEditing(null); }}><section className="paper-record-editor"><header><h3>Edit paper</h3><button onClick={() => setEditing(null)}>×</button></header><div className="paper-record-fields"><label><span>Title</span><input value={editing.title} onChange={(event) => setEditing({ ...editing, title: event.target.value })} /></label><label><span>Authors</span><input value={editing.authors} onChange={(event) => setEditing({ ...editing, authors: event.target.value })} /></label><div className="paper-record-row"><label><span>Field</span><input value={editing.category} onChange={(event) => setEditing({ ...editing, category: event.target.value })} /></label><label><span>Reading state</span><select value={editing.state} onChange={(event) => setEditing({ ...editing, state: event.target.value as Paper['state'] })}><option>To read</option><option>Reading</option><option>Read</option></select></label></div><label><span>Tags</span><input value={editing.tags.join(', ')} onChange={(event) => setEditing({ ...editing, tags: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} /></label><label><span>Abstract</span><textarea value={editing.abstract} onChange={(event) => setEditing({ ...editing, abstract: event.target.value })} /></label></div><footer><button onClick={() => setEditing(null)}>Cancel</button><button className="paper-record-save" onClick={() => void saveEdit()} disabled={saving || !editing.title.trim()}>{saving ? 'Saving…' : 'Save'}</button></footer></section></div>}
   </div>;
