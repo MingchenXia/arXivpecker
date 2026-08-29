@@ -14,6 +14,7 @@ const vaultRoot = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || path.join(WO
 const starterRoot = process.env.ARXIVPECKER_SKIP_STARTER_LIBRARY === '1' ? null : path.resolve(process.env.ARXIVPECKER_STARTER_LIBRARY_DIR || path.join(WORKDIR, 'examples', 'starter-library'));
 const vault = new PaperVault(vaultRoot, { starterRoot });
 const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
+const CODEX_TURN_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_TURN_TIMEOUT_MS) || 30 * 60 * 1000);
 
 function isAllowedOrigin(origin) {
   return !origin || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
@@ -1399,8 +1400,8 @@ class CodexAppServer {
         // the reader has already reported a timeout. Interruption is best-effort
         // because older app-server builds may finish between these two calls.
         void this.call('turn/interrupt', { threadId: params.threadId, turnId }, 10000).catch(() => {});
-        reject(new Error('Codex analysis exceeded the 12-minute local wait limit.'));
-      }, 12 * 60 * 1000);
+        reject(new Error(`Codex analysis exceeded the ${Math.round(CODEX_TURN_TIMEOUT_MS / 60_000)}-minute local wait limit.`));
+      }, CODEX_TURN_TIMEOUT_MS);
       this.turns.set(turnId, {
         messages: [],
         resolve: (value) => { clearTimeout(timer); resolve(value); },
