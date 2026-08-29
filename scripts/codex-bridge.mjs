@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { cloudStatus, createCloudShare } from './cloud-share.mjs';
 import { PaperVault } from './paper-vault.mjs';
 
 const PORT = Number(process.env.PROOFROOM_CODEX_PORT || 4318);
@@ -1449,6 +1450,7 @@ const server = createServer(async (request, response) => {
       return response.end(asset.payload);
     }
     if (request.method === 'GET' && pathname === '/vault') return sendJson(response, 200, await vault.snapshot(), origin);
+    if (request.method === 'GET' && pathname === '/cloud/status') return sendJson(response, 200, await cloudStatus(vault), origin);
     if (request.method === 'GET' && pathname === '/vault/graph') {
       const snapshot = await vault.snapshot();
       return sendJson(response, 200, { graph: snapshot.graph, links: snapshot.links, vault: snapshot.vault }, origin);
@@ -1457,10 +1459,11 @@ const server = createServer(async (request, response) => {
       try { await codex.start(); } catch { /* status returns useful error below */ }
       return sendJson(response, 200, codex.status(), origin);
     }
-    if (request.method !== 'POST' || !['/analyze', '/compare-versions', '/paper-question', '/node-question', '/node-edit/suggest', '/vault/paper', '/vault/paper/update', '/vault/paper/delete', '/vault/paper/order', '/vault/audit', '/vault/reader', '/vault/patches', '/vault/profile', '/vault/link', '/vault/link/delete', '/vault/export', '/vault/latex-export', '/vault/citation-asset', '/vault/source-upload'].includes(pathname)) {
+    if (request.method !== 'POST' || !['/analyze', '/compare-versions', '/paper-question', '/node-question', '/node-edit/suggest', '/vault/paper', '/vault/paper/update', '/vault/paper/delete', '/vault/paper/order', '/vault/audit', '/vault/reader', '/vault/patches', '/vault/profile', '/vault/link', '/vault/link/delete', '/vault/export', '/vault/latex-export', '/vault/citation-asset', '/vault/source-upload', '/cloud/share'].includes(pathname)) {
       return sendJson(response, 404, { error: 'Not found.' }, origin);
     }
     const body = await readBody(request, ['/vault/source-upload', '/vault/citation-asset'].includes(pathname) ? 112_000_000 : pathname === '/vault/latex-export' ? 24_000_000 : 1_000_000);
+    if (pathname === '/cloud/share') return sendJson(response, 200, { share: await createCloudShare(vault, body) }, origin);
     if (pathname === '/vault/profile') return sendJson(response, 200, { profile: await vault.saveProfile(normalizeProfile(body.profile)) }, origin);
     if (pathname === '/vault/link') return sendJson(response, 200, { link: await vault.addLink(body.link), graph: await vault.rebuildGraph() }, origin);
     if (pathname === '/vault/link/delete') { await vault.removeLink(String(body.linkId || '')); return sendJson(response, 200, { graph: await vault.rebuildGraph() }, origin); }
