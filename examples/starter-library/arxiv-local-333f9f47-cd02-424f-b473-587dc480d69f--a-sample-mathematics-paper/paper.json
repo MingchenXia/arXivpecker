@@ -1,0 +1,25 @@
+{
+  "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+  "title": "A Sample Mathematics Paper",
+  "authors": "The arXivpecker authors",
+  "category": "Local source",
+  "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+  "abstract": "Reader-supplied local source. The initial audit reconstructs the complete paper structure from this file.",
+  "state": "Reading",
+  "tags": [
+    "local-source"
+  ],
+  "folder": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f--a-sample-mathematics-paper",
+  "updatedAt": "2026-08-29T08:10:09.600Z",
+  "createdAt": "2026-08-28T23:21:33.786Z",
+  "source": {
+    "abstractUrl": "https://arxiv.org/abs/local-333f9f47-cd02-424f-b473-587dc480d69f",
+    "pdfUrl": "https://arxiv.org/pdf/local-333f9f47-cd02-424f-b473-587dc480d69f",
+    "texUrl": "https://export.arxiv.org/e-print/local-333f9f47-cd02-424f-b473-587dc480d69f",
+    "analysisFormat": "tex",
+    "sourceDirectory": "attachments/source/reader-upload-1787959293807/project",
+    "mainTex": "attachments/source/reader-upload-1787959293807/project/paper.tex",
+    "localPdf": "",
+    "sourceUploadedAt": "2026-08-28T23:21:33.898Z"
+  }
+}

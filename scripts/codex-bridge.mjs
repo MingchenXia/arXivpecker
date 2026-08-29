@@ -10,7 +10,9 @@ import { PaperVault } from './paper-vault.mjs';
 const PORT = Number(process.env.PROOFROOM_CODEX_PORT || 4318);
 const HOST = '127.0.0.1';
 const WORKDIR = process.cwd();
-const vault = new PaperVault(path.resolve(process.env.PROOFROOM_LIBRARY_DIR || path.join(WORKDIR, 'proofroom-library')));
+const vaultRoot = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || path.join(WORKDIR, 'proofroom-library'));
+const starterRoot = process.env.ARXIVPECKER_SKIP_STARTER_LIBRARY === '1' ? null : path.resolve(process.env.ARXIVPECKER_STARTER_LIBRARY_DIR || path.join(WORKDIR, 'examples', 'starter-library'));
+const vault = new PaperVault(vaultRoot, { starterRoot });
 const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
 
 function isAllowedOrigin(origin) {
@@ -39,6 +41,22 @@ function runProgram(command, args, maxOutput = MAX_SOURCE_BYTES) {
       else reject(new Error(Buffer.concat(stderr).toString('utf8').trim() || `${command} exited with ${code}.`));
     });
   });
+}
+
+function hydrateSourceManifest(manifest, manifestFile) {
+  const directory = path.dirname(manifestFile); const hydrated = { ...manifest };
+  for (const key of ['entryFile', 'sourceDirectory', 'uploadedFile']) if (hydrated[key] && !path.isAbsolute(hydrated[key])) hydrated[key] = path.resolve(directory, hydrated[key]);
+  return hydrated;
+}
+
+async function writeSourceManifest(manifestFile, manifest) {
+  const directory = path.dirname(manifestFile); const portable = { ...manifest };
+  for (const key of ['entryFile', 'sourceDirectory', 'uploadedFile']) {
+    if (!portable[key] || !path.isAbsolute(portable[key])) continue;
+    const relative = path.relative(directory, portable[key]);
+    if (!relative.startsWith('..') && !path.isAbsolute(relative)) portable[key] = relative || '.';
+  }
+  await writeFile(manifestFile, `${JSON.stringify(portable, null, 2)}\n`, 'utf8');
 }
 
 async function collectTexFiles(directory, root = directory, depth = 0) {
@@ -70,7 +88,7 @@ async function chooseMainTex(files) {
 async function uploadedPaperSource(paper) {
   const sourceRoot = await vault.sourceDirectory(paper.id);
   const manifestFile = path.join(sourceRoot, 'proofroom-uploaded-source.json');
-  const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+  const manifest = hydrateSourceManifest(JSON.parse(await readFile(manifestFile, 'utf8')), manifestFile);
   if (!manifest.entryFile || !manifest.sourceDirectory) throw new Error('The uploaded source manifest is incomplete.');
   await stat(manifest.entryFile);
   return { ...manifest, cached: true };
@@ -102,7 +120,7 @@ async function saveUploadedPaperSource(paper, upload) {
     entryFile = main.absolute; fileCount = texFiles.length;
   }
   const manifest = { kind, origin: 'reader-upload', entryFile, sourceDirectory: extension === '.zip' ? path.dirname(entryFile) : sourceDirectory, fileCount, uploadedFile, uploadedAt: new Date().toISOString(), cached: false };
-  await writeFile(path.join(sourceRoot, 'proofroom-uploaded-source.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeSourceManifest(path.join(sourceRoot, 'proofroom-uploaded-source.json'), manifest);
   await vault.saveSourceRecord(stored.id, { analysisFormat: kind === 'tex' ? 'tex' : 'pdf', sourceDirectory: manifest.sourceDirectory, mainTex: kind === 'tex' ? entryFile : '', localPdf: kind === 'uploaded-pdf' ? entryFile : '', sourceUploadedAt: manifest.uploadedAt });
   return { paper: stored, primarySource: manifest };
 }
@@ -132,7 +150,7 @@ async function acquireArxivSource(paper, requestedArxivId = paper.arxivId, versi
   const sourceDirectory = versionCache ? path.join(sourceRoot, 'versions', cacheName) : sourceRoot;
   const manifestFile = path.join(sourceDirectory, 'proofroom-source.json');
   try {
-    const cached = JSON.parse(await readFile(manifestFile, 'utf8'));
+    const cached = hydrateSourceManifest(JSON.parse(await readFile(manifestFile, 'utf8')), manifestFile);
     if (cached.kind === 'tex' && cached.entryFile && (!cached.arxivId || cached.arxivId === requestedArxivId)) { await stat(cached.entryFile); return { ...cached, cached: true }; }
   } catch { /* Download or repair the source cache below. */ }
   await mkdir(sourceDirectory, { recursive: true });
@@ -180,7 +198,7 @@ async function acquireArxivSource(paper, requestedArxivId = paper.arxivId, versi
   const main = await chooseMainTex(texFiles);
   if (!main || main.score < 50) throw new Error('No reliable main TeX document was found in the arXiv source bundle.');
   const manifest = { kind: 'tex', arxivId: requestedArxivId, entryFile: main.absolute, sourceDirectory, fileCount: texFiles.length, archiveBytes: payload.length, fetchedAt: new Date().toISOString(), cached: false };
-  await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeSourceManifest(manifestFile, manifest);
   return manifest;
 }
 
@@ -222,7 +240,7 @@ async function saveAiLatexSource(paper, converted) {
   const manifestFile = path.join(sourceDirectory, 'proofroom-ai-source.json');
   await writeFile(entryFile, latex, 'utf8');
   const manifest = { kind: 'ai-tex', arxivId: paper.arxivId, entryFile, sourceDirectory, fileCount: 1, convertedAt: new Date().toISOString(), conversionThreadId: converted.threadId, cached: false };
-  await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeSourceManifest(manifestFile, manifest);
   return manifest;
 }
 
@@ -1596,7 +1614,8 @@ async function collectFigureFiles(directory, root = directory, depth = 0) {
 async function figureAsset(paperId, requestedPath) {
   const sourceRoot = await vault.sourceDirectory(paperId);
   const record = await vault.recordFor(paperId); const savedPaper = JSON.parse(await readFile(path.join(vault.paperDirectory(record), 'paper.json'), 'utf8'));
-  const configuredSource = typeof savedPaper?.source?.sourceDirectory === 'string' ? path.resolve(savedPaper.source.sourceDirectory) : sourceRoot;
+  const paperRoot = vault.paperDirectory(record);
+  const configuredSource = typeof savedPaper?.source?.sourceDirectory === 'string' ? path.resolve(paperRoot, savedPaper.source.sourceDirectory) : sourceRoot;
   const configuredRelative = path.relative(sourceRoot, configuredSource); const currentSourceRoot = configuredRelative.startsWith('..') || path.isAbsolute(configuredRelative) ? sourceRoot : configuredSource;
   const requested = String(requestedPath || '').replaceAll('\\', '/').replace(/^\.\//, '').trim();
   if (!requested || requested.includes('\0')) throw new Error('A valid figure path is required.');
@@ -1734,7 +1753,7 @@ const server = createServer(async (request, response) => {
             const converted = await codex.convertPdfToLatex({ paper, profile, pdfPath: primarySource.entryFile });
             primarySource = await saveAiLatexSource(paper, converted);
             const sourceRoot = await vault.sourceDirectory(paper.id);
-            await writeFile(path.join(sourceRoot, 'proofroom-uploaded-source.json'), `${JSON.stringify(primarySource, null, 2)}\n`, 'utf8');
+            await writeSourceManifest(path.join(sourceRoot, 'proofroom-uploaded-source.json'), primarySource);
             await vault.saveSourceRecord(paper.id, { analysisFormat: 'ai-tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.convertedAt, sourceError: 'Reader-supplied PDF converted to an editable LaTeX working source.' });
           }
         } catch (error) {

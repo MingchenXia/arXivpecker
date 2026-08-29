@@ -1,0 +1,25 @@
+{
+  "notes": [],
+  "nodeNotes": {},
+  "nodeAnswers": {
+    "thm-1-1": "Theorem 1.1 (`thm101`), p. 2 — **verified**. The local-image claim is inherited from Theorem 3.5 (`thm401`, p. 11), whose local input is Proposition 4.4 (`prop4`, p. 23): after Proposition 4.2 constructs the local descent as a meromorphic operator family, one fixes \\(s_0\\) with \\(\\operatorname{Re}(s_0)\\ge 0\\) and additionally assumes that this family is holomorphic there; Proposition 4.4 then uses an open-Bruhat-cell test-section construction to show that no nonzero smooth contragredient functional annihilates its image. At a non-Archimedean place, admissibility and finite length imply that a proper image would possess such an annihilator, so the map is **surjective**. At an Archimedean place, Hahn–Banach and smoothing show only that a nondense image would possess such an annihilator, so the proved conclusion is **dense image in the smooth Fréchet topology**, not surjectivity. The paper does not determine every regular \\(s_0\\); holomorphy of the operator family at the chosen point remains an explicit hypothesis.",
+    "source-block:source-paragraph-1": "Source anchor: Author text (page not recorded), verified — The paper studies unipotent-orbit Fourier coefficients of degenerate Eisenstein series on symplectic groups."
+  },
+  "expanded": {
+    "thm-1-1": true,
+    "assumption-global-data": true,
+    "def-induced-representation": true,
+    "def-eisenstein-series": true,
+    "rem-5-1": true,
+    "lem-3-1": false,
+    "eq-global-unfolding": true,
+    "def-specific-fourier-coefficient": false,
+    "prop-3-4": false,
+    "thm-4-1": true,
+    "lem-4-3": true,
+    "thm-3-5": true,
+    "lem-3-2": true
+  },
+  "marks": {},
+  "updatedAt": "2026-08-29T08:25:54.928Z"
+}

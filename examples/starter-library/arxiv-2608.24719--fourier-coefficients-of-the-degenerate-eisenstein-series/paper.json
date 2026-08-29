@@ -1,0 +1,25 @@
+{
+  "id": "arxiv-2608.24719",
+  "title": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+  "authors": "Alan Xuelun Hou · Yusheng Lei",
+  "category": "math.NT",
+  "arxivId": "2608.24719v1",
+  "abstract": "We study degenerate Eisenstein series on symplectic groups and construct a new automorphic descent. We show that a certain Fourier coefficient, after restriction to a smaller symplectic group, is itself an Eisenstein series with the same inducing parameter \\(s\\). We describe the resulting holomorphic section explicitly in terms of the original section and local \\(L\\)-factors at unramified places. At every regular point of the local descent, we prove surjectivity at non-Archimedean places and dense image at Archimedean places. We finally indicate an application of the iterated descent to maximal Fourier coefficients of Eisenstein series.",
+  "state": "Reading",
+  "tags": [
+    "math.NT",
+    "math.RT"
+  ],
+  "folder": "arxiv-2608.24719--fourier-coefficients-of-the-degenerate-eisenstein-series",
+  "updatedAt": "2026-08-29T08:10:09.738Z",
+  "createdAt": "2026-08-28T03:50:32.767Z",
+  "source": {
+    "abstractUrl": "https://arxiv.org/abs/2608.24719v1",
+    "pdfUrl": "https://arxiv.org/pdf/2608.24719v1",
+    "texUrl": "https://export.arxiv.org/e-print/2608.24719v1",
+    "analysisFormat": "tex",
+    "sourceDirectory": "attachments/source",
+    "mainTex": "attachments/source/Eisseries0825__1_.tex",
+    "sourceFetchedAt": "2026-08-28T03:50:33.794Z"
+  }
+}

@@ -1,0 +1,2201 @@
+\documentclass[11pt,notitlepage]{amsart}
+\usepackage[b5paper, margin={0.53in,0.65in}]{geometry}
+\usepackage{amsmath}
+\usepackage{mathdots}
+\usepackage{amssymb}
+\usepackage{tikz-cd}
+\usepackage{hyperref}
+\usepackage{palatino}\usepackage{mathtools}
+\setcounter{tocdepth}{1}
+\usetikzlibrary{cd}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{conjecture}[theorem]{Conjecture}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+\newtheorem{xca}[theorem]{Exercise}
+\setcounter{MaxMatrixCols}{12}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+
+
+\newcommand{\GKk}{%
+\frac{1-\chi_v(\varpi)q^{-\left(s+\frac{k-1}{2}+k-n-1\right)}}
+     {1-\chi_v(\varpi)q^{-\left(s+\frac{k-1}{2}+k-n\right)}}%
+}
+\newcommand{\GKkpone}{%
+\frac{1-\chi_v(\varpi)q^{-\left(s+\frac{k-1}{2}+k-n\right)}}
+     {1-\chi_v(\varpi)q^{-\left(s+\frac{k-1}{2}+k-n+1\right)}}%
+}
+\newcommand{\Uz}{\overline{U}^{z}_{2,w}(F_v)}
+\newcommand{\Uprime}{\overline{U}'_{2,w,x_{1,2}=x_{2,2}=0}(F_v)}
+\newcommand{\Xroot}{X_{e_{k+1}-e_{k+2}}(F_v)}
+
+\newcommand{\diam}{{\rm{diam}}}
+\newcommand{\ovl}{\overline}
+\newcommand{\wt}{\widetilde}
+\newcommand{\calA}{\mathcal{A}}
+\newcommand{\calB}{\mathcal{B}}
+\newcommand{\calC}{\mathcal{C}}
+\newcommand{\calD}{\mathcal{D}}
+\newcommand{\calE}{\mathcal{E}}
+\newcommand{\calF}{\mathcal{F}}
+\newcommand{\calG}{\mathcal{G}}
+\newcommand{\calH}{\mathcal{H}}
+\newcommand{\calJ}{\mathcal{J}}
+\newcommand{\calK}{\mathcal{K}}
+\newcommand{\calL}{\mathcal{L}}
+\newcommand{\calM}{\mathcal{M}}
+\newcommand{\calN}{\mathcal{N}}
+\newcommand{\calO}{\mathcal{O}}
+\newcommand{\calP}{\mathcal{P}}
+\newcommand{\calQ}{\mathcal{Q}}
+\newcommand{\calR}{\mathcal{R}}
+\newcommand{\calS}{\mathcal{S}}
+\newcommand{\calT}{\mathcal{T}}
+\newcommand{\calU}{\mathcal{U}}
+\newcommand{\calV}{\mathcal{V}}
+\newcommand{\calW}{\mathcal{W}}
+\newcommand{\calX}{\mathcal{X}}
+\newcommand{\calY}{\mathcal{Y}}
+\newcommand{\calZ}{\mathcal{Z}}
+
+
+\newcommand{\bbA}{\mathbb{A}}
+\newcommand{\bbB}{\mathbb{B}}
+\newcommand{\bbC}{\mathbb{C}}
+\newcommand{\bbD}{\mathbb{D}}
+\newcommand{\bbE}{\mathbb{E}}
+\newcommand{\bbF}{\mathbb{F}}
+\newcommand{\bbG}{\mathbb{G}}
+\newcommand{\bbH}{\mathbb{H}}
+\newcommand{\bbI}{\mathbb{I}}
+\newcommand{\bbJ}{\mathbb{J}}
+\newcommand{\bbK}{\mathbb{K}}
+\newcommand{\bbL}{\mathbb{L}}
+\newcommand{\bbM}{\mathbb{M}}
+\newcommand{\bbN}{\mathbb{N}}
+\newcommand{\bbO}{\mathbb{O}}
+\newcommand{\bbP}{\mathbb{P}}
+\newcommand{\bbQ}{\mathbb{Q}}
+\newcommand{\bbR}{\mathbb{R}}
+\newcommand{\bbS}{\mathbb{S}}
+\newcommand{\bbT}{\mathbb{T}}
+\newcommand{\bbU}{\mathbb{U}}
+\newcommand{\bbV}{\mathbb{V}}
+\newcommand{\bbW}{\mathbb{W}}
+\newcommand{\bbX}{\mathbb{X}}
+\newcommand{\bbY}{\mathbb{Y}}
+\newcommand{\bbZ}{\mathbb{Z}}
+
+\newcommand{\bfA}{\mathbf{A}}
+\newcommand{\bfB}{\mathbf{B}}
+\newcommand{\bfC}{\mathbf{C}}
+\newcommand{\bfD}{\mathbf{D}}
+\newcommand{\bfE}{\mathbf{E}}
+\newcommand{\bfF}{\mathbf{F}}
+\newcommand{\bfG}{\mathbf{G}}
+\newcommand{\bfH}{\mathbf{H}}
+\newcommand{\bfI}{\mathbf{I}}
+\newcommand{\bfJ}{\mathbf{J}}
+\newcommand{\bfK}{\mathbf{K}}
+\newcommand{\bfL}{\mathbf{L}}
+\newcommand{\bfM}{\mathbf{M}}
+\newcommand{\bfN}{\mathbf{N}}
+\newcommand{\bfO}{\mathbf{O}}
+\newcommand{\bfP}{\mathbf{P}}
+\newcommand{\bfQ}{\mathbf{Q}}
+\newcommand{\bfR}{\mathbf{R}}
+\newcommand{\bfS}{\mathbf{S}}
+\newcommand{\bfT}{\mathbf{T}}
+\newcommand{\bfU}{\mathbf{U}}
+\newcommand{\bfV}{\mathbf{V}}
+\newcommand{\bfW}{\mathbf{W}}
+\newcommand{\bfX}{\mathbf{X}}
+\newcommand{\bfY}{\mathbf{Y}}
+\newcommand{\bfZ}{\mathbf{Z}}
+
+\newcommand{\bfa}{\mathbf{a}}
+\newcommand{\bfb}{\mathbf{b}}
+\newcommand{\bfc}{\mathbf{c}}
+\newcommand{\bfd}{\mathbf{d}}
+\newcommand{\bfe}{\mathbf{e}}
+\newcommand{\bff}{\mathbf{f}}
+\newcommand{\bfg}{\mathbf{g}}
+\newcommand{\bfh}{\mathbf{h}}
+\newcommand{\bfi}{\mathbf{i}}
+\newcommand{\bfj}{\mathbf{j}}
+\newcommand{\bfk}{\mathbf{k}}
+\newcommand{\bfl}{\mathbf{l}}
+\newcommand{\bfm}{\mathbf{m}}
+\newcommand{\bfn}{\mathbf{n}}
+\newcommand{\bfo}{\mathbf{o}}
+\newcommand{\bfp}{\mathbf{p}}
+\newcommand{\bfq}{\mathbf{q}}
+\newcommand{\bfr}{\mathbf{r}}
+\newcommand{\bfs}{\mathbf{s}}
+\newcommand{\bft}{\mathbf{t}}
+\newcommand{\bfu}{\mathbf{u}}
+\newcommand{\bfv}{\mathbf{v}}
+\newcommand{\bfw}{\mathbf{w}}
+\newcommand{\bfx}{\mathbf{x}}
+\newcommand{\bfy}{\mathbf{y}}
+\newcommand{\bfz}{\mathbf{z}}
+
+
+\newcommand{\frakA}{\mathfrak{A}}
+\newcommand{\frakB}{\mathfrak{B}}
+\newcommand{\frakC}{\mathfrak{C}}
+\newcommand{\frakD}{\mathfrak{D}}
+\newcommand{\frakE}{\mathfrak{E}}
+\newcommand{\frakF}{\mathfrak{F}}
+\newcommand{\frakG}{\mathfrak{G}}
+\newcommand{\frakH}{\mathfrak{H}}
+\newcommand{\frakI}{\mathfrak{I}}
+\newcommand{\frakJ}{\mathfrak{J}}
+\newcommand{\frakK}{\mathfrak{K}}
+\newcommand{\frakL}{\mathfrak{L}}
+\newcommand{\frakM}{\mathfrak{M}}
+\newcommand{\frakN}{\mathfrak{N}}
+\newcommand{\frakO}{\mathfrak{O}}
+\newcommand{\frakP}{\mathfrak{P}}
+\newcommand{\frakQ}{\mathfrak{Q}}
+\newcommand{\frakR}{\mathfrak{R}}
+\newcommand{\frakS}{\mathfrak{S}}
+\newcommand{\frakT}{\mathfrak{T}}
+\newcommand{\frakU}{\mathfrak{U}}
+\newcommand{\frakV}{\mathfrak{V}}
+\newcommand{\frakW}{\mathfrak{W}}
+\newcommand{\frakX}{\mathfrak{X}}
+\newcommand{\frakY}{\mathfrak{Y}}
+\newcommand{\frakZ}{\mathfrak{Z}}
+\newcommand{\nHeis}{n_{\mathrm{H}}}
+
+\newcommand{\fraka}{\mathfrak{a}}
+\newcommand{\frakb}{\mathfrak{b}}
+\newcommand{\frakc}{\mathfrak{c}}
+\newcommand{\frakd}{\mathfrak{d}}
+\newcommand{\frake}{\mathfrak{e}}
+\newcommand{\frakf}{\mathfrak{f}}
+\newcommand{\frakg}{\mathfrak{g}}
+\newcommand{\frakh}{\mathfrak{h}}
+\newcommand{\fraki}{\mathfrak{i}}
+\newcommand{\frakj}{\mathfrak{j}}
+\newcommand{\frakk}{\mathfrak{k}}
+\newcommand{\frakl}{\mathfrak{l}}
+\newcommand{\frakm}{\mathfrak{m}}
+\newcommand{\frakn}{\mathfrak{n}}
+\newcommand{\frako}{\mathfrak{o}}
+\newcommand{\frakp}{\mathfrak{p}}
+\newcommand{\frakq}{\mathfrak{q}}
+\newcommand{\frakr}{\mathfrak{r}}
+\newcommand{\fraks}{\mathfrak{s}}
+\newcommand{\frakt}{\mathfrak{t}}
+\newcommand{\fraku}{\mathfrak{u}}
+\newcommand{\frakv}{\mathfrak{v}}
+\newcommand{\frakw}{\mathfrak{w}}
+\newcommand{\frakx}{\mathfrak{x}}
+\newcommand{\fraky}{\mathfrak{y}}
+\newcommand{\frakz}{\mathfrak{z}}
+\newcommand{\floor}[1]{\lfloor #1 \rfloor}
+\newcommand{\nPlusKone}{n_{+,\,k+1}^{\,k-2}}
+
+\DeclareMathOperator{\id}{{\bf 1}}
+\DeclareMathOperator{\Aut}{Aut}
+\DeclareMathOperator{\GL}{GL}
+\DeclareMathOperator{\sgn}{sgn}
+\DeclareMathOperator{\Gal}{Gal}
+\DeclareMathOperator{\N}{N}
+\DeclareMathOperator{\Tr}{Tr}
+\DeclareMathOperator{\PGL}{PGL}
+\DeclareMathOperator{\SL}{SL}
+\DeclareMathOperator{\SO}{SO}
+\DeclareMathOperator{\Sp}{Sp}
+\DeclareMathOperator{\End}{End}
+\DeclareMathOperator{\Irr}{Irr}
+\DeclareMathOperator{\Spec}{Spec}
+\DeclareMathOperator{\mSpec}{mSpec}
+\DeclareMathOperator{\rad}{rad}
+\DeclareMathOperator{\bijectionarrows}{\leftrightarrows}
+\DeclareMathOperator{\In}{in}
+\DeclareMathOperator{\Hom}{Hom}
+\DeclareMathOperator{\Tor}{Tor}
+\DeclareMathOperator{\Ext}{Ext}
+\DeclareMathOperator{\im}{im}
+\DeclareMathOperator{\codim}{codim}
+\DeclareMathOperator{\ann}{ann}
+\DeclareMathOperator{\length}{length}
+\DeclareMathOperator{\GSpin}{\it{GSpin}}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\Mat}{Mat}
+\DeclareMathOperator{\Rank}{Rank}
+\DeclareMathOperator{\Ind}{Ind}
+\DeclareMathOperator{\res}{res}
+\DeclareMathOperator{\ind}{ind}
+\DeclareMathOperator{\Res}{Res}
+\DeclareMathOperator{\Mp}{Mp}
+\DeclareMathOperator*{\Motimes}{\text{\raisebox{0.25ex}{\scalebox{0.8}{$\bigotimes$}}}}
+\newcommand{\varpiff}[3][]{\left.\frac{\partial#1}{\partial#2}\right|_{#3}}
+\newcommand{\ppiff}[2][]{\left.\frac{\partial#1}{\partial#2}\right.}
+\newcommand{\blankbox}[2]{%
+  \parbox{\columnwidth}{\centering
+    \setlength{\fboxsep}{0pt}%
+    \fbox{\raisebox{0pt}[#2]{\hspace{#1}}}%
+  }%
+}
+
+\begin{document}
+
+\title{Fourier coefficients of the degenerate Eisenstein series on symplectic groups}
+
+\author[A.X.Hou]{Alan Xuelun Hou}
+\author[Y.Lei]{Yusheng Lei}
+\address{Department of Mathematics,
+Brandeis University,
+Waltham, Massachusetts, USA}
+\address{Shanghai, China}
+\email{hou@brandeis.edu}
+\email{leiusher@gmail.com}
+\thanks{}
+
+
+\subjclass[2020]{Primary 11F30; Secondary 11F70, 22E55}
+
+\date{\today.}
+
+
+\keywords{Automorphic representations, degenerate Eisenstein series, Fourier coefficients, automorphic descent, symplectic groups, unipotent orbits}
+\begin{abstract}
+We study degenerate Eisenstein series on symplectic groups and construct a
+new automorphic descent. We show that a certain Fourier coefficient, after restriction to a
+smaller symplectic group, is itself an Eisenstein series with the same inducing parameter
+s. We describe the resulting holomorphic section explicitly in terms of the original section
+and local L-factors at unramified places. At every regular point of the local descent, we prove surjectivity at non-Archimedean places and dense
+image at Archimedean places.  We finally indicate an application of the iterated descent to maximal Fourier coefficients of Eisenstein
+series.
+\end{abstract}
+
+\maketitle
+
+\tableofcontents
+\section{Introduction}
+\subsection{Background} One of the most important ways to study an Eisenstein series is by analyzing its Fourier coefficients parameterized by certain unipotent orbits. In this paper, we give a detailed analysis of such coefficients in a new situation, that of a degenerate Eisenstein series on the symplectic group. 
+
+Let $F$ be a number field and $\bbA$ its ring of adeles. For any positive integer $k$, $3\leqslant k <n$, we define $P_{k}:=P_{k,n} = M_{k}\ltimes U_{k}$ to be the standard maximal parabolic subgroup of the symplectic group $\Sp_{2n}$, with the Levi subgroup $M_k \cong \GL_k\times \Sp_{2(n-k)}$. Denote by $\chi$ a Hecke character. Then for this Levi subgroup, consider the representation $\chi|\det|^s\otimes \id_{\Sp_{2(n-k)}}$ on $\GL_k(\bbA)\times \Sp_{2(n-k)}(\bbA)$. Letting $U_k(\bbA)$ act trivially, we parabolically induce this representation to $\Sp_{2n}(\bbA)$, and denote the resulting representation by $I_n(s)$, whose precise definition can be found in (\ref{eq301}) in Section 2.3. 
+
+Let $f_s$ be a holomorphic section in $I_n(s)$, and form the degenerate Eisenstein series of $\Sp_{2n}(\bbA)$ defined for $\Re(s)\gg0$, by
+\begin{equation}\label{eis1}
+  E_{f_s}(g) = \sum_{\gamma\in P_k(F)\setminus \Sp_{2n}(F)}f_s(\gamma g).
+\end{equation}
+Then $E_{f_s}$ is a meromorphic function of $s$ and may be continued to the whole plane. This Eisenstein series has a certain nonzero Fourier coefficient attached to the unipotent radical $U_2$ of the standard maximal parabolic subgroup $P_2$. For $P_1$, such a coefficient vanishes (for details, see \cite{GIN06}, Chapter 5). Let $\psi_\calO$ be the generic character attached to the unipotent radical $U_2(\bbA)$, whose precise definition can be found in \hyperref[sec204]{Section 2.4}. We define
+\begin{equation}\label{fc}
+  F_{\psi_\calO}(E_{f_s}(g)) := \int\limits_{U_{2}(F)\setminus U_{2}(\bbA)}E_{f_s}(ug)\psi_{\calO}(u)\,du.
+\end{equation}
+
+\subsection{Main Theorems} For $n\geq3$, the stabilizer group of $\psi_{\calO}$ under the $\GL_2(\bbA)\times \Sp_{2(n-2)}(\bbA)$-conjugation action is isomorphic to $\Sp_{2}(\bbA) \times \Sp_{2(n-3)}(\bbA)$. The Fourier coefficient $F_{\psi_\calO}(E_{f_s}(g))$ is an automorphic function on this stabilizer group. We show that by further restricting to $\Sp_{2(n-3)}(\bbA)$, the Fourier coefficient $F_{\psi_\calO}(E_{f_s}(g))$ is an Eisenstein series:
+\begin{theorem}\label{thm101}
+ For $\Re(s)$ sufficiently large, $F_{\psi_\calO}(E_{f_s}(g))$, viewed as a function on $\Sp_{2(n-3)}(\bbA)$, is an Eisenstein series associated to the parabolic induction 
+  \begin{equation}\label{indrep2}
+  I_{n-3}(s) = \Ind_{P_{k-2,2(n-3)}(\bbA)}^{\Sp_{2(n-3)}(\bbA)} \chi|\det|^{s}\otimes \id_{\Sp_{2(n-k-1)}}.
+  \end{equation}
+In addition, at a place $v$, the local
+descent integrals form a meromorphic family, as in Proposition~\ref{prop4}. If $\Re(s_0)\geq 0$ and this operator family is holomorphic at $s=s_0$, then the resulting local map is surjective when $v$ is non-Archimedean and has dense image in the smooth Fréchet topology
+when $v$ is Archimedean.
+\end{theorem} 
+
+This identification yields a descent tower from a degenerate Eisenstein
+series on \(\Sp_{2n}(\bbA)\) to one on \(\Sp_{2n-6}(\bbA)\), with the
+inducing parameter \(s\) unchanged. At unramified places, the descended
+local section is given explicitly as follows.
+\begin{theorem}
+Let $f_s=\bigotimes_v f_{s,v}$ be a factorizable holomorphic section of $I_n(s)$. At every place
+$v$ at which $\chi_v$, $\psi_v$, and $f_{s,v}$ are unramified, assume
+that
+\[
+f_{s,v}=f^\circ_{n,v,s},
+\]
+the normalized spherical section of $I_{n,v}(s)$. Then
+\[
+\mathcal F_{v,s}\bigl(f^\circ_{n,v,s}\bigr)
+=
+c_v(s)f^\circ_{n-3,v,s},
+\]
+where
+\[
+c_v(s)=
+L_v^{-1}(\chi_v^2,2s+k-1)
+L_v^{-1}\left(\chi_v,s+n-\frac{k+1}{2}\right)
+L_v^{-1}\left(\chi_v,s+n-\frac{k-1}{2}\right).
+\]
+\end{theorem}
+
+The descent tower also determines maximal partitions attached to Fourier
+coefficients of certain residues.  Let
+\(\chi\) be a nontrivial quadratic Hecke character, put
+\[
+ r=n-k\geq1,\qquad a=3k-2n\geq2,
+\]
+and let \(s_0\) run over the positive pole set
+\(\Lambda_a\), defined in \eqref{eq:section5-Lambda}. As an application, The descent can be iterated in a suitable range and, together with
+known results on Siegel residual Eisenstein series and composite
+partitions, gives an application to maximal Fourier coefficients;
+see Remark~\ref{rem:maximal-partition}.
+
+We introduce the notations not yet defined in this section in Section 2.
+In Section 3, we state our main descent theorem (\ref{thm401}). In
+Section 4, we carry out the computations using root exchange,
+the Casselman--Shalika formula, and the Gindikin--Karpelevich formula. In
+Section 5, we complete the proof of the descent theorem and apply its
+iteration to maximal Fourier coefficients of residues.
+
+ More generally, the study of Fourier coefficients of the Eisenstein series falls in the automorphic descent construction proposed by \cite{GRS972}, \cite{GRS11} and \cite{GS222}. Previous work has been done in other cases by \cite{ik94},\cite{GRS03}, \cite{GIN06}, \cite{Cai18} and \cite{GS20}, or locally by \cite{MW87}.  Therefore, our construction gives a new automorphic descent for
+degenerate Eisenstein series on $\Sp_{2n}$, beyond the cases treated
+in the works cited above.
+ 
+\subsection{Acknowledgments}
+The authors thank David Ginzburg for suggesting this problem, and for helpful advice. We thank Solomon Friedberg and Omer Offen for useful discussions and suggestions. The first named author would also like to thank Yi Shan, Jun Su and Bingyu Zhang. The second named author's work on this project took place while he was a postdoctoral fellow at Tel Aviv University, and he extends his warm thanks to the department there for their hospitality.
+
+
+\section{Preliminaries}
+\subsection{The Groups}
+Let $F$ be a number field. For any positive integer $n$, we consider $\Sp_{2n}$ as an algebraic group defined over $F$. Let $J_n$ be the $n \times n$ matrix with $1$ along the anti-diagonal and $0$ elsewhere. We realize the group as a matrix group as follows: for any commutative $F$-algebra $R$,
+\begin{equation}\Sp_{2n}(R) = \left\{g \in \GL_{2n}(R)\;|\; ^tg\begin{pmatrix}
+  &J_n\\
+  -J_n&
+\end{pmatrix} g = \begin{pmatrix}
+  &J_n\\
+  -J_n&
+\end{pmatrix} \right\}.
+\end{equation}
+
+Define $B=TU$ to be the Borel subgroup of all the upper triangular matrices in $\Sp_{2n}$, where $T$ is all the diagonal matrices, and $U$ is the unipotent radical of $B$. We have a set of simple positive roots $\alpha_1,\alpha_2,\cdots, \alpha_n$, with $\alpha_n$ the unique long simple root. They are defined as follows. For any $t = \diag(t_1,t_2,\cdots,t_n,t_n^{-1},\cdots,t_2^{-1},t_1^{-1})\in T(R)$, we have
+\begin{align*}
+  \alpha_i(t) &= t_it_{i+1}^{-1}, i= 1,2,\cdots, n-1\\
+  \alpha_n(t) &= t_n^2.
+\end{align*}
+Let $\triangle_n$ denote the set of simple positive roots. We also denote $\alpha_i$ by $e_i - e_{i+1}$ for $i = 1,2,\cdots, n-1$ and $\alpha_n$ by $2e_n$, so that we can describe the set of all positive roots as
+\begin{equation}
+  \Sigma^+ = \{e_i\pm e_j|1\leqslant i<j\leqslant n\}\cup \{2e_i | 1\leqslant i\leqslant n\}.
+\end{equation} 
+
+And by $\Sigma$ we denote the union of $\Sigma^+$ and the negative ones. Let $e_{i,j}$ be the $2n \times 2n$ matrix with $1$ on the $(i,j)$-th entry and zero elsewhere. For any positive root $\alpha$, we define the corresponding one-parameter root subgroup $r \to X_\alpha(r)$ of $\Sp_{2n}(R)$ by 
+\begin{equation}\label{rootdef}
+ X_\alpha(r) = \begin{cases}
+  \exp(r(e_{i,j} - e_{2n-j+1, 2n-i+1})) &\alpha = e_i -e_j\\
+  \exp(r(e_{i,2n-j+1} + e_{j,2n-i+1})) &\alpha = e_i + e_j\\
+  \exp(re_{i,2n-i+1}) &\alpha = 2e_i.
+ \end{cases}
+\end{equation}
+We use a similar notation for the negative roots. 
+
+When $v$ is finite, let $K_v=\Sp_{2n}(\calO_v)$ with $\calO_v\subset F_v$ the ring of integers. When $v$ is infinite, take $K_v$ to be $U(n)$ when it is real and $USp(2n)$ when it is complex. Then $K = \prod_v K_v$ is a maximal compact subgroup of $\Sp_{2n}(\bbA)$. For any place $v$, $K_v$ is a fixed maximal compact subgroup of $\Sp_{2n}(F_v)$. Throughout the paper, we fix a nontrivial additive character $\psi: F\setminus \bbA \to \bbC^\times$ which factorizes into its local parts: $\psi(x) = \prod_v\psi_v(x_v)$. 
+
+Let $X^*(\cdot)$ denote the lattice of characters defined over $F$, and let $P$ and $Q$ denote two parabolic subgroups of $G$. Let $\mathfrak{a}_P$ be the finite-dimensional $\bbR$-vector space $\mathfrak{a}_P = \Hom(X^*(P), \bbR) = \Hom(X^*(M), \bbR) = \Hom(X^*(Z_M), \bbR)$. We let $H_M : M(\bbA) \rightarrow \mathfrak{a}_P$ be the continuous group homomorphism given by $e^{\langle\chi,H_M(m)\rangle}=|\chi(m)|$ for all $m\in M(\bbA)$ and $\chi\in X^*(M)$. Denote the kernel of this map by $M(\bbA)^{1}$. This definition extends to parabolic subgroups trivially on $U(\bbA)$. For details, see \cite{MW95}, Chapter 1. We also let $W_n:=N_G(T)/C_G(T)$ be the Weyl group of $\Sp_{2n}$ with respect to $T$. The Weyl group $W_n$ acts on $\mathfrak a_0$. If $P=M_PU_P,\qquad Q=M_QU_Q$ are parabolic subgroups and $w\in W_n$ satisfies $wM_Pw^{-1}=M_Q$, then the action of $w$ restricts to a linear isomorphism $w:\mathfrak a_P\xrightarrow{\sim}\mathfrak a_Q$. We identify $W_n$ with the group of signed permutations of
+$\{1,\ldots,n\}$. Thus
+\[
+w(i)=\varepsilon j,\qquad \varepsilon\in\{\pm1\},
+\]
+means that $w(e_i)=\varepsilon e_j$. Equivalently, $W_n$ acts on
+$\{\pm1,\ldots,\pm n\}$ by permutations satisfying
+$w(-i)=-w(i)$.
+
+\subsection{The Embeddings} 
+For $g=\begin{pmatrix}
+    a & b\\
+    c &d
+\end{pmatrix}\in \Sp_2(R),h\in \Sp_{2(n-3)}(R)$, we define an embedding of $\Sp_{2}
+\times \Sp_{2(n-3)}$ into $\Sp_{2n}$ by \begin{equation}\label{triangle}
+    \triangle(g,h) := \begin{pmatrix}
+      g&&&&\\
+      &a&&b&\\
+      &&h&&\\
+      &c&&d&\\
+      &&&&g^\ast\end{pmatrix}\in\Sp_{2n}(R),
+\end{equation}
+where $g^*$ is the element corresponding to $g$ such that $\triangle(g,h)$ is symplectic.
+
+For $g\in \Sp_{2(n-3)}$, we define an embedding into $\Sp_{2n}$, via $\iota$ such that
+\begin{equation}\label{embed}
+  g = \begin{pmatrix}
+    g_1&g_2&g_3\\
+    g_4&g_5&g_6\\
+    g_7&g_8&g_9
+  \end{pmatrix} \mapsto \iota(g)=\begin{pmatrix}
+    g_1&&g_2&&g_3\\
+    &I_3&&0&\\
+    g_4&&g_5&&g_6\\
+    &0&&I_3&\\
+    g_7&&g_8&&g_9
+  \end{pmatrix},\quad \begin{aligned}
+    &g_1,g_3,g_7,g_9\in \Mat_{(k-2)\times (k-2)}\\
+    &g_2,g_8 \in \Mat_{(k-2)\times 2(n-k-1)}\\
+    &g_4,g_6 \in \Mat_{2(n-k-1)\times (k-2)}\\
+    &g_5 \in \Mat_{2(n-k-1)\times 2(n-k-1)}.
+  \end{aligned}
+\end{equation} 
+Similarly, we define \[\iota_c(g)=\diag(I_3,g,I_3)\] as embedding of $\Sp_{2(n-3)}$ into $\Sp_{2n}$.
+Fix an integer \(k\) with \(2\leq k<n\). We define
+\(k\)-dependent embeddings
+\[
+\iota_k:\Sp_{2(n-3)}\longrightarrow\Sp_{2n},
+\qquad
+t_k:\GL_3\longrightarrow\Sp_{2n}.
+\]
+For \(k=2\), the embedding \(\iota_k\) coincides with
+$\iota_c(g)=\diag(I_3,g,I_3)$.
+
+For $h\in\GL_3$, we define an embedding $t$ of $\GL_3$ into $\Sp_{2n}$, via \begin{equation}\label{gl3em}
+    t(h) := \begin{pmatrix}
+    I_{k-2}&&&&\\
+    &h&&&\\
+    &&I_{2(n-k-1)}&&\\
+    &&&h^\ast&\\
+    &&&&I_{k-2}
+  \end{pmatrix}.
+\end{equation}
+
+For $(h_1,h_2)\in \GL_k\times \Sp_{2(n-k)}$, we define $j(h_1,h_2)$ its embedding into the Levi block $M_k$ of $\Sp_{2n}$. We write $\iota=\iota_k$ and $t=t_k$ when no confusion can arise.
+
+\subsection{Degenerate Eisenstein series}
+Throughout this subsection and the remainder of the paper, fix
+integers $n$ and $k$ satisfying $3\le k<n$, and fix a Hecke character $\chi:F^\times\backslash\mathbb A^\times\longrightarrow\mathbb C^\times$.
+
+Let $I_n(s)$ be the representation of $\Sp_{2n}(\bbA)$ with right action, on the space of all smooth and right $K$-finite functions $f(g)$ on $\Sp_{2n}(\bbA)$ that satisfy
+\begin{equation}\label{eq301}
+  f(j(h_1,h_2)ug) = \chi(\det h_1)|\det h_1|^s \delta_{P_k}^{1/2}(j(h_1,h_2))f(g)
+\end{equation}
+for any $(h_1,h_2)\in \GL_k(\bbA)\times \Sp_{2(n-k)}(\bbA), u\in U_k(\bbA)$ and $g\in \Sp_{2n}(\bbA)$, with $\delta_{P_k}$ the modular character of $P_k$. Consider a smooth, holomorphic section $f_s$ of $I_n(s)$. Let $E_{f_s}(g)$ be the degenerate Eisenstein series as in (\ref{eis1}). The term ``degenerate" indicates that the inducing data are not cuspidal. The poles of the Eisenstein series coincide with the poles of its constant term along the Borel subgroup
+  $C_0(g,f_s) = \int\limits_{U(F)\setminus U(\bbA)}E_{f_s}(ug)\,du$, which we can compute by using the standard unfolding technique (see, for example, \cite{Muic08}). 
+
+Consider another Eisenstein series which is associated with an induction from the Borel subgroup $B(\bbA)$ of $\Sp_{2n}(\bbA)$. Let $\Lambda_s$ be the character of $T(F)\setminus T(\bbA)$ such that for $t=\diag(a_1,\cdots,a_k,a_{k+1},\cdots,a_n,a_n^{-1},\cdots,a_1^{-1})\in  T(\bbA)$, we have 
+\begin{equation}
+\Lambda_s(t)
+= \chi\!\Big(\prod_{i=1}^k a_i\Big)\,
+\Big(|a_1|^{\,s-\frac{k-1}{2}}\,
+|a_2|^{\,s-\frac{k-3}{2}}\cdots
+|a_k|^{\,s+\frac{k-1}{2}}\Big)\,
+\Big(|a_{k+1}|^{\,k-n}\,
+|a_{k+2}|^{\,k-n+1}\cdots
+|a_n|^{-1}\Big).
+\end{equation}
+Let $I(\Lambda_s) = \Ind_{B(\bbA)}^{\Sp_{2n}(\bbA)}\left(\Lambda_s\right)$ be the induced representation. Note that $I(\Lambda_s)$ contains $I_n(s)$ as a subrepresentation. 
+
+Let $w\in W_n$ be a Weyl group element. The action of $w$ on $T(\bbA)$ induces an action on characters. We denote by $\Lambda_s^w$ the action on $\Lambda_s$. Denote $W(P,Q)$ to be the elements $
+\left\{
+w\in W_n:
+wM_Pw^{-1}=M_Q,\ 
+w \text{ is the minimal-length representative of }
+W(M_Q)wW(M_P)
+\right\}$. In general, by \cite{BL24}, Chapter 2, for $w\in W(P,Q)$, the parabolic subgroups $P,Q\subset\Sp_{2n}(\bbA)$ reduced Weyl element, there is a global intertwining operator $M(w,s): I(\Lambda_s) \rightarrow I(\Lambda_s^w)$ given by the meromorphic continuation of
+\begin{equation}
+  M(w,s) f_s(g) = \int\limits_{(U(\bbA)\cap wU(\bbA)w^{-1})\setminus U(\bbA) }f_s(w^{-1}ug)\, du, 
+\end{equation}
+whenever the integral converges. This definition does not depend on the choice of the representative of $w$. If we assume $f = \otimes_vf_v$ is factorizable, the intertwining operator factors into a product of local intertwining operators 
+  $M(w,s) f = \otimes_vM_v(w,s)f_v$. 
+  
+  \subsection{Unipotent orbits and Fourier coefficients}\label{sec204}
+Unipotent orbits of the algebraic group $\Sp_{2n}$ are parameterized by partitions of $2n$ with the restriction that each odd number occurs with even multiplicity. For an orbit $\calO$ corresponding to the partition $(p_1^{r_1}p_2^{r_2}\cdots p_z^{r_z})$ where $p_i> p_{i+1}$ and $r_i>0$ for all $i$, we write $\calO := (p_1^{r_1}p_2^{r_2}\cdots p_z^{r_z})$.
+
+
+Let $\calO= (p_1^{r_1}p_2^{r_2}\cdots p_z^{r_z})$. For each $p_i$, we associate $r_i$ copies of the torus element 
+\[
+h_{p_i}(t) = \diag(t^{p_i-1}, t^{p_i-3}, \cdots, t^{3-p_i}, t^{1-p_i} ).
+\]
+We obtain a one-parameter torus element $h_{\calO}(t)$ with non-increasing powers of $t$ along the diagonal after combining and rearranging the diagonal entries of all the $h_{p_i}(t)$'s. 
+For details and background, see \cite{GIN06}.
+ 
+Let \(u_0\) be a representative of the open
+\(M(\calO)\)-orbit in \(L_{2,\calO}\), and let
+$M^{u_0}(\calO)
+=
+\operatorname{Stab}_{M(\calO)}(u_0)$. Define $V_{i,\mathcal{O}},M(\mathcal{O})$ by
+\[
+V_{i,\calO}(F):= \langle X_{\alpha}(r)\in U : h_\calO(t)X_\alpha(r)h_\calO(t)^{-1} =X_\alpha(t^jr) \, \text{for some}\, j\geqslant i,\text{ }\alpha>0, r\in F\rangle,
+\]
+and
+$M(\calO)(F) := T\cdot \langle X_{\alpha}(r):  h_\calO(t)X_\alpha(r)h_\calO(t)^{-1} =X_\alpha(r),\text{ where }\alpha\in\Sigma, r\in F\rangle$.
+
+Let $V_{2,\calO}^{(1)}$ be the commutator subgroup of $ V_{2,\calO}$. 
+Let $L_{2,\calO} =V_{2,\calO}/V_{2,\calO}^{(1)}$ be the maximal abelian quotient of $V_{2,\calO}$. 
+We call $\psi_{\calO}: L_{2,\calO}(F)\setminus L_{2,\calO}(\bbA) \rightarrow \bbC^\times$ a generic (automorphic) character if the connected component of its stabilizer in $M(\calO)(F)$ has the same group type as $M^{u_0}(\calO)(\bar{F})$, the stabilizer of a representative of the unipotent orbit defined by $\mathcal{O}$.
+
+Let $(\pi,\calV)$ be an automorphic representation of $\Sp_{2n}(\bbA)$ and $\psi_\calO:V_{2,\calO}(F)\setminus V_{2,\calO}(\bbA) \rightarrow \bbC^\times $ be a generic character associated with a unipotent orbit $\calO$ in $\Sp_{2n}$. We define the Fourier coefficient of any automorphic function $\varphi \in \calV$ associated with $\calO$ by
+	\begin{equation}
+F_{\psi_\calO}(\varphi)(g) = \int\limits_{V_{2,\calO}(F)\setminus V_{2,\calO}(\bbA)}\varphi(ug)\psi_\calO(u) \,du.
+	\end{equation}
+
+We say that the orbit $\calO$ supports $\pi$ if there exist some $\varphi\in \calV$ and $\psi_\calO$ generic such that the above integral is nonzero. Otherwise, we say that $\calO$ does not support $\pi$.
+
+\section{Fourier coefficients of the degenerate Eisenstein series}
+For the remainder of the paper, assume $3 \leqslant k < n$.
+The Eisenstein series $E_{f_s}(g)$ is supported on the unipotent orbit $\calO  = (3^21^{2n-6})$ by \cite{GIN06}, Chapter 5. For this particular unipotent orbit, the Fourier coefficient would vanish on $P_1$, but not the parabolic subgroup $P_2 $ and $V_{2,\calO} = U_2$. Let $\psi_\calO: U_2(F)\setminus U_2(\bbA)\rightarrow \bbC^\times$ be 
+  $\psi_\calO(u) = \psi(u_{1,3} + u_{2,{2n-2}}), u\in U_2(\bbA)$. Then we will study $F_{\psi_\calO}(E_{f_s}(g))$ defined in (\ref{fc}). The stabilizer $M_{\psi_\calO}(\bbA)$ of $\psi_\calO$ in $M_{2}(\bbA)$ can be identified with $\Sp_{2}(\bbA)\times \Sp_{2(n-3)}(\bbA)$ via $\triangle$ defined in (\ref{triangle}).
+
+Let $Q_{\psi_\calO} = M_{\psi_\calO}\ltimes U_2$. By unfolding the Eisenstein series, we rewrite the Fourier coefficient as
+\begin{equation}\label{int400}
+    \begin{split}
+      F_{\psi_\calO}(E_{f_s}(g)) &= \int\limits_{U_2(F)\setminus U_2(\bbA)} \sum_{\gamma\in P_k(F)\setminus \Sp_{2n}(F)}f_s(\gamma ug)\psi_\calO(u)\, du\\
+      &= \sum_{\gamma \in P_k(F)\setminus \Sp_{2n}(F)/Q_{\psi_\calO}(F)} \int\limits_{U_2(F)\setminus U_2(\bbA)}  \sum_{\beta \in Q_{\psi_\calO}^\gamma(F)\setminus Q_{\psi_\calO}(F)} f_s(\gamma\beta u g )\psi_\calO(u)\, du,
+    \end{split}
+\end{equation}
+with $Q_{\psi_\calO}^\gamma(F) =\left\{\beta\in Q_{\psi_\calO}(F)\mid \gamma\beta\gamma^{-1} \in P_k(F)\right\}$. By the Bruhat decomposition, we may find representatives for the double cosets in $P_{k}\backslash \Sp_{2n}/Q_{\psi_\calO}$ of the form $\gamma =wv_w$ where $w\in W_n$, $v_w\in V_w(F)$ and $V_w\subset U\cap M_2$ since $Q_{\psi_{\calO}}=M_{\psi_\calO}\ltimes U_2 $ for a subgroup $M_{\psi_\calO}$ of $M_2$. Here $V_w$ depends on $w$, and it contains a family of unipotent root subgroups such that it is not killed by the conjugation of $w$. 
+We now show that most of these summands contribute zero. We first prove several lemmas.
+
+\begin{lemma}
+    We first parameterize $P_k(F) \backslash \Sp_{2n}(F) / Q_{\psi_\calO}(F)$ by representatives of the form $w v_w$ for $w \in W_n$ and $v_w$ in a unipotent subgroup $V_w$ depending on $w$. 
+\end{lemma}
+\begin{proof}
+    Since $U_2 \subset Q_{\psi_\calO}$, we have a surjection
+\[
+    P_k(F) \backslash \Sp_{2n}(F) / U_2(F) \twoheadrightarrow P_k(F) \backslash \Sp_{2n}(F) / Q_{\psi_\calO}(F).
+\] By the Bruhat decomposition $\Sp_{2n}(F) = \bigsqcup_{w \in W_n} B(F)\, w\, B(F)$ together with $B \subset P_k$, every $g \in \Sp_{2n}(F)$ admits the form $g = b_1 w b_2$ with $b_1, b_2 \in B(F)$. Absorbing $b_1$ into $P_k$ on the left and writing $b_2 = t u$ with $t \in T$, $u \in U(F)$, the relation $w t = (w t w^{-1}) w$ together with $w t w^{-1} \in T \subset P_k$ allows us to absorb $t$ as well. Hence
+\[
+    P_k(F) \backslash \Sp_{2n}(F) / U(F) = \bigsqcup_{w \in W(P_k) \backslash W_n} P_k(F)\, w\, U(F) / U(F).
+\]
+
+To pass from $U$ to $U_2$, we retain the part of $U$ not in $U_2$. The decomposition $U = (U \cap M_2) \cdot U_2$ gives
+    $U / U_2 \cong U \cap M_2 = \prod_{\alpha \in \Sigma^+(M_2)} X_\alpha$. For $\alpha \in \Sigma^+(M_2)$, conjugation gives $w X_\alpha(r) w^{-1} = X_{w \alpha}(\pm r)$. If $w \alpha \in \Sigma(P_k)$, then $X_{w \alpha} \subset P_k$, and $X_\alpha(r)$ is killed (absorbed into $P_k$ on the left after conjugation by $w$); otherwise it must be retained. Finally, since $Q_{\psi_\calO} = M_{\psi_\calO} \ltimes U_2$, the further right quotient by $Q_{\psi_\calO}$ kills those root subgroups $X_\alpha$ contained in $M_{\psi_\calO}$ as subgroups of $\Sp_{2n}$. The surviving root subgroups are therefore those indexed by
+\[
+    \calR_w := \{\alpha \in \Sigma^+(M_2) : X_\alpha \not\subset M_{\psi_\calO} \text{ and } w \alpha \notin \Sigma(P_k)\},
+\]
+and we set $V_w := \prod_{\alpha \in \calR_w} X_\alpha$. Every double coset in $P_k(F) \backslash \Sp_{2n}(F) / Q_{\psi_\calO}(F)$ admits a representative of the form $\gamma = w v_w$ with $w \in W_n$ and $v_w \in V_w(F)$.
+\end{proof}
+
+We now derive a necessary condition on $w$ for the corresponding summand to contribute nontrivially. Set
+$\tau_1 := e_1 - e_3, \text{ and } \tau_2 := e_2 + e_3.$
+These are the two positive roots on which $\psi_\calO$ is nontrivial when restricted to $X_{\tau_i}(r)$. We now determine which representatives $wv$ can contribute a
+nonzero summand to the double-coset expansion in \eqref{int400}.
+\begin{lemma}
+    Among all $w$, only if $w(1),w(2)\in\{-1,\dots,-k\}$ and $w(3)\in \pm\{k+1,\dots,n\}$, the summand might contribute nonzero. 
+\end{lemma}
+\begin{proof}
+Fix a summand corresponding to $\gamma = w v_w$. Since $\beta \in Q_{\psi_\calO}(F) \subset P_2(F)$ normalizes $U_2(F)$ and stabilizes $\psi_\calO$, the change of variables $u \mapsto \beta^{-1} u \beta$ on $U_2(F) \backslash U_2(\bbA)$ preserves both the Haar measure and the character, giving
+\begin{equation}\label{eq:beta-to-right}
+    \int_{U_2(F) \backslash U_2(\bbA)} f_s(\gamma \beta u g)\, \psi_\calO(u)\, du = \int_{U_2(F) \backslash U_2(\bbA)} f_s(\gamma u \beta g)\, \psi_\calO(u)\, du.
+\end{equation}
+
+For $i = 1, 2$, define the one-parameter subgroup
+   $ Y_{i, v}(r) := v_w^{-1} X_{\tau_i}(r) v_w$. Then $Y_{i, v}(\bbA)$ is a closed one-parameter subgroup of $U_2(\bbA)$ with $Y_{i, v}(F) = Y_{i, v}(\bbA) \cap U_2(F)$, so the $U_2$-integration decomposes along $Y_{i, v}(\bbA)$:
+\[
+    U_2(F) \backslash U_2(\bbA) \;\simeq\; \bigl(U_2(F)\, Y_{i, v}(\bbA) \backslash U_2(\bbA)\bigr) \times (F \backslash \bbA), \qquad du = dr \, du'.
+\]
+A direct computation shows that $v_w^{-1} X_{\tau_i}(r) v_w$ differs from $X_{\tau_i}(r)$ only by root subgroups on which $\psi_\calO$ is trivial; hence
+    $\psi_\calO\bigl(Y_{i, v}(r)\, u'\bigr) = \psi(r)\, \psi_\calO(u')$. Substituting into \eqref{eq:beta-to-right} yields
+\begin{equation}\label{eq:single-root-correct}
+    \int_{U_2(F) Y_{i, v}(\bbA) \backslash U_2(\bbA)} \left( \int_{F \backslash \bbA} f_s\bigl(\gamma\, Y_{i, v}(r)\, u' \beta g\bigr)\, \psi(r)\, dr \right) \psi_\calO(u')\, du'.
+\end{equation}
+
+Using $\gamma = w v_w$ and $w X_{\tau_i}(r) w^{-1} = X_{w \tau_i}(\pm r)$, after replacing $r$ by $-r$ if necessary we obtain
+$f_s\bigl(\gamma\, Y_{i, v}(r)\, u' \beta g\bigr) = f_s\bigl(X_{w \tau_i}(r)\, \gamma\, u' \beta g\bigr)$. Hence the vanishing of \eqref{eq:single-root-correct} depends only on the Weyl element $w$ through the position of $X_{w \tau_i}$.
+
+If \(X_{w\tau_i}\subset P_k\), then the normalized inducing
+character is trivial on \(X_{w\tau_i}\), since it is a unipotent
+root subgroup of \(P_k\), and the left $P_k(\bbA)^1$-invariance of $f_s$ allows us to remove $X_{w \tau_i}(r)$ from the integrand. The inner $r$-integral reduces to $\int_{F \backslash \bbA} \psi(r)\, dr = 0$, so the summand vanishes. A necessary condition for the summand to contribute is therefore
+\begin{equation}\label{eq:necessary}
+    X_{w \tau_1} \not\subset P_k \quad \text{and} \quad X_{w \tau_2} \not\subset P_k.
+\end{equation}
+In the signed permutation model for $W_n$, condition \eqref{eq:necessary} is equivalent to the \emph{survival condition}
+\begin{equation}\label{eq:survival}
+    w(1), w(2) \in \{-1, \ldots, -k\}, \qquad w(3) \in \pm\{k+1, \ldots, n\}.
+\end{equation}
+Indeed, if $w(3) \notin \pm\{k+1, \ldots, n\}$ or one of $w(1), w(2)$ lies in $\pm\{k+1, \ldots, n\}$, then $w \tau_1$ or $w \tau_2$ lies in the Levi root system of $P_k$, contradicting \eqref{eq:necessary}.
+\end{proof}
+
+We further specialize the index set $\Sigma^+(M_2)$ in $\calR_w$. Define $\calS$ as the set of those positive roots of $M_2$ whose root subgroups $X_\alpha$ are not contained in $M_{\psi_\calO}$ as subgroups of $\Sp_{2n}$. We fix one choice of the Weyl element
+\begin{equation}\label{choiceofw}
+    w = \begin{pmatrix}
+        & & I_{k-2} & & & & \\
+        & & & & & & I_{2} \\
+        & 1 & & & & & \\
+        & & & I_{2(n-k-1)} & & & \\
+        & & & & & 1 & \\
+        -I_{2} & & & & & & \\
+        & & & & I_{k-2} & &
+    \end{pmatrix}.
+\end{equation}
+This $w$ satisfies the survival condition \eqref{eq:survival}: the $-I_2$ block sends $e_1 \mapsto -e_{k-1}$, $e_2 \mapsto -e_k$, and the upper $1$ block sends $e_3 \mapsto e_{k+1}$. The remaining action is $e_j \mapsto e_{j-3}$ for $4 \leq j \leq k+1$ and $e_j \mapsto e_j$ for $j \geq k+2$.
+
+We compute $\calR_w$ for this $w$. For $\alpha = e_3 - e_j$ with $4 \leq j \leq k+1$: $w \alpha = e_{k+1} - e_{j-3}$ with $j - 3 \in \{1, \ldots, k-2\}$, which lies outside $\Sigma(P_k)$. Hence $\alpha \in \calR_w$. For $\alpha = e_3 - e_j$ with $j \geq k+2$: $w \alpha = e_{k+1} - e_j$ has both indices in $\{k+1, \ldots, n\}$, hence lies in $\Sigma(\Sp_{2(n-k)}) \subset \Sigma(P_k)$. Hence $\alpha \notin \calR_w$. For $\alpha = e_3 + e_j$ with $j \geq 4$: $w \alpha$ is a positive root in $\Sigma(U_k) \subset \Sigma(P_k)$. Hence $\alpha \notin \calR_w$. Therefore $\calR_w = \{e_3 - e_j : 4 \leq j \leq k+1\}$, yielding the explicit form
+\begin{equation}\label{choicesofv}
+    V_w = \left\{\left.\begin{pmatrix}
+        I_2 & & & & & & \\
+        & 1 & v & & & & \\
+        & & I_{k-2} & & & & \\
+        & & & I_{2(n-k-1)} & & & \\
+        & & & & I_{k-2} & v^* & \\
+        & & & & & 1 & \\
+        & & & & & & I_2
+    \end{pmatrix} \in \Sp_{2n}(F) \,\right|\, v \in F^{k-2}\right\}.
+\end{equation}
+
+\begin{lemma}
+Any other family $w' V_{w'}$ with $w'$ satisfying \eqref{eq:survival} is equivalent to $w V_w$ under left $W(P_k)$ and right $W(Q_{\psi_\calO})$.
+\end{lemma}
+\begin{proof}
+Specifically, we construct $\sigma_\ell \in W(P_k)$ and $\sigma_r \in 1 \times W_{n-3} \subset W(Q_{\psi_\calO})$ such that
+\begin{equation}\label{eq:family-equiv}
+    \sigma_\ell \cdot w V_w \cdot \sigma_r = w' V_{w'}.
+\end{equation}
+
+\paragraph{Construction of $\sigma_\ell$ and $\sigma_r$.} Recall $W(P_k) \cong S_k \times W(\Sp_{2(n-k)})$, where $S_k$ permutes outputs in $\{1, \ldots, k\}$ as the symmetric group and $W(\Sp_{2(n-k)})$ acts on $\pm\{k+1, \ldots, n\}$ as signed permutations; the factor $W_{n-3}$ in $W(Q_{\psi_\calO})$ acts as signed permutations on $\{4, \ldots, n\}$ and fixes $\{1, 2, 3\}$.
+
+Since $w(j), w'(j) \in \{-1, \ldots, -k\}$ for $j = 1, 2$ and $S_k$ acts transitively on ordered pairs of distinct elements of $\{-1, \ldots, -k\}$, choose $\tau \in S_k$ with $\tau(w(j)) = w'(j)$ for $j = 1, 2$. Since $w(3), w'(3) \in \pm\{k+1, \ldots, n\}$ and $W(\Sp_{2(n-k)})$ acts transitively on this set, choose $\rho \in W(\Sp_{2(n-k)})$ with $\rho(w(3)) = w'(3)$. Set $\sigma_\ell := (\tau, \rho) \in W(P_k)$. Then $\sigma_\ell w$ agrees with $w'$ on $\{1, 2, 3\}$, and consequently $\sigma_\ell w$ and $w'$ map $\{\pm 4, \ldots, \pm n\}$ to the same subset of $\{\pm 1, \ldots, \pm n\}$.
+
+For $j \in \{4, \ldots, n\}$, define
+    $\sigma_r(j) := w^{-1}\bigl(\sigma_\ell^{-1}(w'(j))\bigr)$. The argument $\sigma_\ell^{-1}(w'(j))$ lies in $w(\{\pm 4, \ldots, \pm n\})$, so $\sigma_r(j) \in \{\pm 4, \ldots, \pm n\}$ and $\sigma_r$ is a signed permutation of $\{4, \ldots, n\}$. Hence $\sigma_r \in 1 \times W_{n-3}$. Direct verification gives $w' = \sigma_\ell w \sigma_r$.
+
+It remains to verify
+\begin{equation}\label{eq:V-compat}
+    V_{w'} = \sigma_r^{-1} V_w \sigma_r,
+\end{equation}
+which combined with $w' = \sigma_\ell w \sigma_r$ gives \eqref{eq:family-equiv}. We establish two structural identities.
+
+For any $\sigma \in W(P_k)$ and $w \in W_n$, $V_{\sigma w} = V_w$. Indeed, $W(P_k) = W(M_k)$ stabilizes $\Sigma(M_k)$, and applying any $(\tau, \rho) \in S_k \times W(\Sp_{2(n-k)})$ to a root $e_a \pm e_b \in \Sigma(U_k)$ with $a \leq k < b$ yields $e_{\tau(a)} \pm \epsilon\, e_{\rho'(b)} \in \Sigma(U_k)$ regardless of the sign $\epsilon$, so $W(P_k)$ preserves $\Sigma(P_k)$ as a set. The condition $w \alpha \notin \Sigma(P_k)$ is therefore invariant under left-multiplication of $w$ by $\sigma$, giving $\calR_{\sigma w} = \calR_w$ and $V_{\sigma w} = V_w$.
+
+For any $\sigma_r \in 1 \times W_{n-3}$ and $w \in W_n$, $V_{w \sigma_r} = \sigma_r^{-1} V_w \sigma_r$. Indeed, $\sigma_r$ fixes $e_3$ and permutes $\{e_4, \ldots, e_n\}$ as signed permutations, so it preserves $\calS$ as a set. Then for $\beta \in \calS$,
+\[
+    \beta \in \calR_{w \sigma_r} \iff w \sigma_r(\beta) \notin \Sigma(P_k) \iff \sigma_r(\beta) \in \calR_w \iff \beta \in \sigma_r^{-1}(\calR_w),
+\]
+giving $\calR_{w \sigma_r} = \sigma_r^{-1}(\calR_w)$. The subgroup identity follows from the standard formula $\sigma_r^{-1} X_\alpha \sigma_r = X_{\sigma_r^{-1}(\alpha)}$:
+\[
+    \sigma_r^{-1} V_w \sigma_r = \prod_{\alpha \in \calR_w} X_{\sigma_r^{-1}(\alpha)} = \prod_{\beta \in \sigma_r^{-1}(\calR_w)} X_\beta = \prod_{\beta \in \calR_{w \sigma_r}} X_\beta = V_{w \sigma_r}.
+\]
+
+Combining the two identities with $w' = \sigma_\ell w \sigma_r$ we get $V_{w'} = V_{\sigma_\ell w \sigma_r} = V_{w \sigma_r} = \sigma_r^{-1} V_w \sigma_r$, which is \eqref{eq:V-compat}. Hence \eqref{eq:family-equiv} holds, and $w V_w$ is a canonical representative of the unique Weyl-equivalence class of $\gamma$ that can contribute nontrivially.
+\end{proof}
+
+
+
+\begin{proposition}
+    Let $H=U_2^w$. Then
+\[
+\begin{aligned}
+\mathcal F_{\psi_{\calO}}(E_{f_s})(g)
+&=
+\sum_{\beta'
+ \in P_{k-2,2(n-3)}(F)\backslash\Sp_{2(n-3)}(F)}
+\int_{H(F)\backslash U_2(\mathbb A)}
+f_s\bigl(wu\iota_c(\beta')g\bigr)\psi_{\calO}(u)\,du\\
+&=
+\sum_{\beta'
+ \in P_{k-2,2(n-3)}(F)\backslash\Sp_{2(n-3)}(F)}
+\int_{H(\mathbb A)\backslash U_2(\mathbb A)}
+\int_{H(F)\backslash H(\mathbb A)}
+f_s\bigl(whu\iota_c(\beta')g\bigr)
+\psi_{\calO}(hu)\,dh\,d\dot u\\
+&=
+\sum_{\beta'
+ \in P_{k-2,2(n-3)}(F)\backslash\Sp_{2(n-3)}(F)}
+\int_{H(\mathbb A)\backslash U_2(\mathbb A)}
+f_s\bigl(wu\iota_c(\beta')g\bigr)
+\psi_{\calO}(u)\,d\dot u.
+\end{aligned}
+\]
+Here we used
+$wH(\mathbb A)w^{-1}
+\subset
+(U\cap M_k)(\mathbb A)
+\subset
+P_k(\mathbb A)$ together with $\operatorname{vol}(H(F)\backslash H(\mathbb A))=1$.
+\end{proposition}
+\begin{proof}
+\newcommand{\nTwoPlus}{n_{2,+}^{k+1}}
+
+Fix $v=(v_1,\dots,v_{k-2})\in F^{k-2}$ and embed it in $V_w$ via \eqref{choicesofv}.
+Let $r=(r_1,\dots,r_{k-2})\in \bbA^{k-2}$. Define the $(k-1)$-tuple
+\begin{equation}\label{rtuple}
+    \bigl(\delta(r), r\bigr) := \bigl(-\sum_{i=1}^{k-2}r_iv_i,\, r_1,\, r_2,\, \dots,\, r_{k-2}\bigr) \in \bbA^{k-1},
+\end{equation}
+where $\delta(r) := -\sum_{i=1}^{k-2} r_i v_i$. Define
+    $\nTwoPlus\bigl((a_3, \dots, a_{k+1})\bigr) := \prod_{j=3}^{k+1} X_{e_2 + e_j}(a_j),
+    $ where we have $(a_3, \dots, a_{k+1}) \in \bbA^{k-1}$.
+
+By construction $n_{2,+}^{k+1}((\delta(r),r))\in U_2(\bbA)$. Write $u=n_{2,+}^{k+1}((\delta(r),r))\,u'$ with $u'\in U_2(\bbA)$. We may conjugate $n_{2,+}^{k+1}((\delta(r),r))$ to the left.
+The only nontrivial effect comes from conjugation by $v$:
+a direct computation (in the unipotent coordinates) gives
+\begin{equation}\label{viotaconj}
+v\,n_{2,+}^{k+1}((\delta(r),r))\,v^{-1}=n_{2,+}^{k+1}\!\bigl(\,\delta(r)+\sum_{i=1}^{k-2}r_i v_i,r\bigr),
+\qquad \delta\in \bbA,
+\end{equation}
+so that, with $\delta=\delta(r)$ as in \eqref{rtuple}, we obtain
+$v\,n_{2,+}^{k+1}((\delta(r),r))\,v^{-1}=n_{2,+}^{k+1}((0,r))$. Consequently,
+$f_s\bigl(wv\,n_{2,+}^{k+1}((\delta(r),r))\,u' \beta g\bigr)
+=f_s\bigl(w\,n_{2,+}^{k+1}(0,r)\,v\,u'\beta g\bigr)$.
+
+Note that $wn_{2,+}^{k+1}(0,r)w^{-1}$ is in $P_k(\bbA)$, so by the left $P_k(\bbA)^1$-invariance of $f_s$, we have $f_s(wn_{2,+}^{k+1}(0,r)vu'\beta g) = f_s(wvu'\beta g)$, independent of $r$. On the other hand, $\psi_\calO$ is nontrivial on $n_{2,+}^{k+1}((\delta(r),r))$, and by the definition of
+$\delta(r)$ in \eqref{rtuple} we have
+\[
+\psi_\calO\bigl(n_{2,+}^{k+1}((\delta(r),r))\bigr)
+=\psi\!\left(-\sum_{i=1}^{k-2}r_i v_i\right)
+=\prod_{i=1}^{k-2}\psi(-r_i v_i).
+\]
+Thus, for any fixed $v\in V_w$, the Fourier coefficient contains the inner integral
+\[
+\int_{(F\backslash\bbA)^{k-2}}
+\left(\prod_{i=1}^{k-2}\psi(-r_i v_i)\right)\,\prod_{i=1}^{k-2}dr_i.
+\]
+By orthogonality of additive characters, this inner integral is nonzero only if $v_i=0$ for all
+$i=1,\dots,k-2$. Hence we may drop the summation over the discrete unipotent subgroup $V_w$. Since $Q_{\psi_\calO}^w$ is independent of the choice of $v$, we obtain
+\begin{equation}\label{eq:afterV}
+F_{\psi_\calO}(E_{f_s}(g))
+=\int_{U_2(F)\setminus U_2(\bbA)}
+\sum_{\beta\in Q_{\psi_\calO}^w(F)\setminus Q_{\psi_\calO}(F)}
+f_s(w u\beta g)\,\psi_\calO(u)\,du.
+\end{equation}
+
+Furthermore, since $M^w_{\psi_{\mathcal O}}\simeq \Sp_2\times P_{k-2,2(n-3)}$, every class
+$\beta\in Q^w_{\psi_{\mathcal O}}(F)\backslash Q_{\psi_{\mathcal O}}(F)$ may be represented by a pair
+\[
+\beta'\in P_{k-2,2(n-3)}(F)\backslash \Sp_{2(n-3)}(F),
+\qquad
+u_0\in U_2^w(F)\backslash U_2(F),
+\]
+corresponding to its Levi and unipotent components, respectively. Substitute this into \eqref{eq:afterV}. Since $\psi_{\mathcal O}$ is trivial on
+$U_2^w(\bbA)$ and $U_{2,w}(\bbA)\simeq U_2^w(\bbA)\backslash U_2(\bbA)$, the summation over $U_2^w(F)\backslash U_2(F)$ can be absorbed into the integration over
+$U_2(F)\backslash U_2(\bbA)$, giving the second line of the above. This proves the proposition.
+\end{proof}
+
+The Fourier coefficient $F_{\psi_\calO}(E_{f_s}(g))$ is a periodic function on the rational points of $M_{\psi_\calO}(\bbA)$, then on $\Sp_{2(n-3)}(\bbA)$ by restriction. We have the following main theorem:
+\begin{theorem}\label{thm401}
+  Let $E_{f_s}(g)$ be an Eisenstein series associated with the parabolic induction $ I_n(s)=\Ind_{P_k(\bbA)}^{\Sp_{2n}(\bbA)}\left(\chi|\det|^s\otimes \id_{\Sp_{2(n-k)}}\right)$. For a fixed generic character $\psi_\calO$, consider its Fourier coefficient $F_{\psi_\calO}(E_{f_s}(g))$. For $\Re(s)$ sufficiently large, as a function on $\Sp_{2(n-3)}(\bbA)$, $F_{\psi_\calO}(E_{f_s}(g))$ is an Eisenstein series associated to the parabolic induction 
+  \[
+  I_{n-3}(s) = \Ind_{P_{k-2,2(n-3)}(\bbA)}^{\Sp_{2(n-3)}(\bbA)} \chi|\det|^{s}\otimes \id_{\Sp_{2(n-k-1)}}.
+  \]
+  The corresponding section attached to this Eisenstein series continues to a meromorphic function on $\bbC$. Furthermore, at every point \(s_0\) with \(\Re(s_0)\ge0\) at which
+the meromorphically continued local descent operator is regular,
+the local map is surjective at non-Archimedean places and has dense
+image at Archimedean places.
+\end{theorem}
+
+The proof of this theorem requires unfolding the Eisenstein series and carefully computing the local Fourier coefficients. These are treated in Section 4. In the remainder of this section, we reduce to local calculations. The proof of Theorem \ref{thm401} is then completed in Section 5.
+
+\begin{lemma}\label{lem:global-section}
+Consider the function on $g\in \Sp_{2(n-3)}(\bbA)$, where $g$ is embedded into the central block of $\Sp_{2n}(\bbA)$, denoted by $\iota_{c}$, defined by
+\begin{equation}\label{int405}
+  \calF(f_s,g) \;:=\; \int_{U_{2,w}(\bbA)} f_s\!\bigl(wu\iota_c(g)\bigr)\,\psi_\calO(u)\,du.
+\end{equation}
+Then $\calF(f_s,\cdot)$ defines a meromorphic section of $I_{n-3}(s)$.
+Moreover, if $f_s=\prod_v f_{s,v}$ is factorizable, then
+\begin{equation}\label{int407}
+  \calF(f_s,g)
+  \;=\;
+  \prod_v \int_{U_{2,w}(F_v)} f_{s,v}\!\bigl(wu_v\iota_c(g_v)\bigr)\,\psi_{\calO,v}(u_v)\,du_v,
+\end{equation}
+where $\psi_\calO=\prod_v \psi_{\calO,v}$ and $g=(g_v)_v$.
+\end{lemma}
+\begin{proof}
+We have
+\[
+  F_{\psi_\calO}(E_{f_s}(g))
+  =
+  \sum_{\beta \in P_{k-2,2(n-3)}(F)\backslash \Sp_{2(n-3)}(F)}
+  \calF(f_s,\beta g),
+  \qquad g\in \Sp_{2(n-3)}(\bbA).
+\]
+Thus it suffices to prove that \(\calF(f_s,\cdot)\) satisfies the
+\(P_{k-2,2(n-3)}(\bbA)\)-equivariance of \(I_{n-3}(s)\).
+
+Let  $P' := P_{k-2,2(n-3)}$. Take $p'=(h_1,h_2)v\in P'(\bbA)$, where
+  $(h_1,h_2)\in
+  \GL_{k-2}(\bbA)\times \Sp_{2(n-k-1)}(\bbA),
+  v\in U_{P'}(\bbA)$. For the Weyl element \(w\) in the above, we have $w(e_j)=e_{j-3},\text{ where } 4\leq j\leq k+1$. Hence the \(\GL_{k-2}\)-block of \(P'\), which under
+\(\iota_{c}\) acts on $\langle e_4,\ldots,e_{k+1}\rangle$, is carried by conjugation with \(w\) into the \(\GL_k\)-block of \(P_k\). More
+precisely,
+  $w\iota_c(p')w^{-1}
+  =
+  p_w(p')\in P_k(\bbA)$. If the Levi component of \(p_w(p')\) is written as $m_k(p')=(a(p'),b(p'))\in
+  \GL_k(\bbA)\times \Sp_{2(n-k)}(\bbA)$, then
+\[
+  a(p')=\diag(h_1,I_2)
+  \quad\text{up to multiplication by unipotent factors,}
+\]
+and therefore \begin{equation}\label{eq:det-pw-triv}
+  \det a(p')=\det h_1.
+\end{equation} The unipotent part \(v\) is carried into the unipotent radical \(U_k\) of
+\(P_k\), and the \(\Sp_{2(n-k-1)}\)-factor is carried into the
+\(\Sp_{2(n-k)}\)-factor of the Levi of \(P_k\).
+
+We compute
+\[
+\begin{aligned}
+  \calF(f_s,p'g)
+  &=
+  \int_{U_{2,w}(\bbA)}
+    f_s\!\bigl(wu\,\iota_{c}(p'g)\bigr)\psi_\calO(u)\,du  \\
+  &=
+  \int_{U_{2,w}(\bbA)}
+    f_s\!\bigl(wu\,\iota_{c}(p')\iota_{c}(g)\bigr)
+    \psi_\calO(u)\,du.
+\end{aligned}
+\]
+
+Since $w\iota_{c}(p')=p_w(p')w$, we have
+\[
+  wu\iota_{c}(p')
+  =
+  w\iota_{c}(p')
+  \left(\iota_{c}(p')^{-1}u\iota_{c}(p')\right)
+  =
+  p_w(p')w
+  \left(\iota_{c}(p')^{-1}u\iota_{c}(p')\right).
+\]
+Under the central embedding, \(\iota_{c}(p')\) preserves the quotient $U_{2,w}=U_2^w\backslash U_2$, and hence induces a change of variables on \(U_{2,w}\). Put 
+  $u'=\iota_{c}(p')^{-1}u\iota_{c}(p')$. The character \(\psi_\calO\) is preserved under this change of variables. Thus,
+by the \(P_k(\bbA)\)-equivariance of \(f_s\),
+\[
+\begin{aligned}
+  \calF(f_s,p'g)
+  &=
+  \chi(\det h_1)|\det h_1|^s
+  \delta_{P_k}^{1/2}(p_w(p'))  \\
+  &\qquad\qquad\cdot
+  \int_{U_{2,w}(\bbA)}
+    f_s(wu'\iota_{c}(g))\psi_\calO(u')\,
+    d\!\left(\iota_{c}(p')u'\iota_{c}(p')^{-1}\right).
+\end{aligned}
+\]
+
+It remains to compute the Jacobian of this change of variables on \(U_{2,w}\).
+In the coordinates \(u(x,y,z)\) for \(U_{2,w}\), the quotient coordinate  $y\in \Mat_{2\times(k-2)}(\bbA)$ is transformed by $y\longmapsto yh_1^{-1}$.
+
+The \(x\)- and \(z\)-coordinates undergo determinant-one affine transformations and
+translations preserving the character. Since \(y\) has two rows,
+  $d(yh_1^{-1})=|\det h_1|^{-2}dy$. Thus the quotient measure transforms by $
+  du=|\det h_1|^{-2}du'$, and therefore
+\[
+  \calF(f_s,p'g)
+  =
+  \chi(\det h_1)|\det h_1|^s
+  \delta_{P_k}^{1/2}(p_w(p'))
+  |\det h_1|^{-2}
+  \calF(f_s,g).
+\]
+
+We now compare modulus characters. Since \(P_k\subset \Sp_{2n}\) has Levi
+\(\GL_k\times \Sp_{2(n-k)}\), we have $ \delta_{P_k}(a,h)=|\det a|^{2n-k+1}$.
+Using \eqref{eq:det-pw-triv}, we get
+ $ \delta_{P_k}^{1/2}(p_w(p'))
+  =
+  |\det h_1|^{(2n-k+1)/2}$. On the other hand, since \(P'=P_{k-2,2(n-3)}\subset \Sp_{2(n-3)}\) has Levi
+\(\GL_{k-2}\times \Sp_{2(n-k-1)}\),
+\[
+  \delta_{P'}(h_1,h_2)
+  =
+  |\det h_1|^{2(n-3)-(k-2)+1}
+  =
+  |\det h_1|^{2n-k-3}.
+\]
+Thus
+\[
+  \delta_{P_k}^{1/2}(p_w(p'))|\det h_1|^{-2}
+  =
+  |\det h_1|^{(2n-k+1)/2-2}
+  =
+  |\det h_1|^{(2n-k-3)/2}
+  =
+  \delta_{P'}^{1/2}(h_1,h_2).
+\]
+Therefore  $\calF(f_s,p'g)
+  =
+  \chi(\det h_1)|\det h_1|^s
+  \delta_{P'}^{1/2}(h_1,h_2)
+  \calF(f_s,g)$.
+
+Smoothness and right \(K\)-finiteness follow from the corresponding properties of
+\(f_s\), and the local computations in the next section give convergence for
+\(\Re(s)\gg0\) and meromorphic continuation. Hence \(\calF(f_s,\cdot)\) is a
+meromorphic section of \(I_{n-3}(s)\).
+
+Finally, assume \(f_s=\prod_v f_{s,v}\) and
+\(\psi_\calO=\prod_v\psi_{\calO,v}\) are factorizable. With the product Haar measure
+on \(U_{2,w}(\bbA)\), Fubini's theorem gives the Euler factorization
+\eqref{int407} in the initial domain of absolute convergence. The identity then
+extends meromorphically in \(s\).
+\end{proof}
+
+\section{Local computations}
+In this section, let $\calO_v$ be the ring of integers of $F_v$, and $\varpi$ a choice of uniformizer with $q^{-1} = |\varpi|_v$. We now compute the different cases.
+
+\subsection{The unramified case}\label{sec501}
+
+In this case, we assume that the local holomorphic section $f_{s,v}$ is spherical in 
+\begin{equation}
+  I_{n,v}(s) = \Ind_{P_k(F_v)}^{\Sp_{2n}(F_v)}\chi_v|\det|^s\otimes \id_{\Sp_{2(n-k)}}.
+\end{equation}
+Without loss of generality, we assume that the local additive character $\psi_v$ is normalized so that it is trivial on $\calO_v$ but not on $\varpi^{-1}\calO_v$. 
+
+\medskip
+Consider the local integral. Conjugating $w$ to the right, performing the change of variable $g\mapsto wgw^{-1}$, and using the right $K_v=\Sp_{2n}(\calO_v)$-invariance of the spherical section $f_{s,v}$, we obtain
+\begin{equation}\label{int501}
+  \begin{split}
+    \calF_v(f_{s,v},g) &= \int\limits_{U_{2,w}(F_v)}f_{s,v}(w u\iota_{c}(g))\psi_{\calO,v}(u)\,du\\
+    &=\int\limits_{\overline{U}_{2,w}(F_v)}f_{s,v}(u\iota(g))\psi^{w^{-1}}_{\calO,v}(u)\,du, \quad g\in \Sp_{2(n-3)}(F_v),
+  \end{split}
+\end{equation}
+where $\overline{U}_{2,w}=wU_{2,w}w^{-1}$. In matrix form,
+\begin{equation}\label{def501}
+  \overline{U}_{2,w} = w U_{2,w}w^{-1} 
+  = \left.\left\{ \begin{pmatrix} 
+    I_{k-2}&&&&\\
+    &I_2&&&\\
+    0&x&I_{2(n-k)}&&\\
+    y&z&x^\ast&I_2&\\
+    0&y^\ast&0&&I_{k-2}
+  \end{pmatrix} \right\vert x = \begin{pmatrix} {}^tx_4 \\ {}^tx_3 \\ {}^tx_2 \\ {}^tx_1 \end{pmatrix} J_2 \right\},
+\end{equation}
+where $x_2,x_3\in \Mat_{2\times (n-k-1)}$, and $x_1,x_4\in \Mat_{2\times 1}$. The character $\psi_{\calO,v}^{w^{-1}}$ is defined by
+$\psi_{\calO,v}^{w^{-1}} (u) = \psi_{\calO,v}(w^{-1}uw).$ We parametrize elements in (\ref{def501}) by $\overline{u(x,y,z)}$.
+
+\begin{theorem}\label{thm501}
+  Let $f_{s,v}$ be a spherical local holomorphic section in $I_{n,v}(s)$. The local Fourier coefficient
+  \begin{equation*}
+    \calF_v(f_{s,v},g) = \int\limits_{\overline{U}_{2,w}(F_v)}f_{s,v}(u\iota(g))\psi^{w^{-1}}_{\calO,v}(u)\,du
+  \end{equation*}
+  defines a local holomorphic section in 
+  \begin{equation*}
+    I_{n-3,v}(s) = \Ind_{P_{k-2,2(n-3)}(F_v)}^{\Sp_{2(n-3)}(F_v)} \chi_v|\det|^{s}\otimes \id_{\Sp_{2(n-k-1)}}.
+  \end{equation*}
+  In fact, we have $
+    \calF_v(f^{\circ}_{n,s,v},g) $
+  \begin{equation*}=
+    L_v^{-1}(\chi_v^2,2s+k-1)\,
+    L_v^{-1}\!\left(\chi_v,s-\frac{k+1}{2}+n\right)\,
+    L_v^{-1}\!\left(\chi_v,s-\frac{k-1}{2}+n\right)\,
+    f^{\circ}_{n-3,s,v}(g).
+  \end{equation*}
+  where $f^\circ$ is the spherical vector in the representation space.
+\end{theorem}
+
+\begin{proof}
+It is clear that $\calF_v(f_{s,v},g)$ lies in $I_{n-3,v}(s)$ by verifying the formula in the local context. Thus it remains to prove that $\calF_v(f_{s,v},g)$ is holomorphic whenever $f_{s,v}$ is. For this purpose, we may assume $g=\id$.
+
+\medskip
+\noindent
+
+Let $x=(x_{i,j})\in \Mat_{2(n-k)\times 2}(F_v)$ and embed $x$ into $\overline{U}_{2,w}$ via (\ref{def501}); denote the image by $\overline{u(x,0,0)}$. Equivalently, it corresponds to the roots
+$\{-e_i\pm e_j \mid k-1\le i\le k<j\le n\}.$
+Then, for any $u\in \overline{U}_{2,w}(F_v)$, we have $\psi_{\calO,v}^{w^{-1}}(u)=\psi_v(x_{1,1}+x_{2(n-k),2})$.
+Similarly, write
+\begin{equation}\label{iota2}
+  y = \begin{pmatrix}
+    y_1\\
+    y_2
+  \end{pmatrix}\in\Mat_{2\times (k-2)}(F_v), \quad
+  y_i = \begin{pmatrix}
+    y_{i,1}&y_{i,2}&\cdots&y_{i,(k-2)}
+  \end{pmatrix},\; i =1,2,
+\end{equation}
+and denote its embedding in $\overline{U}_{2,w}$ by $\overline{u(0,y,0)}$.
+
+Since $f_{s,v}$ is spherical and locally constant, for any $y$ such that
+$y_{i,j}\in \calO_v$ for $i=1,2$ and $j=1,\dots,k-2$, we have
+\begin{equation}\label{inv01}
+  f_{s,v}(\overline{u(0,y,0)}) = f_{s,v}(\id).
+\end{equation}
+
+Now consider any $(k-2)$-tuple $r=(r_1,\dots,r_{k-2})\in (\calO_v)^{k-2}$ and define
+\begin{equation}\label{def:npluskone-rootonly}
+  \nPlusKone(r)
+  \;:=\;
+  \prod_{i=1}^{k-2} X_{e_i+e_{k+1}}(r_i)\ \in \Sp_{2n}(F_v),
+\end{equation}
+where the product is taken in any fixed order.
+Note that $f_{s,v}$ is left-invariant under $\nPlusKone(r)$ since $\nPlusKone(r)\in U_k(F_v)$. Moreover,
+\begin{equation}\label{r01}
+  \nPlusKone(r)\begin{pmatrix} 
+    I_{k-2}&&&&\\
+    &I_2&&&\\
+    0&x&I_{2(n-k)}&&\\
+    y&z&x^\ast&I_2&\\
+    0&y^\ast&0&&I_{k-2}\end{pmatrix}(\nPlusKone(r))^{-1} = \begin{pmatrix} 
+    I_{k-2}&b&&&\\
+    &I_2&&&\\
+    0&x'&I_{2(n-k)}&&\\
+    y&z&(x')^\ast&I_2&b^\ast\\
+    0&y^\ast&0&&I_{k-2}\end{pmatrix},
+\end{equation}
+where $x$ is viewed in the form $\Mat_{2(n-k)\times 2}$ and
+\begin{equation}
+  x' = \begin{pmatrix}
+    x_{1,1}+\sum_{i=1}^{k-2}y_{2,i}r_i&x_{1,2} +\sum_{i=1}^{k-2} y_{1,i}r_i\\
+    \vdots&\vdots\\
+    x_{2(n-k),1}&x_{2(n-k),2}
+  \end{pmatrix}.
+\end{equation}
+Before integrating over the \(y\)-coordinates, write \(y=(y_1,y_2)\) and define
+the partial integral
+\[
+G(y_1,y_2)
+=
+\int f_{s,v}(u(x,y,z))
+ \psi_v(x_{1,1}+x_{2(n-k),2})\,dx\,dz ,
+\]
+where the integration is over all remaining \(x\)- and \(z\)-coordinates in
+\(\overline U_{2,w}(F_v)\). Thus
+\[
+\calF_v(f_{s,v},\id)=\int G(y_1,y_2)\,dy_1\,dy_2 .
+\]
+
+On the right-hand side of \eqref{r01}, the entries \(b\) and \(b^\ast\) lie in the
+unipotent radical of the \(\GL_k\)-Levi block inside \(P_k(F_v)\). Hence their
+left action on the section is trivial by \(P_k\)-equivariance. Conjugating
+\(\nPlusKone(r)\) to the right, using right \(K_v\)-invariance of the spherical
+section, and then making the changes of variables
+\[
+x_{1,1}\mapsto x_{1,1}-\sum_{i=1}^{k-2}y_{2,i}r_i,\qquad
+x_{1,2}\mapsto x_{1,2}-\sum_{i=1}^{k-2}y_{1,i}r_i,
+\]
+we obtain, for every \(r=(r_1,\ldots,r_{k-2})\in\calO_v^{k-2}\),
+\[
+G(y_1,y_2)
+=
+\psi_v\!\left(-\sum_{i=1}^{k-2}y_{2,i}r_i\right)G(y_1,y_2).
+\]
+Since \(\psi_v\) has conductor \(\calO_v\), this identity forces
+$G(y_1,y_2)=0 $ unless $y_2\in\calO_v^{k-2}$.
+
+Indeed, if some \(y_{2,i}\notin\calO_v\), one can choose \(r_i\in\calO_v\) so that
+\(\psi_v(-y_{2,i}r_i)\neq 1\). On the remaining set
+\(y_2\in\calO_v^{k-2}\), the corresponding unipotent element belongs to
+\(K_v\). By \eqref{inv01}, the right-invariance by compact subgroup, and normalization of Haar measure, the integration
+over \(y_2\) contributes volume \(1\) and may be omitted.
+
+Similarly, considering
+\begin{equation}\label{r02}
+  \begin{pmatrix}
+    I_{k-2}&0&^tr&&&&\\
+    0&I_2&0&&&&\\
+    0&0&1&&&&\\
+    &&&I_{2(n-k-1)}&&&\\
+    &&&&1&0&r^\ast\\
+    &&&&0&I_2&0\\
+    &&&&0&0&I_{k-2}
+  \end{pmatrix}
+\end{equation}
+and repeating the same argument, we can drop the integration over $y_1$ as well. Consequently, (\ref{int501}) reduces to
+\begin{equation}\label{int502}
+  \calF_v(f_{s,v},\id) = \int\limits_{\overline{U}^{(0)}_{2,w}(F_v)} f_{s,v}(u)\psi^{w^{-1}}_{\calO,v}(u)\,du,
+\end{equation}
+where $\overline{U}^{(0)}_{2,w}$ has elements $\overline{u(x,0,z)}\in \overline{U}_{2,w}$. Define
+\[
+\overline U'_{2,w}
+=
+\left\{
+u(x,0,z)\;\middle|\;
+x=
+\begin{pmatrix}
+0&x_{1,2}\\
+\vdots&\vdots\\
+0&x_{2(n-k),2}
+\end{pmatrix},
+\quad
+z=
+\begin{pmatrix}
+0&z_3\\
+0&0
+\end{pmatrix}
+\right\},
+\]
+and
+\[
+\overline U''_{2,w}
+=
+\left\{
+u(x,0,z)\;\middle|\;
+x=
+\begin{pmatrix}
+x_{1,1}&0\\
+\vdots&\vdots\\
+x_{2(n-k),1}&0
+\end{pmatrix},
+\quad
+z=
+\begin{pmatrix}
+z_1&0\\
+z_2&z_1
+\end{pmatrix}
+\right\}.
+\]
+Then $\overline{U}^{(0)}_{2,w}\simeq \overline{U}'_{2,w}\ltimes \overline{U}''_{2,w}$, and hence
+\begin{equation}\label{int503}
+  \calF_v(f_{s,v},\id)
+  = \int\limits_{\overline{U}''_{2,w}(F_v)}\int\limits_{\overline{U}'_{2,w}(F_v)}
+  f_{s,v}(u'u'')\psi^{w^{-1}}_{\calO,v}(u'u'')\,du'\,du''.
+\end{equation}
+
+For $u\in \overline{U}'_{2,w}(F_v)$, write $u=\overline{u(X',0,Z')}$ where \[X'=\begin{pmatrix}
+    0&r_1\\
+    0&r_2\\
+    \vdots&\vdots\\
+    0&r_{2(n-k)}
+  \end{pmatrix},
+Z'=\begin{pmatrix}
+    0&m+\displaystyle\sum_{i=1}^{n-k}r_ir_{2(n-k)+1-i}\\0&0
+  \end{pmatrix}.\]  
+Thus $u$ can now be parametrized by $u_{(r_1,r_2,\cdots,r_{2(n-k)};m)}$.
+
+Consider the following set of roots
+\[
+\mathcal R
+=
+\{ -e_k+e_j: k+1\le j\le n\}
+\cup
+\{-2e_k\}
+\cup
+\{ -e_k-e_j: k+2\le j\le n\}.
+\]
+Let $N_{\mathcal R}(F_v):=\prod_{\alpha\in\mathcal R}X_\alpha(F_v)$, where the product is taken in the ordering compatible with the coordinates $(r_1,\ldots,r_{2(n-k)-1})$ appearing in
+$u_{(r_1,r_2,\ldots,r_{2(n-k)-1},0;m)}$. Hence we may write
+\[
+u_{(r_1,r_2,\ldots,r_{2(n-k)-1},0;m)}
+=
+n_{\mathcal R}u',
+\qquad
+n_{\mathcal R}\in N_{\mathcal R}(F_v),
+\quad
+u'\in X_{-e_k-e_{k+1}}(F_v).
+\]
+
+Define
+\[
+w_0
+=
+s_{k+1}s_{k+2}\cdots s_{n-1}s_n s_{n-1}\cdots s_{k+1}s_k.
+\]
+Therefore $w_0$ takes $k$ to $-(k+1)$, and takes $k+1$ to $k$ and so
+$w_0(\mathcal R)\subset \Sigma^+$. On the other hand, $w_0(-e_k-e_{k+1})=e_{k+1}-e_k\in\Sigma^-$. Thus \(w_0\) sends precisely the root subgroups in
+\(N_{\mathcal R}\) to positive root subgroups, while the remaining subgroup
+\(X_{-e_k-e_{k+1}}\) is not included in this intertwining step. In this common region of absolute convergence, we may
+separate the \(N_{\mathcal R}(F_v)\)-coordinates by Fubini's theorem. Moreover,
+\[
+\psi^{w^{-1}}_{\calO,v}(n_{\mathcal R}u'u'')
+=
+\psi^{w^{-1}}_{\calO,v}(u'u'')
+\]
+for \(n_{\mathcal R}\in N_{\mathcal R}(F_v)\),
+\(u'\in X_{-e_k-e_{k+1}}(F_v)\), and
+\(u''\in \overline U''_{2,w}(F_v)\). Hence \((\ref{int503})\) becomes
+\begin{equation}\label{int504}
+  \int\limits_{\overline{U}''_{2,w}(F_v)}
+  \int\limits_{X_{-e_k-e_{k+1}}(F_v)}
+  \int\limits_{N_{\mathcal R}(F_v)}
+  f_{s,v}(n_{\mathcal R}u'u'')\,
+  \psi^{w^{-1}}_{\calO,v}(u'u'')\,
+  dn_{\mathcal R}\,du'\,du''.
+\end{equation}
+
+Since
+$\mathcal R=\{\alpha\in\Sigma^-:w_0\alpha\in\Sigma^+\}$, the inner integration over \(N_{\mathcal R}(F_v)\) is precisely the standard
+local intertwining integral attached to the single Weyl element \(w_0\).
+Thus it defines $M(w_0,s): I_n(\Lambda_{s,v})
+\longrightarrow I_n(\Lambda_{s,v}^{w_0})$. Hence the identity obtained in the above region of
+absolute convergence extends meromorphically.
+
+We now check that the standard intertwining operator is defined and absolutely
+convergent in a right half-plane. For a positive root \(\beta\) satisfying
+\(w_0^{-1}\beta\in\Sigma^-\), the corresponding rank-one integral is absolutely
+convergent provided
+$\left|\Lambda_{s,v}(\beta^\vee(\varpi))\right|<1$. Write $a=s+\frac{k-1}{2}$.
+The positive roots \(\beta\) satisfying \(w_0^{-1}\beta\in\Sigma^-\) are
+\[
+\{e_k-e_j:k+1\le j\le n\}
+\cup
+\{2e_k\}
+\cup
+\{e_k+e_j:k+2\le j\le n\}.
+\]
+For these roots, using the definition of \(\Lambda_{s,v}\), we have
+\[
+\Lambda_{s,v}((e_k-e_j)^\vee(\varpi))
+=
+\chi_v(\varpi)q^{-(a+n-j+1)}
+\qquad(k+1\le j\le n),
+\]
+\[
+\Lambda_{s,v}((2e_k)^\vee(\varpi))
+=
+\chi_v(\varpi)q^{-a},
+\]
+and $\Lambda_{s,v}((e_k+e_j)^\vee(\varpi))
+=
+\chi_v(\varpi)q^{-(a+j-n-1)}
+(k+2\le j\le n)$.
+Since \(\chi_v\) is unitary, the convergence conditions are $\Re(a+n-j+1)>0\text{ where }(k+1\le j\le n)$,
+$\Re(a)>0$, and $\Re(a+j-n-1)>0\text{ where }(k+2\le j\le n)$. The strongest of these inequalities is $\Re(a+k-n+1)>0$.
+
+Therefore, after enlarging the right half-plane if necessary, the standard
+intertwining integral defining \(M(w_0,s)\) is absolutely convergent. The
+identity obtained in this region then extends meromorphically in \(s\) by the
+standard meromorphic continuation of local intertwining operators.
+
+Let \(f^{w_0}_{s,v}\) be the normalized spherical vector in
+\(I_n(\Lambda_{s,v}^{w_0})\). By the Gindikin--Karpelevich formula for the
+single Weyl element \(w_0\), we have $M(w_0,s)f_{s,v}
+=
+c(w_0,s)f^{w_0}_{s,v}$, where
+\[
+c(w_0,s)
+=
+\prod_{\substack{\beta\in\Sigma^+\\ w_0^{-1}\beta\in\Sigma^-}}
+\frac{
+1-q^{-1}\Lambda_{s,v}(\beta^\vee(\varpi))
+}{
+1-\Lambda_{s,v}(\beta^\vee(\varpi))
+}.
+\]
+In the present case, the positive roots \(\beta\) satisfying
+\(w_0^{-1}\beta\in\Sigma^-\) are
+\[
+\{e_k-e_j:k+1\le j\le n\}
+\cup
+\{2e_k\}
+\cup
+\{e_k+e_j:k+2\le j\le n\}.
+\]
+Equivalently, the negatives of these roots are precisely the roots in
+\(\mathcal R\). Evaluating the inducing character \(\Lambda_{s,v}\) on the
+corresponding coroots gives
+\[
+c(w_0,s)
+=
+\frac{
+1-\chi_v(\varpi)q^{-\left(s+\frac{k-1}{2}-k+n+1\right)}
+}{
+1-\chi_v(\varpi)q^{-\left(s+\frac{k-1}{2}+k-n+1\right)}
+}.
+\]
+Therefore \((\ref{int504})\) equals
+\begin{equation}\label{int507}
+  \frac{
+  1-\chi_v(\varpi)q^{-\left(s+\frac{k-1}{2}-k+n+1\right)}
+  }{
+  1-\chi_v(\varpi)q^{-\left(s+\frac{k-1}{2}+k-n+1\right)}
+  }
+  \int\limits_{\overline{U}^{+}_{2,w}(F_v)}
+  f^{w_0}_{s,v}(w_0u)\,
+  \psi^{w^{-1}}_{\calO,v}(u)\,du,
+\end{equation}
+where
+\begin{equation}\label{uz}
+  \overline{U}^{+}_{2,w} = \left\{\left.\begin{pmatrix} 
+    I_{k-2}&&&&\\
+    &I_2&&&\\
+    0&x&I_{2(n-k)}&&\\
+    0&z&x^\ast&I_2&\\
+    0&0&0&&I_{k-2}
+  \end{pmatrix}\right\vert
+    x = \begin{pmatrix}
+      x_{1,1}&0\\
+      \vdots&\vdots\\
+      x_{2(n-k)-1,1}&0\\
+      x_{2(n-k),1}&x_{2(n-k),2}
+    \end{pmatrix},\;
+    z= \begin{pmatrix}
+      z_1'&0\\z_2&z_1
+    \end{pmatrix}
+  \right\},
+\end{equation}
+where $z_1'$ is $z_1+x_{1,1}x_{2(n-k),2}$.
+
+We parameterize any $u\in \overline{U}^{+}_{2,w}$ by
+$u=u_{(x_{2(n-k),2};x_{1,1},\cdots,x_{2(n-k),1};c_1,c_2)}$ via $\overline{u(X',0,Z')}$ where
+\[
+X'=\begin{pmatrix}
+    x_{1,1}&0\\
+    \vdots&\vdots\\
+    x_{2(n-k)-1,1}&0\\
+    x_{2(n-k),1}&x_{2(n-k),2}
+  \end{pmatrix},\quad
+Z'=\begin{pmatrix}
+    c_1+x_{1,1}x_{2(n-k),2}&0\\
+    c_2 + \displaystyle\sum_{i=1}^{n-k}x_{i,1} x_{2(n-k)+1-i,1}&c_1+x_{1,1}x_{2(n-k),2}
+  \end{pmatrix}.
+\]
+As before, if $x_{i,1},c_2\in \calO_v$ for all $i=2,\dots,2(n-k)$, then $f_{s,v}^{w_0}(w_0u)=f_{s,v}^{w_0}(w_0)$, for all $u=u_{(0;0,x_{2,1},\dots,x_{2(n-k),1};0,c_2)}$.
+
+
+Let $(r,m;t):=(r_2,\dots,r_{2(n-k)-1};\,m;\,t)\in (\calO_v)^{2(n-k)}$.
+For $j=k+2,\dots,n$ set
+$a_j:=r_{j-k}\text{ and } b_j:=r_{\,2n-j-k+1}$.
+Define
+\begin{equation}\label{def:nHeis-root}
+\begin{aligned}
+\nHeis(r,m;t)
+:=\;&
+X_{e_{k-1}-e_k}(t)\,
+\Bigl(\prod_{j=k+2}^{n} X_{e_{k-1}-e_j}(a_j)\Bigr)\,
+X_{2e_{k-1}}(m)\\
+&\times
+\Bigl(\prod_{j=k+2}^{n} X_{e_{k-1}+e_j}(b_j)\Bigr)\,
+X_{e_{k-1}+e_k}(t)
+\ \in \Sp_{2n}(F_v).
+\end{aligned}
+\end{equation}
+With this ordering, the long-root coordinate in the central factor becomes
+\[
+m_r \;=\; m+\sum_{j=k+2}^{n} a_j b_j +t^2
+\;=\; m+\sum_{i=2}^{n-k} r_i\,r_{2(n-k)+1-i}+t^2,
+\]
+by the commutator relations for the pairs
+$\bigl(e_{k-1}-e_j,\;e_{k-1}+e_j\bigr)$.
+Clearly $f^{w_0}_{s,v}$ is left-invariant under $\nHeis(r,m;t)$.
+Conjugating by $w_0$ to the right, we have
+\begin{equation}
+  \nHeis(r,m;t)^{w_0} := w_0\nHeis(r,m;t)w_0^{-1} = \begin{pmatrix}
+    I_{k-2}&&&&&&&&\\
+    &1&&&&t&&&\\
+    &&1&0&0&0&0&&\\
+    &&&1&r&m_r&0&t&\\
+    &&&&I_{2(n-k-1)}&r^\ast&0&&\\
+    &&&&&1&0&&\\
+    &&&&&&1&&\\
+    &&&&&&&1&\\
+    &&&&&&&&I_{k-2}\\
+  \end{pmatrix}.
+\end{equation}
+
+Conjugating $u$ by $\nHeis(r,m;t)^{w_0}$ gives
+\begin{equation}\label{X'}
+  \begin{split}
+    u^{\left(\nHeis(r,m;t)^{w_0}\right)}
+    = \begin{pmatrix} 
+    I_{k-2}&&&&\\
+    &I_2&&&\\
+    0&X'&I_{2(n-k)}&&\\
+    0&Z'&X'^\ast&I_2&\\
+    0&0&0&&I_{k-2}\end{pmatrix},\text{ where }\\
+    X'=\begin{pmatrix}
+      x_{1,1} + \sum\limits_{i=2}^{2(n-k)-1}x_{i,1}r_i + x_{2(n-k),1}m+ c_2t&x_{2(n-k),2}m\\
+      x_{2,1}&x_{2(n-k),2}r_{2(n-k)-1}\\
+      \vdots & \vdots\\
+      x_{2(n-k)-1,1}&x_{2(n-k),2}r_2\\
+      x_{2(n-k),1}&x_{2(n-k),2}
+    \end{pmatrix}.
+  \end{split}
+\end{equation}
+We do not list the entries of \(Z'\), since the character
+\(\psi^{w^{-1}}_{\calO,v}\) does not depend on them. The entries in the second column of \(X'\), except for the last entry
+\(x_{2(n-k),2}\), correspond to root subgroups whose roots lie in
+\(\mathcal R\). Since \(w_0(\mathcal R)\subset \Sigma^+\), these root
+subgroups are conjugated by \(w_0\) into the positive unipotent subgroup.
+Hence their contribution appears on the left of \(w_0\), where it is killed by the left unipotent invariance of the induced section. Thus we may replace $X'$ in (\ref{X'}) by
+\[
+X'=
+\begin{pmatrix}
+x_{1,1} + \sum\limits_{i=2}^{2(n-k)-1}x_{i,1}r_i + x_{2(n-k),1}m+ c_2t&0\\
+x_{2,1}&0\\
+\vdots&\vdots\\
+x_{2(n-k)-1,1}&0\\
+x_{2(n-k),1}&x_{2(n-k),2}
+\end{pmatrix},
+\]
+so that $u^{\nHeis(r,m;t)^{w_0}}\in \overline{U}^{+}_{2,w}(F_v)$ and $f_{s,v}^{w_0}(\nHeis(r,m;t)w_0u) = f_{s,v}^{w_0}(w_0u^{(\nHeis(r,m;t)^{w_0})})$.
+
+We now apply the same character-orthogonality argument before integrating
+over the coordinates which will be deleted. Put $\mathbf x=(x_{2,1},\ldots,x_{2(n-k),1},c_2)$ and define the partial integral
+\[
+H(\mathbf x)=
+\int
+f^{w_0}_{s,v}(w_0u)\psi^{w^{-1}}_{\calO,v}(u)\,d\mu_{\mathrm{rem}},
+\]
+where the integration is over all coordinates of \(\overline U^+_{2,w}(F_v)\)
+except \(x_{2,1},\ldots,x_{2(n-k),1}\) and \(c_2\). Thus
+$\int_{\overline U^+_{2,w}(F_v)}
+f^{w_0}_{s,v}(w_0u)\psi^{w^{-1}}_{\calO,v}(u)\,du
+=
+\int H(\mathbf x)\,d\mathbf x$.
+
+By the preceding conjugation formula, for
+\(r_i,m,t\in\calO_v\), conjugation by \(\nHeis(r,m;t)^{w_0}\), followed by
+right \(K_v\)-invariance of the spherical section, changes the
+character-relevant coordinate by $x_{1,1}
+\mapsto
+x_{1,1}
++\sum_{i=2}^{2(n-k)-1}x_{i,1}r_i
++x_{2(n-k),1}m
++c_2t$. Equivalently, by change of variables $x_{1,1}\mapsto
+x_{1,1}
+-\left(
+\sum_{i=2}^{2(n-k)-1}x_{i,1}r_i
++x_{2(n-k),1}m
++c_2t
+\right)$, we obtain
+\[
+H(\mathbf x)
+=
+\psi_v\!\left(
+-\sum_{i=2}^{2(n-k)-1}x_{i,1}r_i
+-x_{2(n-k),1}m
+-c_2t
+\right)H(\mathbf x).
+\]
+Since \(r_i,m,t\) range independently over \(\calO_v\), and since \(\psi_v\)
+has conductor \(\calO_v\), this forces $H(\mathbf x)=0$
+unless $x_{i,1}\in\calO_v$ where $2\le i\le 2(n-k), c_2\in\calO_v$. 
+
+On this compact set, the corresponding unipotent elements lie in \(K_v\).
+By right \(K_v\)-invariance of the spherical section and our normalization
+\(\operatorname{vol}(\calO_v)=1\), the integrations over these coordinates may
+be omitted. Therefore
+\begin{equation}\label{int508}
+  \calF_v(f_{s,v},\id) =
+  \frac{1-\chi_v(\varpi)q^{-(s+\frac{k-1}{2}-k+n+1)}}{1-\chi_v(\varpi)q^{-(s+\frac{k-1}{2}+k-n+1)}}
+  \int\limits_{\overline{U}^{-}_{2,w}(F_v)}
+  f^{w_0}_{s,v}(w_0u) \psi^{w^{-1}}_{\calO,v}(u)\,du .
+\end{equation}
+where
+\begin{equation}\label{def502}
+  \overline{U}^{-}_{2,w} = \left\{\left.\begin{pmatrix} 
+    I_{k-2}&&&&\\
+    &I_2&&&\\
+    0&x&I_{2(n-k)}&&\\
+    0&z&x^\ast&I_2&\\
+    0&0&0&&I_{k-2}
+  \end{pmatrix}\right\vert
+  x = \begin{pmatrix}
+    x_{1,1}&0\\
+    0&0\\
+    \vdots&\vdots\\
+    0&0\\
+    0&x_{2(n-k),2}
+  \end{pmatrix},\;
+  z= \begin{pmatrix}
+    z_1'&0\\0&z_1
+  \end{pmatrix}
+  \right\},
+\end{equation}
+where $z_1'=z_1+x_{1,1}x_{2(n-k),2}$.
+\medskip
+Embed \(h\in \GL_3(F_v)\) into \(\Sp_{2n}(F_v)\) via \(t(h)\), as defined in
+\eqref{gl3em}, and denote by \(U_{\GL_3}\) the embedded image of the
+unipotent radical of the standard Borel subgroup \(B_{\GL_3}\). We identify
+\(\overline{U}^{-}_{2,w}(F_v)\) with \(U_{\GL_3}(F_v)\) as follows: for
+\(u\in \overline{U}^{-}_{2,w}(F_v)\) in the form \eqref{def502}, we can write
+\[
+u = w_0^{-1} (w^k)^{-1} \,
+t\!\left(\begin{pmatrix}
+  1&x_{2(n-k),2}&z_1 + x_{1,1}x_{2(n-k),2}\\
+  &1&x_{1,1}\\
+  &&1
+\end{pmatrix}\right)
+\, w^kw_0,
+\]
+where
+  $w^k=w_kw_{k-1}w_k
+  =
+  t\!\left(\begin{pmatrix}
+    &&1\\
+    &1&\\
+    1&&
+  \end{pmatrix}\right)$. Under this identification, $\psi^{w^{-1}}_{\calO,v}(u)=\psi_v(x_{1,1}+x_{2(n-k),2})$, which is the Gelfand--Graev character on \(U_{\GL_3}(F_v)\). Hence the
+integral in \eqref{int508} is the unnormalized Jacquet integral attached to the
+spherical section of the unramified principal series
+\[
+\Ind_{B_{\GL_3}(F_v)}^{\GL_3(F_v)}
+\left(\chi_v|\cdot|^{s+\frac{k-3}{2}}\otimes |\cdot|^{k-n}\otimes
+\chi_v^{-1}|\cdot|^{-s-\frac{k-1}{2}}\right).
+\]
+
+The Casselman--Shalika formula \cite{CS80} applies to this unnormalized
+Jacquet integral and gives
+\begin{equation}
+  \begin{split}
+    &\frac{1-\chi_v(\varpi)q^{-(s+\frac{k-1}{2}-k+n+1)}}{1-\chi_v(\varpi)q^{-(s+\frac{k-1}{2}+k-n+1)}}
+    \int\limits_{U_{\GL_3}(F_v)}
+    f^{w_0}_{s,v}\left(t\!\left(\begin{pmatrix}
+      &&1\\
+      &1&\\
+      1&&
+    \end{pmatrix}\right)uw^kw_0\right)
+    \psi^{w^{-1}}_{\calO,v}(u)\,du\\
+    &=
+    \left(1-\chi_v^2(\varpi)q^{-(2s+k-1)}\right)
+    \left(1-\chi_v(\varpi)q^{-(s+\frac{k-1}{2}-k+n)}\right)
+    \left(1-\chi_v(\varpi)q^{-(s+\frac{k-1}{2}+k-n+1)}\right)\\
+    &\quad\times
+    \frac{1-\chi_v(\varpi)q^{-(s+\frac{k-1}{2}-k+n+1)}}{1-\chi_v(\varpi)q^{-(s+\frac{k-1}{2}+k-n+1)}}
+    f_{s,v}(w^kw_0)\\
+    &=
+    \left(1-\chi_v^2(\varpi)q^{-(2s+k-1)}\right)
+    \left(1-\chi_v(\varpi)q^{-(s-\frac{k+1}{2}+n)}\right)
+    \left(1-\chi_v(\varpi)q^{-(s-\frac{k-1}{2}+n)}\right)
+    f_{s,v}(\id).
+  \end{split}
+\end{equation}
+In the last step we used that \(w^kw_0\in K_v\), hence the spherical section
+satisfies \(f_{s,v}(w^kw_0)=f_{s,v}(\id)\). This proves the stated formula and
+completes the proof.
+\end{proof}
+
+\subsection{The ramified and Archimedean cases} When $v$ is a ramified local place or an Archimedean place, it suffices for us to show that the local Fourier coefficient
+\begin{equation}
+  \calF_v(f_{s,v},g) = \int\limits_{\overline{U}_{2,w}(F_v)}f_{s,v}(u\iota(g))\psi^{w^{-1}}_{\calO,v}(u)\,du
+\end{equation}
+admits meromorphic continuation and defines a section. In other words, we show
+\begin{proposition}\label{prop52}
+  Let $f_{s,v}\in I_{n,v}(s)$ be a section that varies holomorphically in $s\in\bbC$. Then the local Fourier coefficient
+  \begin{equation*}
+    \calF_v(f_{s,v},g) = \int\limits_{\overline{U}_{2,w}(F_v)}f_{s,v}\bigl(u\iota(g)\bigr)\psi^{w^{-1}}_{\calO,v}(u)\,du
+  \end{equation*}
+  defines a local meromorphic section in 
+  \begin{equation*}
+    I_{n-3,v}(s) = \Ind_{P_{k-2,2(n-3)}(F_v)}^{\Sp_{2(n-3)}(F_v)} \chi_v|\det|^{s}\otimes \id_{\Sp_{2(n-k-1)}}.
+  \end{equation*}
+\end{proposition}
+Before the proof, we first recall a certain form of the Dixmier-Malliavin Lemma.
+
+\begin{lemma}[The Dixmier-Malliavin Lemma, \cite{DM78}]
+Let $G$ be a reductive group over an Archimedean field or a Lie group and $(\pi,V)$ a smooth representation of $G$.
+Then the space $V^\infty$ of smooth vectors is generated by the Schwartz algebra $\mathcal S(G)$ under convolution: for any $v\in V^\infty$ there exist $f_i\in\mathcal S(G)$ and $v_i\in V^\infty$ such that $v=\sum_i \pi(f_i)v_i$.
+\end{lemma}
+Now we prove Proposition \ref{prop52}.
+\begin{proof}
+We have the \(P_{k-2,2(n-3)}(F_v)\)-equivariance of
+\(\calF_v(f_{s,v},\cdot)\), hence it remains
+to justify convergence for \(\Re(s)\gg0\) and meromorphic continuation of the
+local integral. Also, since
+\[
+\calF_v(f_{s,v},g)
+=
+\calF_v\bigl(\rho(\iota(g))f_{s,v},1\bigr),\]
+and right translation preserves smooth holomorphic sections, it is enough to
+consider the value at \(g=1\).
+
+Let us first assume that \(v\) is non-Archimedean. We write
+\(\overline U_{2,w}(F_v)\) as in \eqref{def501}. Thus the coordinates contain
+the block
+\[
+  y=\binom{y_1}{y_2}\in \Mat_{2\times(k-2)}(F_v),
+  \qquad y_1,y_2\in F_v^{k-2}.
+\]
+Denote by \(\overline U^{(0)}_{2,w}\) the subgroup obtained by setting these
+\(y\)-coordinates equal to zero. 
+
+We first ``remove'' the \(y_2\)-coordinates. Let
+\[
+  n(r)=\nPlusKone(r),\qquad r=(r_1,\ldots,r_{k-2})\in F_v^{k-2},
+\]
+be the corresponding product of root subgroups in \(U_k(F_v)\), as in the
+unramified computation. Since \(f_{s,v}\) is smooth, there exists a compact open
+subgroup \(K_f\subset \Sp_{2n}(F_v)\) such that
+  $f_{s,v}(g\kappa)=f_{s,v}(g),\kappa\in K_f$. Choose \(N\geq 0\) sufficiently large so that
+  $n(r)\in K_f \text{ for all }r\in \varpi^N\calO_v^{\,k-2}$, and also such that the \(y\)-root elements \(u(0,y,0)\) lie in \(K_f\) whenever
+all coordinates of \(y\) lie in \(\varpi^N\calO_v\).
+
+The calculation from the unramified case gives, for
+\(r\in \varpi^N\calO_v^{\,k-2}\),
+\[
+  n(r)\,u(x,y,z)\,n(r)^{-1}=b(r,x,y,z)u(x',y,z),
+\]
+where \(b(r,x,y,z)\) lies in the unipotent radical of the inducing parabolic and hence
+does not affect the section, and where the relevant change in the \(x\)-coordinates
+is $x'_{1,1}=x_{1,1}+\sum_{i=1}^{k-2}y_{2,i}r_i$. 
+
+The remaining changes in the coordinates are irrelevant for the character or are
+absorbed by a measure-preserving change of variables. Since \(n(r)\in K_f\), right
+\(K_f\)-invariance and left \(U_k(F_v)\)-invariance imply that the inner integral,
+viewed as a function of \(y_2\), satisfies
+\[
+  G(y_2)
+  =
+  \psi_v\!\left(-\sum_{i=1}^{k-2}y_{2,i}r_i\right)G(y_2)
+  \qquad
+  \left(r\in\varpi^N\calO_v^{\,k-2}\right).
+\]
+Therefore \(G(y_2)=0\) unless  $\psi_v\!\left(\sum_{i=1}^{k-2}y_{2,i}r_i\right)=1
+  \text{ for all } r\in\varpi^N\calO_v^{\,k-2}$. Equivalently,
+  $y_2\in \left(\varpi^N\calO_v^{\,k-2}\right)^\vee$.
+If the conductor of \(\psi_v\) is \(\mathfrak d_{\psi_v}\), this dual lattice is of
+the form
+  $\left(\varpi^N\calO_v\right)^\vee
+  =
+  \varpi^{-N}\mathfrak d_{\psi_v}^{-1}\calO_v
+  =
+  \varpi^{-M}\calO_v$ for some integer \(M\). Thus the \(y_2\)-integration is supported in the compact lattice \(\varpi^{-M}\calO_v^{\,k-2}\).
+
+Now decompose this lattice into finitely many cosets modulo
+\(\varpi^N\calO_v^{\,k-2}\):
+\[
+  \varpi^{-M}{\calO_v}^{\,k-2}
+  =
+  \bigsqcup_{\eta\in \Xi_2}
+  \left(\eta+\varpi^N\calO_v^{\,k-2}\right).
+\]
+Here \(\Xi_2\) is a finite set for the quotient $\varpi^{-M}\mathcal O_v^{k-2}/\varpi^N\mathcal O_v^{k-2}$. For \(y_2=\eta+y_2''\), with \(y_2''\in\varpi^N\calO_v^{\,k-2}\), we have that
+\[
+  u\!\left(x,\binom{y_1}{\eta+y_2''},z\right)
+  =
+  u\!\left(x',\binom{y_1}{\eta},z'\right)\kappa(y_2''),
+\]
+where \(\kappa(y_2'')\in K_f\), the change of variables \((x,z)\mapsto(x',z')\)
+has Jacobian \(1\), and the character \(\psi^{w^{-1}}_{\calO,v}\) is unchanged.
+Hence, by right \(K_f\)-invariance, integration over each coset contributes a
+constant multiple of the integral with \(y_2=\eta\). Consequently the
+\(y_2\)-integration is absorbed into a finite linear combination of right translates
+of \(f_{s,v}\).
+
+Repeating the same argument for the \(y_1\)-coordinates, using the corresponding
+root subgroups as in the unramified case, we obtain finitely many elements
+\(\zeta_j\in \overline U_{2,w}(F_v)\) and constants \(c_j\) such that, for
+\(\Re(s)\gg0\),
+\[
+  \calF_v(f_{s,v},1)
+  =
+  \sum_j c_j
+  \int_{\overline U^{(0)}_{2,w}(F_v)}
+    (\rho(\zeta_j)f_{s,v})(u)\,
+    \psi^{w^{-1}}_{\calO,v}(u)\,du .
+\]
+This is the ramified case for deletion of
+the \(y\)-coordinates in the spherical calculation.
+
+It remains to justify the analytic continuation of the integrals above.
+Under the embedding of the subgroup \(\Sp_{2(n-k+2)}\) on the relevant coordinates,
+\(\overline U^{(0)}_{2,w}\) is an ordered product of root subgroups contained in the
+opposite unipotent radical of the parabolic \(P_{2,n-k+2}\). With the character
+\(\psi^{w^{-1}}_{\calO,v}\), the integral over
+\(\overline U^{(0)}_{2,w}\) is one of the standard generalized Jacquet integrals
+attached to this degenerate principal series. Each \(\rho(\zeta_j)f_{s,v}\) is again
+a smooth holomorphic section of the same induced representation. Therefore the
+integrals converge absolutely for \(\Re(s)\gg0\) and admit
+meromorphic continuation in \(s\) by the standard analytic theory of local
+Jacquet integrals \cite{J67}. Since the formula is a finite sum, the same conclusion holds
+for \(\calF_v(f_{s,v},1)\). This proves the non-Archimedean case.
+
+We now assume that \(v\) is Archimedean. Let $D:=F_v^{k-2}$, and let \(n(r)=\nPlusKone(r)\), \(r\in D\), be the corresponding unipotent subgroup
+contained in \(U_k(F_v)\). By the Dixmier--Malliavin theorem, applied to the
+smooth right action of the Lie group \(D\), it is enough to treat sections of the
+form $f_{s,v}=\rho(\phi)\varphi_s$, where \(\phi\in \mathcal S(D)\), \(\varphi_s\) is a smooth holomorphic section, and
+\[
+  (\rho(\phi)\varphi_s)(g)
+  =
+  \int_D \phi(r)\,\varphi_s(g\,n(r))\,dr .
+\]
+
+Write
+  $Y:=\Mat_{2\times(k-2)}(F_v);\;
+  Y_2:=F_v^{k-2};\;
+  Y^{(2)}:=\left\{\binom{0}{y_2}:y_2\in Y_2\right\}\subset Y$.
+Choose a closed subgroup
+\(\overline U'_{2,w}(F_v)\subset \overline U_{2,w}(F_v)\) such that multiplication
+induces a diffeomorphism
+\[
+  \overline U'_{2,w}(F_v)\times u'_2(Y_2)
+  \longrightarrow
+  \overline U_{2,w}(F_v),\qquad
+  (u',u'_2(y_2))\longmapsto u'u'_2(y_2),
+\]
+where
+  $u'_2(y_2):=\overline{u\!\left(0,\binom{0}{y_2},0\right)}$.
+  
+We choose Haar measures so that \(du=du'\,dy_2\). Since
+\(\psi^{w^{-1}}_{\calO,v}\) is trivial on \(u'_2(Y_2)\), we have
+  $\psi^{w^{-1}}_{\calO,v}\bigl(u'u'_2(y_2)\bigr)
+  =
+  \psi^{w^{-1}}_{\calO,v}(u')$. For \(\Re(s)\gg0\), the integral is absolutely convergent, and the rapid decay of
+\(\phi\) justifies the following applications of Fubini. We have
+\begin{align*}
+  \calF_v(\rho(\phi)\varphi_s,1)
+  &=
+  \int_{\overline U_{2,w}(F_v)}
+    (\rho(\phi)\varphi_s)(u)\,
+    \psi^{w^{-1}}_{\calO,v}(u)\,du                                     \\
+  &=
+  \int_{\overline U'_{2,w}(F_v)}
+  \int_{Y_2}
+  \int_D
+    \phi(r)\,
+    \varphi_s\!\bigl(u'u'_2(y_2)n(r)\bigr)\,
+    dr\,
+    \psi^{w^{-1}}_{\calO,v}(u')\,dy_2\,du',
+\end{align*}
+where we used the fact that $u=u'u'_2(y_2)$ and $\psi^{w^{-1}}_{\calO,v}(u'u'_2(y_2))=\psi^{w^{-1}}_{\calO,v}(u')$. Using
+\[
+  u'u'_2(y_2)n(r)
+  =
+  n(r)\Bigl(n(r)^{-1}u'u'_2(y_2)n(r)\Bigr)
+\]
+and the left \(U_k(F_v)\)-invariance of \(\varphi_s\), we get
+\[
+  \varphi_s\!\bigl(u'u'_2(y_2)n(r)\bigr)
+  =
+  \varphi_s\!\bigl(n(r)^{-1}u'u'_2(y_2)n(r)\bigr).
+\]
+The same calculation as in the non-Archimedean case shows that
+conjugation by \(n(r)\) preserves the \(y_2\)-coordinate and changes the relevant
+\(x\)-coordinate by $\langle y_2,r\rangle=\sum_{i=1}^{k-2}y_{2,i}r_i$. Thus
+  $\psi^{w^{-1}}_{\calO,v}
+  \bigl(n(r)^{-1}u'u'_2(y_2)n(r)\bigr)
+  =
+  \psi^{w^{-1}}_{\calO,v}(u')\,
+  \psi_v(\langle y_2,r\rangle)$. Consequently, by a change of variables we obtain
+\begin{align*}
+  \calF_v(\rho(\phi)\varphi_s,1)
+  &=
+  \int_{\overline U'_{2,w}(F_v)}
+  \int_{Y_2}
+  \int_D
+    \phi(r)\,
+    \psi_v(\langle y_2,r\rangle)\,
+    \varphi_s\!\bigl(u'u'_2(y_2)\bigr)\,
+    dr\,
+    \psi^{w^{-1}}_{\calO,v}(u')\,dy_2\,du' .
+\end{align*}
+
+Define
+\[
+  \widehat\phi(y_2)
+  :=
+  \int_D \phi(r)\,\psi_v(\langle y_2,r\rangle)\,dr .
+\]
+Then \(\widehat\phi\in\mathcal S(Y_2)\). Hence
+\[
+  \calF_v(\rho(\phi)\varphi_s,1)
+  =
+  \int_{\overline U'_{2,w}(F_v)}
+    \psi^{w^{-1}}_{\calO,v}(u')
+    \left(
+      \int_{Y_2}
+        \widehat\phi(y_2)\,
+        \varphi_s\!\bigl(u'u'_2(y_2)\bigr)\,dy_2
+    \right)
+  du' .
+\]
+Set
+\[
+  \varphi_{1,s}(u')
+  :=
+  \int_{Y_2}
+    \widehat\phi(y_2)\,
+    \varphi_s\!\bigl(u'u'_2(y_2)\bigr)\,dy_2 .
+\]
+The rapid decay of \(\widehat\phi\) implies that \(\varphi_{1,s}\) is again obtained
+from \(\varphi_s\) by Schwartz convolution. In particular it is smooth, depends
+holomorphically on \(s\), and has uniform moderate growth on vertical strips. Thus
+the \(y_2\)-integration has been absorbed into the section.
+
+Repeating the same argument for the remaining \(y_1\)-coordinates, using the
+corresponding root subgroups as in the unramified case, reduces the original local Fourier
+coefficient to an integral of the form
+\[
+  \int_{\overline U^{(0)}_{2,w}(F_v)}
+    \varphi'_{s}(u)\,
+    \psi^{w^{-1}}_{\calO,v}(u)\,du ,
+\]
+where \(\varphi'_s\) is obtained from the original section by finitely many Schwartz
+convolutions and therefore remains a smooth holomorphic family of moderate
+growth. As above, this is a standard generalized Jacquet integral. By \cite{J67}, it converges
+absolutely for \(\Re(s)\gg0\) and admits meromorphic continuation in \(s\).
+Hence \(\calF_v(f_{s,v},\cdot)\) defines a meromorphic section of
+\(I_{n-3,v}(s)\), as required.
+\end{proof}
+
+\begin{proposition}\label{prop4}
+Fix a local place \(v\) and \(s_0\in\mathbb C\) with
+\(\Re(s_0)\geq0\). Assume that, in fixed compact pictures, the continued
+local Fourier coefficients form a meromorphic family of continuous
+operators
+\[
+\calF_{v,s}:I_{n,v}(s)\longrightarrow I_{n-3,v}(s)
+\]
+which is holomorphic at \(s=s_0\). Then \(\calF_{v,s_0}\) is surjective if \(v\) is non-Archimedean, and has dense image in the smooth
+Fr\'echet topology if \(v\) is Archimedean.
+\end{proposition}
+
+\begin{proof}
+Put
+$G=\Sp_{2n}(F_v);\; P=P_k(F_v);\;
+G'=\Sp_{2(n-3)}(F_v);\;
+P'=P_{k-2,2(n-3)}(F_v)$, and set $a=k-2; q=n-k-1$. We first record the open-cell coordinates used in the proof. Let
+\(U_{2,w}^{\mathrm{c}}\subset U_2\) be the explicit subgroup complement
+representing the quotient \(U_2^w\backslash U_2\), so that
+$wU_{2,w}^{\mathrm{c}}w^{-1}=\overline U_{2,w}$ with \(\overline U_{2,w}\) as in \eqref{def501}. Let
+\[
+\Omega_{2q}=
+\begin{pmatrix}
+0&J_q\\
+-J_q&0
+\end{pmatrix}.
+\]
+For \(Y\in\Mat_{2q\times a}(F_v)\) and
+\(Z\in\Mat_a(F_v)\) with \(J_aZ=Z^tJ_a\), put
+$Y^*=-J_aY^t\Omega_{2q},$ and $C(Y,Z)
+=
+Z-\frac12J_aY^t\Omega_{2q}Y
+=
+Z+\frac12Y^*Y$, and
+\[
+\bar u(Y,Z)=
+\begin{pmatrix}
+I_a&0&0\\
+Y&I_{2q}&0\\
+C(Y,Z)&Y^*&I_a
+\end{pmatrix}\in\bar U'.
+\]
+
+Let \(w_{P'}\) be the relative open-cell Weyl representative for
+\(P'\backslash G'\). Since
+$w_{P'}^{-1}\bar U'w_{P'}=U'$, we use the open-cell parametrization
+$\kappa_+(Y,Z)
+=
+\bar u(Y,Z)w_{P'}
+=
+w_{P'}u^+(Y,Z)$, where
+$u^+(Y,Z)
+=
+w_{P'}^{-1}\bar u(Y,Z)w_{P'}\in U'$.
+Thus $(Y,Z)\longmapsto P'\kappa_+(Y,Z)$ parametrizes the full open Bruhat cell of \(P'\backslash G'\). Define
+$\Phi_+(u,Y,Z)
+=
+P\,wu\,\iota_c\!\left(\bar u(Y,Z)w_{P'}\right),$ where $
+u\in U_{2,w}^{\mathrm{c}}(F_v)$. Put $W=w\iota_c(w_{P'})$. 
+A direct calculation of the relative inversion roots shows that the root
+coordinates contributed by \(U_{2,w}^{\mathrm{c}}\) and
+\(\iota_c(U')\) form a root-closed subgroup of the \(W\)-Bruhat cell.
+The remaining transverse roots are $\{e_3+e_c:4\leq c\leq k+1\}$.
+
+Consequently \(\Phi_+\) is an algebraic isomorphism onto the subvariety $\mathcal Z_W
+\subset P\backslash G$ obtained by setting these transverse root coordinates equal to zero.
+Hence \(\mathcal Z_W\) is closed in the \(W\)-Bruhat cell and therefore
+locally closed in \(P\backslash G\).
+
+It follows from the local product structure that every compactly
+supported smooth section on $U_{2,w}^{\mathrm{c}}(F_v)\times\bar U'(F_v)$, viewed as a section on \(\mathcal Z_W\) through \(\Phi_+\), extends to a
+compactly supported smooth section on \(P\backslash G\). At a
+non-Archimedean place this follows from compact-open product charts; at
+an Archimedean place it follows from a tubular neighborhood and a
+compactly supported cutoff.
+
+We now turn to the image of the local Fourier map. Write
+\[
+I'_v(s)=I_{n-3,v}(s)
+=
+\Ind_{P'}^{G'}
+\left(
+\chi_v|\det|^s
+\otimes1_{\Sp_{2(n-k-1)}(F_v)}
+\right),
+\]
+and realize its smooth contragredient as
+\[
+J'_v(s)
+=
+\Ind_{P'}^{G'}
+\left(
+\chi_v^{-1}|\det|^{-s}
+\otimes1_{\Sp_{2(n-k-1)}(F_v)}
+\right).
+\]
+All inductions are normalized.
+
+Let \(K'\subset G'\) be a maximal compact subgroup. In the fixed compact
+pictures, the standard pairing
+$[F,\xi]_s
+=
+\int_{K'}\langle F(k),\xi(k)\rangle\,dk$ is nondegenerate, \(G'\)-invariant, and independent of \(s\). It is equivalent to work with the original local model
+\[
+\mathcal A_{v,s}(f)(g)
+=
+\int_{U_{2,w}^{\mathrm{c}}(F_v)}
+f\bigl(wu\iota_c(g)\bigr)
+\psi_{\calO,v}(u)\,du,
+\]
+since it differs from the conjugated model by an invertible right
+translation of the source.
+
+Let \(\xi_0\in J'_v(s_0)\) annihilate the image of
+\(\mathcal A_{v,s_0}\). We prove that \(\xi_0=0\). On the open cell, the
+compact-picture pairing takes the form
+\[
+[F,\xi]_s
+=
+\int_{\bar U'(F_v)}
+\left\langle
+F(\kappa_+(Y,Z)),
+\xi(\kappa_+(Y,Z))
+\right\rangle
+\,d\mu(Y,Z),
+\]
+where \(d\mu\) is a fixed nowhere-vanishing smooth density.
+
+Take arbitrary $\varphi\in C_c^\infty(\bar U'(F_v))$ and choose $h\in C_c^\infty(U_{2,w}^{\mathrm{c}}(F_v))$ such that
+\[
+\int_{U_{2,w}^{\mathrm{c}}(F_v)}
+h(u)\psi_{\calO,v}(u)\,du=1.
+\]
+There is a compactly supported
+source section \(f_0\in I_{n,v}(s_0)\) satisfying $f_0(\Phi_+(u,Y,Z))=h(u)\varphi(Y,Z)$, with joint compact support in \((u,Y,Z)\).
+
+Extend \(f_0\) and \(\xi_0\) to flat entire families \(f_s\) and \(\xi_s\)
+in the corresponding compact pictures. Define $B_{\mathrm{cont}}(s)
+=
+[\mathcal A_{v,s}(f_s),\xi_s]_s$ and
+\[
+B_{\mathrm{raw}}(s)
+=
+\int_{\bar U'(F_v)}
+\int_{U_{2,w}^{\mathrm{c}}(F_v)}
+\psi_{\calO,v}(u)
+\left\langle
+f_s(\Phi_+(u,Y,Z)),
+\xi_s(\kappa_+(Y,Z))
+\right\rangle
+\,du\,d\mu(Y,Z).
+\]
+The joint compact support makes \(B_{\mathrm{raw}}(s)\) entire.
+The operator-valued meromorphy of \(\mathcal A_{v,s}\) implies that
+\(B_{\mathrm{cont}}(s)\) is meromorphic and regular at \(s=s_0\).
+
+The meromorphic identity theorem therefore gives the same equality at
+\(s=s_0\). Since \(\xi_0\) annihilates the image, $B_{\mathrm{cont}}(s_0)=0$. Using the prescribed restriction of \(f_0\) and the normalization of
+\(h\), we obtain
+\[
+\int_{\bar U'(F_v)}
+\left\langle
+\varphi(Y,Z),
+\xi_0(\kappa_+(Y,Z))
+\right\rangle
+\,d\mu(Y,Z)=0.
+\]
+Since \(\varphi\) is arbitrary, \(\xi_0\) vanishes on the full open
+Bruhat cell. That cell is dense and \(\xi_0\) is smooth, hence
+$\xi_0=0$. At a non-Archimedean place, the image is a \(G'\)-subrepresentation of
+the admissible finite-length representation \(I'_v(s_0)\). A proper
+image would give a nonzero smooth contragredient annihilator through an
+irreducible quotient, contradicting the preceding paragraph. Hence the
+map is surjective.
+
+At an Archimedean place, if the image were not dense, Hahn--Banach would
+give a nonzero continuous annihilator. Convolution with
+\(C_c^\infty(G')\), followed by a smooth approximate identity as before, would
+produce a nonzero smooth contragredient annihilator, again a
+contradiction. Therefore the image is dense.
+\end{proof}
+
+\section{Proof of the main descent theorem and applications}\label{sec:applications}
+
+\subsection{Proof of the main descent theorem}
+
+We first complete the proof of \hyperref[thm401]{Theorem 3.5}.
+
+\begin{proof}
+In the initial absolute-convergence half-plane, the unfolding proved
+above identifies $F_{\psi_{\calO}}(E_{f_s})$ with the Eisenstein series
+attached to the descended section $g\longmapsto\calF(f_s,g)$.
+
+Suppose that $f_s=\otimes_v'f_{s,v}$ is a factorizable standard section.
+Choose a finite set $S$ containing the Archimedean places and all places
+at which the data are ramified. For $v\notin S$, let
+$f_{s,v}^{\circ}$ and $f_{s,v}^{\prime\circ}$ denote the normalized
+source and target spherical sections. By Theorem~\ref{thm501},
+\[
+ \calF_v(f_{s,v}^{\circ},g_v)
+ =c_v(s)f_{s,v}^{\prime\circ}(g_v),
+\]
+where
+\[
+\begin{aligned}
+c_v(s)={}&L_v(\chi_v^2,2s+k-1)^{-1}\\
+&{}\times
+L_v\left(\chi_v,s+n-\frac{k+1}{2}\right)^{-1}
+L_v\left(\chi_v,s+n-\frac{k-1}{2}\right)^{-1}.
+\end{aligned}
+\]
+Consequently
+\[
+ \calF(f_s)=C^S(s)
+ \left(\bigotimes_{v\notin S}'f_{s,v}^{\prime\circ}\right)
+ \otimes\left(\bigotimes_{v\in S}\calF_v(f_{s,v})\right),
+\]
+where
+\[
+C^S(s)=
+\frac{1}{
+L^S(\chi^2,2s+k-1)
+L^S\left(\chi,s+n-\frac{k+1}{2}\right)
+L^S\left(\chi,s+n-\frac{k-1}{2}\right)}.
+\]
+This identity first holds in the common absolute-convergence domain.
+Proposition~\ref{prop52} gives the required local meromorphic
+continuations at the finitely many places in $S$, while the preceding
+unramified formula gives the remaining factors. Hence the identity
+extends as an identity of meromorphic families. Therefore
+$F_{\psi_{\calO}}(E_{f_s})$ is the Eisenstein series attached to the
+descended section $\calF(f_s,\cdot)\in I_{n-3}(s)$, initially in the
+convergence region and then by meromorphic continuation.
+
+At a parameter $s_0$ where the relevant operator-valued local
+continuations are regular, Proposition~\ref{prop4} gives exact local
+preimages at finite places and dense local image at Archimedean places.
+The general right-$K$-finite case follows locally from finite linear
+combinations of factorizable flat sections with holomorphic coefficients.
+\end{proof}
+
+\subsection{Further Application}
+
+For $a\geq2$, put
+\begin{equation}\label{eq:section5-Lambda}
+ \Lambda_a=
+ \begin{cases}
+ \{j-\tfrac12:1\leq j\leq a/2\},&a\text{ even},\\[2pt]
+ \{j:1\leq j\leq(a-1)/2\},&a\text{ odd}.
+ \end{cases}
+\end{equation}
+\begin{remark}[Application to maximal Fourier coefficients]\label{rem:maximal-partition}
+Assume that $\chi$ is a nontrivial quadratic Hecke character, and put
+\[
+ r=n-k,\qquad a=3k-2n.
+\]
+If $r\geq1$ and $a\geq2$, then the descent may be iterated $r$ times:
+\[
+ (n,k)\longmapsto(n-3,k-2)\longmapsto\cdots\longmapsto(a,a).
+\]
+Thus the last member of the tower is the Siegel Eisenstein series on
+$\Sp_{2a}$ with the same parameter $s$.  At the positive pole set
+$\Lambda_a$, the results of Ginzburg--Soudry (Theorem~2.2(III) \cite{GS221} show that the
+corresponding terminal residual representation has maximal partition
+$[2^a]$.
+
+Combining the iterated descent with the identity of
+Jiang--Liu's Proposition~3.3 \cite{JL15} suggests adjoining a pair
+$3^2$ at each step and hence leads to the partition
+\[
+ [3^{2r}2^a]=[3^{2(n-k)}2^{3k-2n}].
+\]
+Moreover, this is precisely the Richardson partition of $P_k$, by the
+type-$C$ induction rule
+\cite[Corollary~7.3.4(ii)]{CM93}. The local wave-front bounds of
+\cite{CK25}, together with \cite{Lapid08} and \cite{GGS17}, therefore provide a route to showing that this partition is maximal for suitable Laurent coefficients of the original Eisenstein series.
+\end{remark}
+
+\begin{thebibliography}{GGS17}
+
+\bibitem[BL24]{BL24}
+Joseph Bernstein and Erez Lapid.
+\newblock On the meromorphic continuation of eisenstein series.
+\newblock {\em Journal of the American Mathematical Society}, 37:187--234,
+  2024.
+
+\bibitem[Cai18]{Cai18}
+Y.~Cai.
+\newblock Fourier coefficients for degenerate {Eisenstein} series and the
+  descending decomposition.
+\newblock {\em manuscripta mathematica}, 156(3--4):469--501, 2018.
+
+\bibitem[CK25]{CK25}
+Dan Ciubotaru and Ju-Lee Kim.
+\newblock The wavefront set: bounds for the {Langlands} parameter.
+\newblock {\em Mathematische Annalen}, 393:1827--1861, 2025.
+
+\bibitem[CM93]{CM93}
+D.H. Collingwood and W.M. McGovern.
+\newblock {\em Nilpotent Orbits in Semisimple Lie Algebras}.
+\newblock Van Nostrand Reinhold, 1993.
+
+\bibitem[CS80]{CS80}
+W.~Casselman and J.~Shalika.
+\newblock The unramified principal series of $p$-adic groups. {II.} {The}
+  {Whittaker} function.
+\newblock {\em Compositio Mathematica}, 41(2):207--231, 1980.
+
+\bibitem[DM78]{DM78}
+Jacques Dixmier and Paul Malliavin.
+\newblock Factorisations de fonctions et de vecteurs indéfiniment
+  différentiables.
+\newblock {\em Bulletin des Sciences Mathématiques}, 102(4):307--330, 1978.
+
+\bibitem[GGS17]{GGS17}
+Raul Gomez, Dmitry Gourevitch, and Siddhartha Sahi.
+\newblock Generalized and degenerate {Whittaker} models.
+\newblock {\em Compositio Mathematica}, 153(2):223--256, 2017.
+
+\bibitem[Gin06]{GIN06}
+D.~Ginzburg.
+\newblock Certain conjectures relating unipotent orbits to automorphic
+  representations.
+\newblock {\em Israel Journal of Mathematics}, 151:323--355, 12 2006.
+
+\bibitem[GRS97]{GRS972}
+D.~Ginzburg, S.~Rallis, and D.~Soudry.
+\newblock Self-dual automorphic gl n modules and construction of a backward
+  lifting from gl n to classical groups.
+\newblock {\em International Mathematics Research Notices}, 1997(14):687--701,
+  1997.
+
+\bibitem[GRS03]{GRS03}
+D.~Ginzburg, S.~Rallis, and D.~Soudry.
+\newblock On {F}ourier coefficients of automorphic forms of symplectic groups.
+\newblock {\em manuscripta mathematica}, 111:1--16, 05 2003.
+
+\bibitem[GRS11]{GRS11}
+D.~Ginzburg, S.~Rallis, and D.~Soudry.
+\newblock {\em The descent map from automorphic representations of GL(n) to
+  classical groups}.
+\newblock World Scientific Publishing Co., January 2011.
+\newblock Publisher Copyright: {\textcopyright} 2011 by World Scientific
+  Publishing Co. Pte. Ltd. All rights reserved.
+
+\bibitem[GS21]{GS20}
+D.~Ginzburg and D.~Soudry.
+\newblock Two identities relating {Eisenstein} series on classical groups.
+\newblock {\em Journal of Number Theory}, 221:1--108, 2021.
+
+\bibitem[GS22a]{GS222}
+D.~Ginzburg and D.~Soudry.
+\newblock Double descent in classical groups.
+\newblock {\em Journal of Number Theory}, 235:1--156, 2022.
+
+\bibitem[GS22b]{GS221}
+D.~Ginzburg and D.~Soudry.
+\newblock Top {Fourier} coefficients of residual {Eisenstein} series on
+  symplectic or metaplectic groups, induced from {Speh} representations.
+\newblock {\em Research in Number Theory}, 8(10), 03 2022.
+
+\bibitem[Ike94]{ik94}
+T.~Ikeda.
+\newblock {On the theory of Jacobi forms and Fourier-Jacobi coefficients of
+  Eisenstein series}.
+\newblock {\em Journal of Mathematics of Kyoto University}, 34(3):615 -- 636,
+  1994.
+
+\bibitem[Jac67]{J67}
+Herv\'e Jacquet.
+\newblock Fonctions de {Whittaker} associ\'ees aux groupes de {Chevalley}.
+\newblock {\em Bulletin de la Soci\'et\'e Math\'ematique de France},
+  95:243--309, 1967.
+
+\bibitem[JL15]{JL15}
+Dihua Jiang and Baiying Liu.
+\newblock On special unipotent orbits and {Fourier} coefficients for
+  automorphic forms on symplectic groups.
+\newblock {\em Journal of Number Theory}, 146:343--389, 2015.
+
+\bibitem[Lap08]{Lapid08}
+Erez~M. Lapid.
+\newblock A remark on {Eisenstein} series.
+\newblock In {\em {Eisenstein} Series and Applications}, volume 258 of {\em
+  Progress in Mathematics}, pages 239--249. Birkh{\"a}user Boston, 2008.
+
+\bibitem[Mui08]{Muic08}
+G.~Muić.
+\newblock Degenerate {Eisenstein} series on symplectic groups.
+\newblock {\em Mathematical Communications}, 13(2):185--192, 2008.
+
+\bibitem[MW87]{MW87}
+C.~M{\oe}glin and J.-L. Waldspurger.
+\newblock Mod{\`e}les de {Whittaker} d{\'e}g{\'e}n{\'e}r{\'e}s pour des groupes
+  $p$-adiques.
+\newblock {\em Mathematische Zeitschrift}, 196(3):427--452, 1987.
+
+\bibitem[MW95]{MW95}
+C.~Moeglin and J.~L. Waldspurger.
+\newblock {\em Spectral Decomposition and Eisenstein Series: A Paraphrase of
+  the Scriptures}.
+\newblock Cambridge Tracts in Mathematics. Cambridge University Press, 1995.
+
+\end{thebibliography}
+\end{document}

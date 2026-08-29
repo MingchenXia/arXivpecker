@@ -1,0 +1,1259 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-29T08:10:09.746Z",
+  "nodes": [
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::notation-preamble",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "notation-preamble",
+      "label": "Preamble notation",
+      "title": "Custom mathematical commands",
+      "kind": "notation",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-1",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-1",
+      "label": "Section 1",
+      "title": "Introduction",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-2",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-2",
+      "label": "Section 2",
+      "title": "Basic Stuff",
+      "kind": "section",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-2-1",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-2-1",
+      "label": "Section 2.1",
+      "title": "Files and commands",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-2-2",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-2-2",
+      "label": "Section 2.2",
+      "title": "Skeleton of a LaTeX document",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-2-3",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-2-3",
+      "label": "Section 2.3",
+      "title": "Typing and fonts",
+      "kind": "section",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::thm-2-1",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "thm-2-1",
+      "label": "Theorem 2.1",
+      "title": "Pythagorean theorem example",
+      "kind": "theorem",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-2-4",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-2-4",
+      "label": "Section 2.4",
+      "title": "Accents",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-2-5",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-2-5",
+      "label": "Section 2.5",
+      "title": "Lists",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-3",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-3",
+      "label": "Section 3",
+      "title": "Mathematics",
+      "kind": "section",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-3-1",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-3-1",
+      "label": "Section 3.1",
+      "title": "Basic math",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-3-2",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-3-2",
+      "label": "Section 3.2",
+      "title": "Displayed equations",
+      "kind": "section",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::eq-1",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "eq-1",
+      "label": "Equation (1)",
+      "title": "Definition of the sample polynomial",
+      "kind": "equation",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::def-absolute-value",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "def-absolute-value",
+      "label": "Displayed absolute-value formula",
+      "title": "Piecewise formula for absolute value",
+      "kind": "definition",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::eq-series-product",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "eq-series-product",
+      "label": "Displayed series-product inequality",
+      "title": "Exponential-series and finite-product example",
+      "kind": "equation",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-3-3",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-3-3",
+      "label": "Section 3.3",
+      "title": "Relations and operations",
+      "kind": "section",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::notation-mod",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "notation-mod",
+      "label": "Modular-relation display",
+      "title": "Three modular-congruence formats",
+      "kind": "notation",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-3-4",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-3-4",
+      "label": "Section 3.4",
+      "title": "Use the right dots",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-3-5",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-3-5",
+      "label": "Section 3.5",
+      "title": "Built up structures",
+      "kind": "section",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-3-6",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-3-6",
+      "label": "Section 3.6",
+      "title": "Delimiters",
+      "kind": "section",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::eq-gaussian-series",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "eq-gaussian-series",
+      "label": "Displayed power-series identity",
+      "title": "Unspecialized Gaussian power-series identity",
+      "kind": "equation",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::notation-delimiter",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "notation-delimiter",
+      "label": "Manual-delimiter display",
+      "title": "Comparison of delimiter-sizing commands",
+      "kind": "notation",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-3-7",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-3-7",
+      "label": "Section 3.7",
+      "title": "Styled and decorated letters",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-3-8",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-3-8",
+      "label": "Section 3.8",
+      "title": "Defining your own commands",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-4",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-4",
+      "label": "Section 4",
+      "title": "Theorem/Proof",
+      "kind": "section",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::thm-4-1",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "thm-4-1",
+      "label": "Theorem 4.1",
+      "title": "Compact subsets of the real line",
+      "kind": "theorem",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::lem-4-2",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "lem-4-2",
+      "label": "Lemma 4.2",
+      "title": "Degree-sum formula",
+      "kind": "lemma",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::conj-4-3",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "conj-4-3",
+      "label": "Proposition 4.5",
+      "title": "Parity of perfect numbers",
+      "kind": "proposition",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::thm-4-4",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "thm-4-4",
+      "label": "Theorem 4.4",
+      "title": "Fundamental Theorem of Algebra",
+      "kind": "theorem",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::ext-well-ordering",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "ext-well-ordering",
+      "label": "Well-ordering principle",
+      "title": "Least element of a nonempty set of positive integers",
+      "kind": "external-result",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::proof-interesting",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "proof-interesting",
+      "label": "Proof",
+      "title": "Freestanding proof that all positive integers are interesting",
+      "kind": "proof",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::prop-4-5",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "prop-4-5",
+      "label": "Proposition 4.5",
+      "title": "Parity after adding one",
+      "kind": "proposition",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-5",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-5",
+      "label": "Section 5",
+      "title": "Cross References",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-5-1",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-5-1",
+      "label": "Section 5.1",
+      "title": "Labels for numbered entities",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-5-2",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-5-2",
+      "label": "Section 5.2",
+      "title": "Citations",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-6",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-6",
+      "label": "Section 6",
+      "title": "Figures",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-7",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-7",
+      "label": "Section 7",
+      "title": "Tables",
+      "kind": "section",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::def-symmetric",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "def-symmetric",
+      "label": "Term-definition table",
+      "title": "Symmetric matrix",
+      "kind": "definition",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::def-singular",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "def-singular",
+      "label": "Term-definition table",
+      "title": "Singular matrix",
+      "kind": "definition",
+      "page": null,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::def-doubly-stochastic",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "def-doubly-stochastic",
+      "label": "Term-definition table",
+      "title": "Doubly stochastic matrix",
+      "kind": "definition",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::sec-8",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "sec-8",
+      "label": "Section 8",
+      "title": "Further Reading",
+      "kind": "section",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::source-unit-4",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "paperTitle": "A Sample Mathematics Paper",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "source-unit-4",
+      "label": "Conjecture 4.3",
+      "title": "Conjecture",
+      "kind": "conjecture",
+      "page": null,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::sec-introduction",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "sec-introduction",
+      "label": "Section 1",
+      "title": "Introduction",
+      "kind": "section",
+      "page": 1,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::standing-data",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "standing-data",
+      "label": "Section 2.3",
+      "title": "Standing global data",
+      "kind": "assumption",
+      "page": 5,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::eq-eisenstein",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "eq-eisenstein",
+      "label": "Equation (1)",
+      "title": "Degenerate Eisenstein series",
+      "kind": "equation",
+      "page": 2,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::eq-fourier-coefficient",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "eq-fourier-coefficient",
+      "label": "Equation (2)",
+      "title": "The descent Fourier coefficient",
+      "kind": "definition",
+      "page": 2,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::thm-1-1",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "thm-1-1",
+      "label": "Theorem 1.1",
+      "title": "Introductory statement of the descent theorem",
+      "kind": "theorem",
+      "page": 2,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::thm-1-2",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "thm-1-2",
+      "label": "Theorem 1.2",
+      "title": "Introductory unramified descent formula",
+      "kind": "theorem",
+      "page": 2,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::sec-preliminaries",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "sec-preliminaries",
+      "label": "Section 2",
+      "title": "Preliminaries",
+      "kind": "section",
+      "page": 3,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::groups-roots",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "groups-roots",
+      "label": "Section 2.1",
+      "title": "Symplectic groups, roots, and Weyl notation",
+      "kind": "notation",
+      "page": 3,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::embeddings",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "embeddings",
+      "label": "Section 2.2",
+      "title": "Embeddings of the stabilizer and smaller symplectic group",
+      "kind": "notation",
+      "page": 4,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::induced-representation",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "induced-representation",
+      "label": "Equation (10)",
+      "title": "The degenerate principal series $I_n(s)$",
+      "kind": "definition",
+      "page": 5,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::orbit-fourier-definitions",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "orbit-fourier-definitions",
+      "label": "Section 2.4",
+      "title": "Unipotent-orbit Fourier coefficients and support",
+      "kind": "definition",
+      "page": 6,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::sec-global-unfolding",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "sec-global-unfolding",
+      "label": "Section 3",
+      "title": "Fourier coefficients of the degenerate Eisenstein series",
+      "kind": "section",
+      "page": 6,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::lem-3-1",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "lem-3-1",
+      "label": "Lemma 3.1",
+      "title": "Bruhat parametrization of the double quotient",
+      "kind": "lemma",
+      "page": 7,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::lem-3-2",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "lem-3-2",
+      "label": "Lemma 3.2",
+      "title": "Necessary Weyl survival condition",
+      "kind": "lemma",
+      "page": 7,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::lem-3-3",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "lem-3-3",
+      "label": "Lemma 3.3",
+      "title": "Uniqueness of the surviving Weyl family",
+      "kind": "lemma",
+      "page": 9,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::prop-3-4",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "prop-3-4",
+      "label": "Proposition 3.4",
+      "title": "Explicit unfolded Fourier coefficient",
+      "kind": "proposition",
+      "page": 10,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::thm-3-5",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "thm-3-5",
+      "label": "Theorem 3.5",
+      "title": "Main descent theorem",
+      "kind": "theorem",
+      "page": 11,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::lem-3-6",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "lem-3-6",
+      "label": "Lemma 3.6",
+      "title": "The global descended section",
+      "kind": "lemma",
+      "page": 11,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::sec-local",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "sec-local",
+      "label": "Section 4",
+      "title": "Local computations",
+      "kind": "section",
+      "page": 13,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::ext-gk-cs",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "ext-gk-cs",
+      "label": "Gindikin–Karpelevich and Casselman–Shalika formulas",
+      "title": "Spherical intertwining and Jacquet-integral evaluations",
+      "kind": "external-result",
+      "page": 17,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-2608.24719::thm-4-1",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "thm-4-1",
+      "label": "Theorem 4.1",
+      "title": "Unramified local descent calculation",
+      "kind": "theorem",
+      "page": 13,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::prop-4-2",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "prop-4-2",
+      "label": "Proposition 4.2",
+      "title": "Ramified and Archimedean meromorphic continuation",
+      "kind": "proposition",
+      "page": 20,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::lem-4-3",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "lem-4-3",
+      "label": "Lemma 4.3",
+      "title": "Dixmier–Malliavin lemma",
+      "kind": "lemma",
+      "page": 21,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::ext-jacquet",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "ext-jacquet",
+      "label": "Jacquet's local analytic theory",
+      "title": "Meromorphic continuation of generalized Jacquet integrals",
+      "kind": "external-result",
+      "page": 21,
+      "status": "needs-verification"
+    },
+    {
+      "id": "arxiv-2608.24719::prop-4-4",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "prop-4-4",
+      "label": "Proposition 4.4",
+      "title": "Surjectivity and dense image of local descent",
+      "kind": "proposition",
+      "page": 23,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::sec-completion",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "sec-completion",
+      "label": "Section 5",
+      "title": "Proof of the main descent theorem and applications",
+      "kind": "section",
+      "page": 25,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::proof-main-descent",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "proof-main-descent",
+      "label": "Proof of Theorem 3.5",
+      "title": "Completion of the main descent theorem",
+      "kind": "proof",
+      "page": 25,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::eq-lambda-a",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "eq-lambda-a",
+      "label": "Equation (50)",
+      "title": "Positive pole set for the terminal Siegel series",
+      "kind": "equation",
+      "page": 26,
+      "status": "verified"
+    },
+    {
+      "id": "arxiv-2608.24719::rem-5-1",
+      "paperId": "arxiv-2608.24719",
+      "paperTitle": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "arxivId": "2608.24719v1",
+      "nodeId": "rem-5-1",
+      "label": "Remark 5.1",
+      "title": "Application to maximal Fourier coefficients",
+      "kind": "remark",
+      "page": 26,
+      "status": "verified"
+    }
+  ],
+  "edges": [
+    {
+      "id": "intra:arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::proof-interesting:arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::ext-well-ordering",
+      "from": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::proof-interesting",
+      "to": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f::ext-well-ordering",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::eq-eisenstein:arxiv-2608.24719::standing-data",
+      "from": "arxiv-2608.24719::eq-eisenstein",
+      "to": "arxiv-2608.24719::standing-data",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::eq-eisenstein:arxiv-2608.24719::induced-representation",
+      "from": "arxiv-2608.24719::eq-eisenstein",
+      "to": "arxiv-2608.24719::induced-representation",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::eq-fourier-coefficient:arxiv-2608.24719::eq-eisenstein",
+      "from": "arxiv-2608.24719::eq-fourier-coefficient",
+      "to": "arxiv-2608.24719::eq-eisenstein",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::eq-fourier-coefficient:arxiv-2608.24719::orbit-fourier-definitions",
+      "from": "arxiv-2608.24719::eq-fourier-coefficient",
+      "to": "arxiv-2608.24719::orbit-fourier-definitions",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-1-1:arxiv-2608.24719::thm-3-5",
+      "from": "arxiv-2608.24719::thm-1-1",
+      "to": "arxiv-2608.24719::thm-3-5",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-1-1:arxiv-2608.24719::prop-4-4",
+      "from": "arxiv-2608.24719::thm-1-1",
+      "to": "arxiv-2608.24719::prop-4-4",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-1-2:arxiv-2608.24719::thm-4-1",
+      "from": "arxiv-2608.24719::thm-1-2",
+      "to": "arxiv-2608.24719::thm-4-1",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::sec-preliminaries:arxiv-2608.24719::standing-data",
+      "from": "arxiv-2608.24719::sec-preliminaries",
+      "to": "arxiv-2608.24719::standing-data",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::groups-roots:arxiv-2608.24719::standing-data",
+      "from": "arxiv-2608.24719::groups-roots",
+      "to": "arxiv-2608.24719::standing-data",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::embeddings:arxiv-2608.24719::groups-roots",
+      "from": "arxiv-2608.24719::embeddings",
+      "to": "arxiv-2608.24719::groups-roots",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::induced-representation:arxiv-2608.24719::standing-data",
+      "from": "arxiv-2608.24719::induced-representation",
+      "to": "arxiv-2608.24719::standing-data",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::induced-representation:arxiv-2608.24719::groups-roots",
+      "from": "arxiv-2608.24719::induced-representation",
+      "to": "arxiv-2608.24719::groups-roots",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::orbit-fourier-definitions:arxiv-2608.24719::groups-roots",
+      "from": "arxiv-2608.24719::orbit-fourier-definitions",
+      "to": "arxiv-2608.24719::groups-roots",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::sec-global-unfolding:arxiv-2608.24719::eq-fourier-coefficient",
+      "from": "arxiv-2608.24719::sec-global-unfolding",
+      "to": "arxiv-2608.24719::eq-fourier-coefficient",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::sec-global-unfolding:arxiv-2608.24719::groups-roots",
+      "from": "arxiv-2608.24719::sec-global-unfolding",
+      "to": "arxiv-2608.24719::groups-roots",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::sec-global-unfolding:arxiv-2608.24719::embeddings",
+      "from": "arxiv-2608.24719::sec-global-unfolding",
+      "to": "arxiv-2608.24719::embeddings",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::lem-3-1:arxiv-2608.24719::groups-roots",
+      "from": "arxiv-2608.24719::lem-3-1",
+      "to": "arxiv-2608.24719::groups-roots",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::lem-3-1:arxiv-2608.24719::eq-fourier-coefficient",
+      "from": "arxiv-2608.24719::lem-3-1",
+      "to": "arxiv-2608.24719::eq-fourier-coefficient",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::lem-3-2:arxiv-2608.24719::lem-3-1",
+      "from": "arxiv-2608.24719::lem-3-2",
+      "to": "arxiv-2608.24719::lem-3-1",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::lem-3-2:arxiv-2608.24719::groups-roots",
+      "from": "arxiv-2608.24719::lem-3-2",
+      "to": "arxiv-2608.24719::groups-roots",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::lem-3-3:arxiv-2608.24719::lem-3-2",
+      "from": "arxiv-2608.24719::lem-3-3",
+      "to": "arxiv-2608.24719::lem-3-2",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::lem-3-3:arxiv-2608.24719::groups-roots",
+      "from": "arxiv-2608.24719::lem-3-3",
+      "to": "arxiv-2608.24719::groups-roots",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::prop-3-4:arxiv-2608.24719::lem-3-1",
+      "from": "arxiv-2608.24719::prop-3-4",
+      "to": "arxiv-2608.24719::lem-3-1",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::prop-3-4:arxiv-2608.24719::lem-3-2",
+      "from": "arxiv-2608.24719::prop-3-4",
+      "to": "arxiv-2608.24719::lem-3-2",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::prop-3-4:arxiv-2608.24719::lem-3-3",
+      "from": "arxiv-2608.24719::prop-3-4",
+      "to": "arxiv-2608.24719::lem-3-3",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::prop-3-4:arxiv-2608.24719::embeddings",
+      "from": "arxiv-2608.24719::prop-3-4",
+      "to": "arxiv-2608.24719::embeddings",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-3-5:arxiv-2608.24719::prop-3-4",
+      "from": "arxiv-2608.24719::thm-3-5",
+      "to": "arxiv-2608.24719::prop-3-4",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-3-5:arxiv-2608.24719::lem-3-6",
+      "from": "arxiv-2608.24719::thm-3-5",
+      "to": "arxiv-2608.24719::lem-3-6",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-3-5:arxiv-2608.24719::thm-4-1",
+      "from": "arxiv-2608.24719::thm-3-5",
+      "to": "arxiv-2608.24719::thm-4-1",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-3-5:arxiv-2608.24719::prop-4-2",
+      "from": "arxiv-2608.24719::thm-3-5",
+      "to": "arxiv-2608.24719::prop-4-2",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-3-5:arxiv-2608.24719::prop-4-4",
+      "from": "arxiv-2608.24719::thm-3-5",
+      "to": "arxiv-2608.24719::prop-4-4",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-3-5:arxiv-2608.24719::proof-main-descent",
+      "from": "arxiv-2608.24719::thm-3-5",
+      "to": "arxiv-2608.24719::proof-main-descent",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::lem-3-6:arxiv-2608.24719::prop-3-4",
+      "from": "arxiv-2608.24719::lem-3-6",
+      "to": "arxiv-2608.24719::prop-3-4",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::lem-3-6:arxiv-2608.24719::induced-representation",
+      "from": "arxiv-2608.24719::lem-3-6",
+      "to": "arxiv-2608.24719::induced-representation",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::lem-3-6:arxiv-2608.24719::embeddings",
+      "from": "arxiv-2608.24719::lem-3-6",
+      "to": "arxiv-2608.24719::embeddings",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::sec-local:arxiv-2608.24719::lem-3-6",
+      "from": "arxiv-2608.24719::sec-local",
+      "to": "arxiv-2608.24719::lem-3-6",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-4-1:arxiv-2608.24719::lem-3-6",
+      "from": "arxiv-2608.24719::thm-4-1",
+      "to": "arxiv-2608.24719::lem-3-6",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-4-1:arxiv-2608.24719::groups-roots",
+      "from": "arxiv-2608.24719::thm-4-1",
+      "to": "arxiv-2608.24719::groups-roots",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-4-1:arxiv-2608.24719::embeddings",
+      "from": "arxiv-2608.24719::thm-4-1",
+      "to": "arxiv-2608.24719::embeddings",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::thm-4-1:arxiv-2608.24719::ext-gk-cs",
+      "from": "arxiv-2608.24719::thm-4-1",
+      "to": "arxiv-2608.24719::ext-gk-cs",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::prop-4-2:arxiv-2608.24719::lem-3-6",
+      "from": "arxiv-2608.24719::prop-4-2",
+      "to": "arxiv-2608.24719::lem-3-6",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::prop-4-2:arxiv-2608.24719::lem-4-3",
+      "from": "arxiv-2608.24719::prop-4-2",
+      "to": "arxiv-2608.24719::lem-4-3",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::prop-4-2:arxiv-2608.24719::ext-jacquet",
+      "from": "arxiv-2608.24719::prop-4-2",
+      "to": "arxiv-2608.24719::ext-jacquet",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::prop-4-4:arxiv-2608.24719::prop-4-2",
+      "from": "arxiv-2608.24719::prop-4-4",
+      "to": "arxiv-2608.24719::prop-4-2",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::prop-4-4:arxiv-2608.24719::embeddings",
+      "from": "arxiv-2608.24719::prop-4-4",
+      "to": "arxiv-2608.24719::embeddings",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::sec-completion:arxiv-2608.24719::prop-3-4",
+      "from": "arxiv-2608.24719::sec-completion",
+      "to": "arxiv-2608.24719::prop-3-4",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::sec-completion:arxiv-2608.24719::thm-4-1",
+      "from": "arxiv-2608.24719::sec-completion",
+      "to": "arxiv-2608.24719::thm-4-1",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::sec-completion:arxiv-2608.24719::prop-4-2",
+      "from": "arxiv-2608.24719::sec-completion",
+      "to": "arxiv-2608.24719::prop-4-2",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::sec-completion:arxiv-2608.24719::prop-4-4",
+      "from": "arxiv-2608.24719::sec-completion",
+      "to": "arxiv-2608.24719::prop-4-4",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::proof-main-descent:arxiv-2608.24719::prop-3-4",
+      "from": "arxiv-2608.24719::proof-main-descent",
+      "to": "arxiv-2608.24719::prop-3-4",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::proof-main-descent:arxiv-2608.24719::lem-3-6",
+      "from": "arxiv-2608.24719::proof-main-descent",
+      "to": "arxiv-2608.24719::lem-3-6",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::proof-main-descent:arxiv-2608.24719::thm-4-1",
+      "from": "arxiv-2608.24719::proof-main-descent",
+      "to": "arxiv-2608.24719::thm-4-1",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::proof-main-descent:arxiv-2608.24719::prop-4-2",
+      "from": "arxiv-2608.24719::proof-main-descent",
+      "to": "arxiv-2608.24719::prop-4-2",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::proof-main-descent:arxiv-2608.24719::prop-4-4",
+      "from": "arxiv-2608.24719::proof-main-descent",
+      "to": "arxiv-2608.24719::prop-4-4",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::rem-5-1:arxiv-2608.24719::thm-3-5",
+      "from": "arxiv-2608.24719::rem-5-1",
+      "to": "arxiv-2608.24719::thm-3-5",
+      "relation": "uses",
+      "source": "audit"
+    },
+    {
+      "id": "intra:arxiv-2608.24719::rem-5-1:arxiv-2608.24719::eq-lambda-a",
+      "from": "arxiv-2608.24719::rem-5-1",
+      "to": "arxiv-2608.24719::eq-lambda-a",
+      "relation": "uses",
+      "source": "audit"
+    }
+  ]
+}

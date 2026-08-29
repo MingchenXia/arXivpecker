@@ -1,36 +1,53 @@
 # arXivpecker
 
-arXivpecker is a local-first mathematics paper reader designed around how mathematicians actually read.
+arXivpecker is a local-first mathematics paper reader that preserves the complete author paper while adding interactive structure, editable TeX, proof expansion, citation lookup, notes, version comparison, and theorem-level dependency maps.
 
-It imports papers directly from arXiv, asks the user's existing local Codex subscription to audit the full paper, and turns the result into an interactive reading layer with:
+AI work uses the tester's existing local Codex/ChatGPT sign-in. No OpenAI API key is used.
 
-- a theorem/definition/proof outline;
-- source-page anchors and an embedded original PDF;
-- expandable proof details and dependency-aware reading paths;
-- full-paper context for questions about a specific result;
-- linked LaTeX notes;
-- one stable local folder per paper; and
-- a reusable dependency graph across papers.
+## Quick start
 
-No OpenAI API key is used. AI work runs through the local `codex app-server` and the user's signed-in Codex subscription.
+Requirements:
 
-## Run locally
-
-Use Node.js 22 or newer.
+- Node.js 22.13 or newer;
+- the Codex CLI; and
+- an active Codex/ChatGPT sign-in (`codex login status`).
 
 ```bash
+git clone https://github.com/MingchenXia/arXivpecker.git
+cd arXivpecker
 npm install
-npm run codex-bridge
+npm run app
 ```
 
-In another terminal:
+Open the local URL shown in the terminal. A fresh clone opens the first-time reading-profile setup and includes three starter papers:
 
-```bash
-npm run dev
-```
+- *A Sample Mathematics Paper* — an interactive feature tour;
+- arXiv:2607.17203 — an unaudited paper for testing the audit flow; and
+- arXiv:2608.24719v1 — a fully structured audited paper with TeX source.
 
-Open the local URL printed by the development server. The Codex bridge listens on `http://127.0.0.1:4318` by default.
+`npm run app` starts both the web reader and the local Codex bridge. For separate terminals, run `npm run codex-bridge` and `npm run dev`.
 
 ## Local data
 
-Paper data is stored under `proofroom-library/` unless `PROOFROOM_LIBRARY_DIR` points elsewhere. Each paper folder contains its metadata, audit, reader state, links, attachments, exports, and reversible working-edition patches. The generated library is intentionally ignored by Git.
+The repository's reusable examples live in `examples/starter-library/`. On first launch they are copied into the writable `proofroom-library/`, where imported papers, notes, edits, audit results, uploads, exports, and preferences remain local and are ignored by Git.
+
+Set `PROOFROOM_LIBRARY_DIR` to use another writable library. Set `ARXIVPECKER_SKIP_STARTER_LIBRARY=1` when an intentionally empty library is desired.
+
+## Project map
+
+- `app/` — reader interface and arXiv metadata route
+- `scripts/` — local Codex bridge, vault, checks, and sharing tools
+- `examples/starter-library/` — portable bundled papers
+- `docs/architecture.md` — storage, first-run, and trust-boundary design
+- `proofroom-library/` — local runtime data, never committed
+
+## Validation
+
+```bash
+npm run lint
+npm run build
+npm run test:starter
+npm run audit-formulas
+```
+
+The repository is private during tester preview. A public open-source license will be selected before the repository is made public.

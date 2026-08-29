@@ -1,0 +1,10 @@
+# Preserve third-party author source exactly as imported while excluding its
+# original trailing whitespace from repository patch checks.
+examples/starter-library/**/attachments/source/*.tex whitespace=-blank-at-eol,-blank-at-eof
+examples/starter-library/**/attachments/source/**/*.tex whitespace=-blank-at-eol,-blank-at-eof
+
+# Treat bundled paper assets as binary.
+examples/starter-library/**/*.tar binary
+examples/starter-library/**/*.zip binary
+examples/starter-library/**/*.pdf binary
+examples/starter-library/**/*.png binary

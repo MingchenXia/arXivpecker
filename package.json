@@ -6,11 +6,14 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "app": "node scripts/dev.mjs",
     "dev": "vinext dev",
+    "dev:web": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
     "codex-bridge": "node scripts/codex-bridge.mjs",
     "reindex-audits": "node scripts/reindex-audits.mjs",
+    "test:starter": "node scripts/starter-library-test.mjs",
     "audit-formulas": "node scripts/formula-audit.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },

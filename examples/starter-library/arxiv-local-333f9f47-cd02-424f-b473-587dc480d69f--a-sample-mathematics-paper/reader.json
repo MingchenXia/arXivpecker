@@ -1,0 +1,38 @@
+{
+  "notes": [
+    {
+      "id": "n-1787988320001",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "source-block:source-paragraph-1",
+      "anchor": "Paragraph · p.—",
+      "text": "Sample Note",
+      "latex": "",
+      "createdAt": "just now"
+    },
+    {
+      "id": "n-1787987327292",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "source-block:source-paragraph-38",
+      "anchor": "Paragraph · p.—",
+      "text": "sdkklfsdjlf",
+      "latex": "",
+      "createdAt": "just now"
+    },
+    {
+      "id": "n-1787987244612",
+      "paperId": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "nodeId": "source-block:source-paragraph-14",
+      "anchor": "Paragraph · p.—",
+      "text": "In \nx\n+\n1\nx+1:\n\n- \nx\nx is a variable, automatically printed in italics in mathematical mode.\n- \n+\n+ means addition.\n- \n1\n1 is the number one.\n\nThus \nx\n+\n1\nx+1 means “one more than \nx\nx.” The paragraph uses it only to demonstrate LaTeX’s automatic mathematical font styling.",
+      "latex": "",
+      "createdAt": "just now"
+    }
+  ],
+  "nodeNotes": {},
+  "nodeAnswers": {
+    "source-block:source-paragraph-14": "Source anchor: “Author text” paragraph in Section 2.3, “Typing and fonts” — status: verified.\n\nIn $x+1$:\n\n- $x$ is a variable, automatically printed in italics in mathematical mode.\n- $+$ means addition.\n- $1$ is the number one.\n\nThus $x+1$ means “one more than $x$.” The paragraph uses it only to demonstrate LaTeX’s automatic mathematical font styling."
+  },
+  "expanded": {},
+  "marks": {},
+  "updatedAt": "2026-08-29T08:55:06.879Z"
+}

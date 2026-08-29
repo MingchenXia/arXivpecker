@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-29T07:56:31.715Z",
+  "patches": [
+    {
+      "id": "25e44039-a75c-4faf-88bc-dc7f7390f40f",
+      "kind": "replace",
+      "nodeId": "def-absolute-value",
+      "title": "Piecewise formula for absolute value",
+      "statement": "$$|x|=\\begin{cases}x&\\text{when }x\\ge 0\\\\-x&\\text{otherwise.}\\end{cases}$$",
+      "proofText": "",
+      "nodeKind": "definition",
+      "afterNodeId": "",
+      "rationale": "The first case ends with a dangling conjunction, while the second case supplies no condition to complete it. Removing “and” restores the unmistakable standard piecewise definition without changing its mathematical scope.",
+      "dependencies": [],
+      "proofSketch": [],
+      "source": "ai",
+      "createdAt": "2026-08-29T07:56:31.711Z"
+    },
+    {
+      "id": "841a5375-83b5-46c6-ad5f-6f3347272b9d",
+      "kind": "replace",
+      "nodeId": "notation-mod",
+      "title": "Three modular-congruence formats",
+      "statement": "$$\\begin{aligned}x&\\equiv y\\mod 10\\\\x&\\equiv y\\pmod{10}\\\\x&\\equiv y\\pod{10}\\end{aligned}$$",
+      "proofText": "",
+      "nodeKind": "notation",
+      "afterNodeId": "",
+      "rationale": "The surrounding paragraph explicitly presents modular relations, for which the congruence symbol is $\\equiv$. The source's $\\cong$ is inconsistent with that stated purpose.",
+      "dependencies": [],
+      "proofSketch": [],
+      "source": "ai",
+      "createdAt": "2026-08-29T07:56:31.711Z"
+    },
+    {
+      "id": "276cfe03-82f6-4770-bbca-7a6a4aa6cf72",
+      "kind": "replace",
+      "nodeId": "notation-delimiter",
+      "title": "Comparison of delimiter-sizing commands",
+      "statement": "$$\\left((x_1+1)(x_2-1)\\right)=\\bigl((x_1+1)(x_2-1)\\bigr).$$",
+      "proofText": "",
+      "nodeKind": "notation",
+      "afterNodeId": "",
+      "rationale": "The final parenthesis is a closing delimiter, so it requires the matching right-delimiter command $\\bigr$ rather than the left-delimiter command $\\bigl$.",
+      "dependencies": [],
+      "proofSketch": [],
+      "source": "ai",
+      "createdAt": "2026-08-29T07:56:31.711Z"
+    }
+  ]
+}

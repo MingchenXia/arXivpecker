@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "updatedAt": "2026-08-29T08:36:47.935Z",
+  "papers": [
+    {
+      "id": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "arxivId": "local-333f9f47-cd02-424f-b473-587dc480d69f",
+      "folder": "arxiv-local-333f9f47-cd02-424f-b473-587dc480d69f--a-sample-mathematics-paper",
+      "title": "A Sample Mathematics Paper",
+      "updatedAt": "2026-08-29T08:10:09.600Z",
+      "createdAt": "2026-08-28T23:21:33.786Z"
+    },
+    {
+      "id": "arxiv-2607.17203",
+      "arxivId": "2607.17203",
+      "folder": "arxiv-2607.17203--m-positive-stability-of-holomorphic-vector-bundles-and-m",
+      "title": "$m$-Positive Stability of Holomorphic Vector Bundles and Moduli Spaces",
+      "updatedAt": "2026-08-29T08:36:47.932Z",
+      "createdAt": "2026-08-28T14:35:46.988Z"
+    },
+    {
+      "id": "arxiv-2608.24719",
+      "arxivId": "2608.24719v1",
+      "folder": "arxiv-2608.24719--fourier-coefficients-of-the-degenerate-eisenstein-series",
+      "title": "Fourier Coefficients of the Degenerate Eisenstein Series on Symplectic Groups",
+      "updatedAt": "2026-08-29T08:10:09.738Z",
+      "createdAt": "2026-08-28T03:50:32.767Z"
+    }
+  ],
+  "links": []
+}

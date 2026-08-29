@@ -1,0 +1,25 @@
+{
+  "id": "arxiv-2607.17203",
+  "title": "$m$-Positive Stability of Holomorphic Vector Bundles and Moduli Spaces",
+  "authors": "Dan Popovici",
+  "category": "math.DG",
+  "arxivId": "2607.17203",
+  "abstract": "We first propose a notion of $m$-positivity for higher-rank vector bundles, a variant of which reduces to the classical Griffiths positivity when $m=1$. Based on this, we go on to propose a generalisation of the classical Mumford-Takemoto theory of stability by means of a smooth function that we associate with every proper coherent subsheaf ${\\cal F}$ of a given holomorphic vector bundle $E$. This places the emphasis on the holomorphic structure and the Hermitian fibre metric of $E$, rather than on numerical invariants of the smooth structure of $E$, making our stability conditions into relative pointwise $m$-positivity properties of $E$ with respect to its proper coherent subsheaves ${\\cal F}$. We establish links with Hermite-Einstein geometry, prove that Hermite-Einstein bundles are uniformly semi-stable, study the resulting moduli spaces, and compare the new notions with the classical Mumford-Takemoto (semi-)stability notions.",
+  "state": "Reading",
+  "tags": [
+    "math.DG"
+  ],
+  "folder": "arxiv-2607.17203--m-positive-stability-of-holomorphic-vector-bundles-and-m",
+  "updatedAt": "2026-08-29T08:39:29.921Z",
+  "createdAt": "2026-08-28T14:35:46.988Z",
+  "source": {
+    "abstractUrl": "https://arxiv.org/abs/2607.17203",
+    "pdfUrl": "https://arxiv.org/pdf/2607.17203",
+    "texUrl": "https://export.arxiv.org/e-print/2607.17203",
+    "analysisFormat": "tex",
+    "sourceDirectory": "attachments/source",
+    "mainTex": "attachments/source/m-pos-stability.tex",
+    "sourceError": "The regional arXiv source host was unavailable. Upload the author TeX source (ZIP for multiple files) or the original PDF to audit this paper.",
+    "sourceFetchedAt": "2026-08-29T07:11:21.011Z"
+  }
+}

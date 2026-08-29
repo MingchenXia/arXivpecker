@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -59,19 +59,72 @@ function readmeFor(paper) {
 }
 
 export class PaperVault {
-  constructor(root) {
+  constructor(root, { starterRoot = null } = {}) {
     this.root = root;
+    this.starterRoot = starterRoot;
     this.graphDirectory = path.join(root, '_graph');
     this.indexFile = path.join(this.graphDirectory, 'index.json');
     this.graphFile = path.join(this.graphDirectory, 'graph.json');
     this.profileFile = path.join(root, 'profile.json');
+    this.initializing = null;
   }
 
   async ensure() {
+    if (!this.initializing) this.initializing = this.initialize().catch((error) => { this.initializing = null; throw error; });
+    return this.initializing;
+  }
+
+  async initialize() {
     await mkdir(this.root, { recursive: true });
+    const existing = await readdir(this.root, { withFileTypes: true });
+    const hasPaper = existing.some((entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'));
+    if (!hasPaper && this.starterRoot) await this.installStarterLibrary();
     await mkdir(this.graphDirectory, { recursive: true });
     const index = await readJson(this.indexFile, null);
     if (!index) await writeJson(this.indexFile, { version: VAULT_VERSION, updatedAt: new Date().toISOString(), papers: [], links: [] });
+  }
+
+  async installStarterLibrary() {
+    let entries;
+    try { entries = await readdir(this.starterRoot, { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      if (entry.name === 'profile.json' || entry.name === '_trash' || entry.name.startsWith('.')) continue;
+      await cp(path.join(this.starterRoot, entry.name), path.join(this.root, entry.name), { recursive: true, force: false, errorOnExist: false });
+    }
+    await this.hydratePortableSourcePaths();
+  }
+
+  async hydratePortableSourcePaths() {
+    const folders = (await readdir(this.root, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'));
+    for (const folder of folders) {
+      const paperDirectory = path.join(this.root, folder.name); const paperFile = path.join(paperDirectory, 'paper.json');
+      const paper = await readJson(paperFile, null);
+      if (paper?.source) {
+        const source = { ...paper.source };
+        for (const key of ['sourceDirectory', 'mainTex', 'localPdf']) if (source[key] && !path.isAbsolute(source[key])) source[key] = path.resolve(paperDirectory, source[key]);
+        await writeJson(paperFile, { ...paper, source });
+      }
+      const sourceRoot = path.join(paperDirectory, 'attachments', 'source');
+      await this.hydrateManifestTree(sourceRoot);
+    }
+  }
+
+  async hydrateManifestTree(directory, depth = 0) {
+    if (depth > 8) return;
+    let entries;
+    try { entries = await readdir(directory, { withFileTypes: true }); }
+    catch { return; }
+    for (const entry of entries) {
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) await this.hydrateManifestTree(absolute, depth + 1);
+      else if (/^proofroom-(?:source|uploaded-source|ai-source)\.json$/i.test(entry.name)) {
+        const manifest = await readJson(absolute, null); if (!manifest) continue;
+        const hydrated = { ...manifest };
+        for (const key of ['entryFile', 'sourceDirectory', 'uploadedFile']) if (hydrated[key] && !path.isAbsolute(hydrated[key])) hydrated[key] = path.resolve(directory, hydrated[key]);
+        await writeJson(absolute, hydrated);
+      }
+    }
   }
 
   async index() {
@@ -159,9 +212,15 @@ export class PaperVault {
 
   async saveSourceRecord(paperId, sourceRecord) {
     const record = await this.recordFor(paperId);
-    const file = path.join(this.paperDirectory(record), 'paper.json');
+    const directory = this.paperDirectory(record); const file = path.join(directory, 'paper.json');
     const paper = await readJson(file, {});
-    await writeJson(file, { ...paper, source: { ...(paper.source ?? {}), ...sourceRecord }, updatedAt: new Date().toISOString() });
+    const portable = { ...sourceRecord };
+    for (const key of ['sourceDirectory', 'mainTex', 'localPdf']) {
+      if (!portable[key] || !path.isAbsolute(portable[key])) continue;
+      const relative = path.relative(directory, portable[key]);
+      if (!relative.startsWith('..') && !path.isAbsolute(relative)) portable[key] = relative;
+    }
+    await writeJson(file, { ...paper, source: { ...(paper.source ?? {}), ...portable }, updatedAt: new Date().toISOString() });
     return sourceRecord;
   }
 
