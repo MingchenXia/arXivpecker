@@ -1168,7 +1168,7 @@ Read both complete sources before reporting differences. Prefer the local TeX tr
 
 ${readerContext ? `The reader has durable work attached to Version A. Use it only to prioritize the comparison and explicitly mention changed units that could affect these notes, marks, or edits; never reinterpret the reader's text as author text:\n${JSON.stringify(readerContext, null, 2)}` : ''}
 
-Prioritize changes to definitions, assumptions, theorem/lemma/proposition statements, proof steps, counterexamples, hypotheses, conclusions, and logical dependencies. Distinguish a genuine strengthening or weakening from wording, renumbering, or moved text. For each changed unit, provide a compact before/after paraphrase and explain how its prerequisite or downstream dependency chain changes. Never infer a mathematical change from formatting alone. Put uncertain cases in warnings.
+Prioritize changes to definitions, assumptions, theorem/lemma/proposition statements, proof steps, counterexamples, hypotheses, conclusions, and logical dependencies. Distinguish a genuine strengthening or weakening from wording, renumbering, or moved text. For each changed unit, provide a compact before/after paraphrase and explain how its prerequisite or downstream dependency chain changes. Every change array must contain actual changes only: when a category is unchanged, return an empty array rather than an item saying "none" or "unchanged". Never infer a mathematical change from formatting alone. Put uncertain cases in warnings.
 
 Return JSON only, matching the supplied schema. The reading recommendation should tell a mathematician exactly which changed results or proofs deserve rereading.`;
 }
