@@ -2,7 +2,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import katex from 'katex';
 
-const root = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || 'proofroom-library');
+const runtimeRoot = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || 'proofroom-library');
+const starterRoot = path.resolve('examples/starter-library');
+let root = runtimeRoot;
+try {
+  await fs.access(runtimeRoot);
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+  root = starterRoot;
+}
 const formulaPattern = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\$([^$]+?)\$|\\\(([\s\S]+?)\\\)/g;
 const readerKatexMacros = { '\\qed': '\\square', '\\qedsymbol': '\\square', '\\qedhere': '\\square' };
 let total = 0;
