@@ -443,7 +443,8 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .interactive-lead { border-radius: 2px 2px 0 0; padding: clamp(42px, 6vw, 82px) clamp(42px, 8vw, 128px) 32px; box-shadow: 0 12px 38px rgb(55 43 35 / 8%); text-align: center; }
 .paper-edition-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e7ded4; padding-bottom: 11px; color: #8a817a; font-size: 8px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .interactive-lead h1 { max-width: 980px; margin: 42px auto 0; color: #241f1d; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(31px, 4vw, 54px); font-weight: 500; letter-spacing: -.025em; line-height: 1.13; }
-.paper-authors { margin: 22px 0 0; color: #4f4945; font-family: Georgia, 'Times New Roman', serif; font-size: 16px; line-height: 1.5; }
+.paper-metadata { display: grid; width: 100%; justify-items: center; margin-inline: auto; text-align: center; }
+.paper-authors { max-width: 920px; margin: 22px auto 0; color: #4f4945; font-family: Georgia, 'Times New Roman', serif; font-size: 16px; line-height: 1.5; text-wrap: balance; }
 .paper-identity { margin: 7px 0 0; color: #8a8179; font-size: 9px; font-weight: 700; letter-spacing: .05em; }
 .paper-abstract { max-width: 850px; margin: 42px auto 0; color: #37312e; font-family: Georgia, 'Times New Roman', serif; font-size: 15px; line-height: 1.78; text-align: justify; }
 .paper-abstract > b { display: block; margin-bottom: 8px; font-size: 15px; text-align: center; }

@@ -858,7 +858,7 @@ function InteractiveDocument({ paper, audit, nodes, notes, saveNote, updateNote,
   }, [audit.nodes, nodes, patches, sectionRanges, setSelectedNodeId, sourceBlocks]);
   return <article className="interactive-document source-document">
     <header className="interactive-lead">
-      <h1>{paper.title}</h1><p className="paper-authors">{paper.authors}</p><p className="paper-identity">arXiv:{paper.arxivId} · {paper.category}</p>
+      <h1>{paper.title}</h1><div className="paper-metadata"><p className="paper-authors">{paper.authors}</p><p className="paper-identity">arXiv:{paper.arxivId} · {paper.category}</p></div>
       {visibleAbstract && <section className="paper-abstract"><b>Abstract</b><MathText value={visibleAbstract} block /></section>}
     </header>
     <div className="original-source-flow">{sourceBlocks.map((block, blockIndex) => {
