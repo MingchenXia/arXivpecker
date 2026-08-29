@@ -12,7 +12,7 @@ try {
   root = starterRoot;
 }
 const formulaPattern = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\$([^$]+?)\$|\\\(([\s\S]+?)\\\)/g;
-const readerKatexMacros = { '\\qed': '\\square', '\\qedsymbol': '\\square', '\\qedhere': '\\square' };
+const readerKatexMacros = { '\\qed': '\\square', '\\qedsymbol': '\\square', '\\qedhere': '\\square', '\\mbox': '\\text{#1}' };
 let total = 0;
 let auditedPapers = 0;
 let skippedPapers = 0;
@@ -31,10 +31,14 @@ for (const folder of (await fs.readdir(root)).filter((name) => name.startsWith('
     ...(audit.sourceBlocks ?? []).flatMap((block) => [['source content', block.content, block.title || block.id], ['source proof', block.proofText, block.title || block.id]]),
   ];
   for (const [field, value, label] of documents) {
-      const source = String(value || '').replace(/\\verb\*?([^A-Za-z0-9\s])([\s\S]*?)\1/g, (_match, _delimiter, content) => content.replace(/\$/g, '\uE000')).replace(/\\\$/g, '\uE000');
+      const source = String(value || '')
+        .replace(/\$\\cite\w*\s*(?:\[[^\]]*\])?\s*(?:\[[^\]]*\])?\s*\{[^{}]+\}\$/g, '')
+        .replace(/\\begin\{(verbatim\*?|Verbatim|lstlisting|alltt)\}(?:\[[^\]]*\])?[\s\S]*?\\end\{\1\}/g, '')
+        .replace(/\\verb\*?([^A-Za-z0-9\s])([\s\S]*?)\1/g, (_match, _delimiter, content) => content.replace(/\$/g, '\uE000'))
+        .replace(/\\\$/g, '\uE000');
       for (const match of source.matchAll(formulaPattern)) {
         total += 1;
-        const expression = (match[1] ?? match[2] ?? match[3] ?? match[4] ?? '').replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}');
+        const expression = (match[1] ?? match[2] ?? match[3] ?? match[4] ?? '').replace(/\uE000/g, '\\text{\\$}').replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}');
         try {
           katex.renderToString(expression, {
             throwOnError: true,

@@ -14,6 +14,7 @@
     "codex-bridge": "node scripts/codex-bridge.mjs",
     "reindex-audits": "node scripts/reindex-audits.mjs",
     "test:starter": "node scripts/starter-library-test.mjs",
+    "test:reader": "node scripts/tex-reader-test.mjs",
     "audit-formulas": "node scripts/formula-audit.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },

@@ -858,6 +858,7 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .source-table-scroll .math-text { white-space: normal; }
 .source-table-caption { max-width: 760px; margin: 10px auto 0; color: #665b54; font-size: 12px; line-height: 1.5; text-align: center; }
 .source-table-fallback { max-width: 100%; overflow: auto; padding: 12px; background: #faf6f0; color: #665b54; font-size: 11px; white-space: pre-wrap; }
+.source-table-code { margin: 0; max-height: 28rem; overflow: auto; white-space: pre; text-align: left; font: .78rem/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; color: #332f2a; }
 .source-table-editor textarea { min-height: 170px; }
 .source-table-editor .tex-source-preview { overflow: visible; }
 
@@ -931,7 +932,7 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 
 @media (max-width: 1023px) {
   .app-shell { padding-bottom: 52px; }
-  .process-tray { bottom: 58px; }
+  .process-tray { right: auto; bottom: 58px; left: 10px; width: min(340px, calc(100vw - 74px)); }
   .process-tray-collapsed { display: none; }
 }
 @media (min-width: 1024px) { .mobile-app-nav { display: none; } }
@@ -964,7 +965,8 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 body.assistant-resizing { cursor: nesw-resize !important; user-select: none !important; }
 
 @media (max-width: 720px) {
-  .unit-status-notes { left: -8px; transform: translateX(-100%); }
+  .reader-outline, .reader-inspector { background: rgb(255 254 250 / 96%); backdrop-filter: blur(22px) saturate(.9); }
+  .unit-status-notes { left: -3px; transform: translateX(-100%); }
   .unit-status-changes { right: -20px; }
   .source-paragraph, .source-result > .editable-tex-rendered, .source-proof, .paper-abstract, .paper-unit-statement { text-align: left; }
   .source-modified-trigger { width: 27px; overflow: hidden; padding-inline: 4px; text-indent: -999px; }

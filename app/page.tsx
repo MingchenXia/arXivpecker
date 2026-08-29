@@ -78,10 +78,10 @@ function reportReaderProcess(update: ReaderProcessUpdate) {
   window.dispatchEvent(new CustomEvent<ReaderProcessUpdate>('proofroom:process', { detail: update }));
 }
 
-const readerKatexMacros = { '\\qed': '\\square', '\\qedsymbol': '\\square', '\\qedhere': '\\square' };
+const readerKatexMacros = { '\\qed': '\\square', '\\qedsymbol': '\\square', '\\qedhere': '\\square', '\\mbox': '\\text{#1}' };
 
 function renderMath(expression: string, displayMode: boolean) {
-  const normalized = expression.replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}');
+  const normalized = expression.replace(/\uE000/g, '\\text{\\$}').replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}');
   try { return katex.renderToString(normalized, { throwOnError: true, strict: 'ignore', displayMode, macros: readerKatexMacros }); }
   catch { return null; }
 }
@@ -97,18 +97,51 @@ function decodeTeXText(value: string) {
     .replace(/\\(ae|AE|oe|OE|aa|AA|o|O|l|L|ss)\b/g, (_match, name) => specials[name] ?? _match);
 }
 
+function unwrapTextColorCommands(source: string) {
+  let text = source;
+  for (let pass = 0; pass < 4; pass += 1) {
+    let output = ''; let cursor = 0; let changed = false;
+    for (const match of text.matchAll(/\\textcolor\s*\{/g)) {
+      const start = match.index ?? 0;
+      if (start < cursor) continue;
+      const color = readTeXGroup(text, start + match[0].length - 1);
+      if (!color) continue;
+      let contentStart = color.end;
+      while (/\s/.test(text[contentStart] || '')) contentStart += 1;
+      const content = readTeXGroup(text, contentStart);
+      if (!content) continue;
+      const decorativeRule = /^\\rule(?:\[[^\]]*\])?\s*\{[^{}]*\}\s*\{[^{}]*\}\s*$/.test(content.value.trim());
+      output += text.slice(cursor, start) + (decorativeRule ? '' : content.value);
+      cursor = content.end; changed = true;
+    }
+    if (!changed) break;
+    text = output + text.slice(cursor);
+  }
+  return text;
+}
+
 function cleanTeXProse(value: string) {
-  return decodeTeXText(value)
+  return unwrapTextColorCommands(decodeTeXText(value))
+    .replace(/\$\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}\$/g, (_match, preNote: string | undefined, postNote: string | undefined, keys: string) => { const locator = [preNote, postNote].map((item) => item?.trim()).filter(Boolean).join('; '); return keys.split(',').map((key) => `[${key.trim()}${locator ? `, ${locator}` : ''}]`).join(' '); })
+    .replace(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}/g, (_match, preNote: string | undefined, postNote: string | undefined, keys: string) => { const locator = [preNote, postNote].map((item) => item?.trim()).filter(Boolean).join('; '); return keys.split(',').map((key) => `[${key.trim()}${locator ? `, ${locator}` : ''}]`).join(' '); })
+    .replace(/\\\[\s*\\(?:textbf|textit|text)\s*\{([^{}]*)\}\s*\\\]/g, '\n\n$1\n\n')
+    .replace(/\\\[\s*\\\]/g, '')
     .replace(/\\begin\{thebibliography\}\{[^{}]*\}|\\end\{thebibliography\}/g, '')
-    .replace(/\\begin\{(?:verbatim\*?|Verbatim|lstlisting|alltt)\}(?:\[[^\]]*\])?|\\end\{(?:verbatim\*?|Verbatim|lstlisting|alltt)\}/g, '')
+    .replace(/\\begin\{(?:verbatim\*?|Verbatim|lstlisting|alltt)\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{(?:verbatim\*?|Verbatim|lstlisting|alltt)\}/g, (_match, content: string) => content.replace(/\$/g, '\uE000'))
     .replace(/\\verb\*?([^A-Za-z0-9\s])([\s\S]*?)\1/g, (_match, _delimiter, content: string) => content.replace(/\$/g, '\uE000'))
     .replace(/\\hyperref\[[^\]]*\]\{([^{}]*)\}/g, '$1')
+    .replace(/\\href\{[^{}]*\}\{([^{}]*)\}/g, '$1')
+    .replace(/\\url\{([^{}]*)\}/g, '$1')
     .replace(/\\paragraph\{([^{}]*)\}/g, '$1.')
     .replace(/\\bibitem(?:\[[^\]]*\])?\{[^{}]*\}\s*/g, '')
     .replace(/\\newblock\s*/g, ' ')
     .replace(/\{\\(?:em|it|bf)\s+([^{}]*)\}/g, '$1')
     .replace(/\\(?:emph|textit|textbf|texttt|textsc|textrm|textsf)\{([^{}]*)\}/g, '$1')
+    .replace(/\\begin\{tcolorbox\}(?:\[[^\]]*\])?|\\end\{tcolorbox\}/g, '')
+    .replace(/\\(?:emph|textit|textbf|texttt|textsc|textrm|textsf)\{([^{}]*)\}/g, '$1')
+    .replace(/\\(?:emph|textit|textbf|texttt|textsc|textrm|textsf)\{([^{}]*)\}/g, '$1')
     .replace(/\\(?:em|it|bf)\b\s*/g, '')
+    .replace(/\\(?:noindent|quad|qquad)\b/g, ' ')
     .replace(/\\label\{[^{}]*\}/g, '')
     .replace(/\\(LaTeX|TeX)\b\\?/g, '$1')
     .replace(/\\\$/g, '\uE000')
@@ -158,7 +191,7 @@ function MathText({ value, block = false, citations = [], explicitOnly = false }
       const display = token.startsWith('$$') || token.startsWith('\\[');
       const expression = token.startsWith('$$') ? token.slice(2, -2) : token.startsWith('$') ? token.slice(1, -1) : token.startsWith('\\(') || token.startsWith('\\[') ? token.slice(2, -2) : token;
       const rendered = renderMath(expression, display);
-      result.push(rendered ? { text: rendered, math: true, display, source: token } : { text: token, math: false, display: false });
+      result.push(rendered ? { text: rendered, math: true, display, source: token } : { text: cleanRenderedTextFragment(token), math: false, display: false });
       cursor = index + token.length;
     }
     if (cursor < source.length) result.push({ text: cleanRenderedTextFragment(source.slice(cursor)), math: false, display: false });
@@ -771,6 +804,7 @@ function Reader({ paper, audit, openImport, selectedNodeId, setSelectedNodeId, e
   const editionNodes = useMemo(() => edition === 'working' ? applyWorkingPatches(originalNodes, patches) : originalNodes, [edition, originalNodes, patches]);
   const sourceUnits = useMemo(() => (audit?.sourceBlocks ?? []).filter((block) => block.kind === 'section' || block.kind === 'paragraph' || block.kind === 'figure').map((block) => sourceBlockAsNode(block, edition === 'working' ? patches : [])), [audit, edition, patches]);
   const node = editionNodes.find((item) => item.id === selectedNodeId) ?? sourceUnits.find((item) => item.id === selectedNodeId) ?? editionNodes[0] ?? sourceUnits[0];
+  useEffect(() => { if (paper?.id) window.scrollTo({ top: 0, left: 0, behavior: 'auto' }); }, [paper?.id]);
   useEffect(() => {
     const timer = window.setTimeout(() => setQuestion(''), 0);
     return () => window.clearTimeout(timer);
@@ -1154,7 +1188,7 @@ function SourceFigure({ paperId, assetPaths, caption }: { paperId: string; asset
   return <figure className="source-figure"><div>{assetPaths.map((asset, index) => <FigureAsset key={`${asset}:${index}`} paperId={paperId} asset={asset} alt={caption || `Figure ${index + 1}`} />)}</div>{caption && <figcaption><MathText value={caption} block /></figcaption>}</figure>;
 }
 
-type ParsedTableCell = { value: string; colSpan: number };
+type ParsedTableCell = { value: string; colSpan: number; literal?: boolean };
 type ParsedSourceTable = { alignments: ('left' | 'center' | 'right')[]; rows: ParsedTableCell[][] };
 
 function readTeXGroup(source: string, opening: number) {
@@ -1168,6 +1202,18 @@ function readTeXGroup(source: string, opening: number) {
     }
   }
   return null;
+}
+
+function stripGroupedTeXCommands(source: string, pattern: RegExp) {
+  let output = ''; let cursor = 0;
+  for (const match of source.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start < cursor) continue;
+    const group = readTeXGroup(source, start + match[0].length - 1);
+    if (!group) continue;
+    output += source.slice(cursor, start); cursor = group.end;
+  }
+  return `${output}${source.slice(cursor)}`;
 }
 
 function tableAlignments(specification: string) {
@@ -1200,11 +1246,12 @@ function cleanTableCell(source: string): ParsedTableCell {
   const multi = /^\\multicolumn\s*\{(\d+)\}\s*\{[^}]*\}\s*\{/.exec(value);
   if (multi) { const group = readTeXGroup(value, (multi.index ?? 0) + multi[0].length - 1); if (group) { colSpan = Math.max(1, Number(multi[1]) || 1); value = group.value.trim(); } }
   value = value.replace(/^\\multirow(?:\[[^\]]*\])?\s*\{[^}]*\}\s*\{[^}]*\}\s*\{([\s\S]*)\}$/g, '$1').trim();
-  return { value, colSpan };
+  const literal = /\\begin\{(?:verbatim\*?|Verbatim|lstlisting|alltt)\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{(?:verbatim\*?|Verbatim|lstlisting|alltt)\}/.exec(value);
+  return { value: literal?.[1]?.trim() || value, colSpan, literal: Boolean(literal) };
 }
 
 function parseSourceTable(source: string): ParsedSourceTable {
-  const begin = /\\begin\{(tabular\*?|tabularx)\}(?:\[[^\]]*\])?/.exec(source);
+  const begin = /\\begin\{(tabular\*?|tabularx|longtable)\}(?:\[[^\]]*\])?/.exec(source);
   if (!begin) return { alignments: [], rows: [] };
   let cursor = (begin.index ?? 0) + begin[0].length;
   while (/\s/.test(source[cursor] || '')) cursor += 1;
@@ -1213,7 +1260,9 @@ function parseSourceTable(source: string): ParsedSourceTable {
   if (!specification) return { alignments: [], rows: [] };
   const bodyStart = specification.end;
   const end = source.lastIndexOf(`\\end{${begin[1]}}`);
-  const body = source.slice(bodyStart, end >= bodyStart ? end : source.length).replace(/%[^\n\r]*/g, '');
+  const rawBody = source.slice(bodyStart, end >= bodyStart ? end : source.length).replace(/%[^\n\r]*/g, '');
+  const body = stripGroupedTeXCommands(rawBody, /\\caption(?:\[[^\]]*\])?\s*\{/g)
+    .replace(/\\label\s*\{[^}]*\}|\\end(?:firsthead|head|foot|lastfoot)\b/g, '');
   const rawRows: string[] = []; let rowStart = 0; let depth = 0;
   for (let index = 0; index < body.length - 1; index += 1) {
     if (body[index] === '{' && body[index - 1] !== '\\') depth += 1;
@@ -1228,7 +1277,7 @@ function parseSourceTable(source: string): ParsedSourceTable {
 function SourceTable({ value, caption, citations }: { value: string; caption: string; citations: CitationReference[] }) {
   const parsed = useMemo(() => parseSourceTable(value), [value]);
   if (!parsed.rows.length) return <pre className="source-table-fallback">{value}</pre>;
-  return <div className="source-table-scroll"><table><tbody>{parsed.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => { const Cell = rowIndex === 0 ? 'th' : 'td'; return <Cell key={cellIndex} colSpan={cell.colSpan} style={{ textAlign: parsed.alignments[cellIndex] || 'left' }}><MathText value={cell.value} citations={citations} /></Cell>; })}</tr>)}</tbody></table>{caption && <p className="source-table-caption"><MathText value={caption} citations={citations} /></p>}</div>;
+  return <div className="source-table-scroll"><table><tbody>{parsed.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => { const Cell = rowIndex === 0 ? 'th' : 'td'; return <Cell key={cellIndex} colSpan={cell.colSpan} style={{ textAlign: parsed.alignments[cellIndex] || 'left' }}>{cell.literal ? <pre className="source-table-code">{cell.value}</pre> : <MathText value={cell.value} citations={citations} />}</Cell>; })}</tr>)}</tbody></table>{caption && <p className="source-table-caption"><MathText value={caption} citations={citations} /></p>}</div>;
 }
 
 function EditableSourceTable({ value, caption, citations, onSave }: { value: string; caption: string; citations: CitationReference[]; onSave: (value: string) => Promise<void> }) {

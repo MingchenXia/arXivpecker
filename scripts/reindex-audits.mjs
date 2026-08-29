@@ -10,7 +10,10 @@ let updated = 0;
 for (const record of records) {
   const source = record.paper?.source;
   if (!record.audit || !source?.mainTex || !source?.sourceDirectory) continue;
-  const enriched = await enrichAuditFromTex(JSON.stringify(record.audit), { entryFile: source.mainTex, sourceDirectory: source.sourceDirectory });
+  const paperDirectory = path.join(root, record.folder);
+  const entryFile = path.isAbsolute(source.mainTex) ? source.mainTex : path.resolve(paperDirectory, source.mainTex);
+  const sourceDirectory = path.isAbsolute(source.sourceDirectory) ? source.sourceDirectory : path.resolve(paperDirectory, source.sourceDirectory);
+  const enriched = await enrichAuditFromTex(JSON.stringify(record.audit), { entryFile, sourceDirectory });
   const audit = JSON.parse(enriched);
   await vault.saveAudit(record.paper, audit);
   updated += 1;

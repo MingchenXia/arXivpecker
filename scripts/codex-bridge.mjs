@@ -16,6 +16,14 @@ const vault = new PaperVault(vaultRoot, { starterRoot });
 const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
 const CODEX_TURN_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_TURN_TIMEOUT_MS) || 30 * 60 * 1000);
 
+function decodeSourceBuffer(payload) {
+  const utf8 = Buffer.from(payload).toString('utf8');
+  if (!utf8.includes('\uFFFD')) return utf8;
+  const legacy = new TextDecoder('windows-1252').decode(payload);
+  const errors = (value) => (value.match(/\uFFFD/g) || []).length;
+  return errors(legacy) < errors(utf8) ? legacy : utf8;
+}
+
 function isAllowedOrigin(origin) {
   return !origin || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 }
@@ -78,7 +86,7 @@ async function chooseMainTex(files) {
   for (const file of files) {
     const details = await stat(file.absolute);
     if (details.size > 12 * 1024 * 1024) continue;
-    const text = await readFile(file.absolute, 'utf8');
+    const text = decodeSourceBuffer(await readFile(file.absolute));
     const name = path.basename(file.relative).toLowerCase();
     const score = (/\\documentclass/.test(text) ? 100 : 0) + (/\\begin\{document\}/.test(text) ? 50 : 0) + (/^(main|paper|article|ms|manuscript)\.(tex|ltx)$/.test(name) ? 25 : 0) + Math.min(details.size / 50_000, 20);
     scored.push({ ...file, bytes: details.size, score });
@@ -250,7 +258,7 @@ async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 
   const relative = path.relative(sourceRoot, entryFile);
   if (relative.startsWith('..') || path.isAbsolute(relative)) return '';
   seen.add(entryFile);
-  let source = await readFile(entryFile, 'utf8');
+  let source = decodeSourceBuffer(await readFile(entryFile));
   const include = /\\(?:input|include)\s*\{([^}]+)\}/g;
   let expanded = ''; let cursor = 0;
   for (const match of source.matchAll(include)) {
@@ -311,7 +319,7 @@ function unwrapLatexTextCommands(source) {
 
 function unwrapLatexTwoArgumentCommands(source) {
   let text = String(source || '');
-  const command = /\\(texorpdfstring|foreignlanguage|href)\s*\{/g;
+  const command = /\\(texorpdfstring|foreignlanguage|href|textcolor)\s*\{/g;
   for (let pass = 0; pass < 3; pass += 1) {
     let output = ''; let cursor = 0; let changed = false;
     for (const match of text.matchAll(command)) {
@@ -321,7 +329,8 @@ function unwrapLatexTwoArgumentCommands(source) {
       let secondStart = first.end; while (/\s/.test(text[secondStart] || '')) secondStart += 1;
       const second = balancedGroup(text, secondStart);
       if (!second) continue;
-      const replacement = match[1] === 'foreignlanguage' || match[1] === 'href' ? second.content : first.content;
+      const decorativeRule = /^\\rule(?:\[[^\]]*\])?\s*\{[^{}]*\}\s*\{[^{}]*\}\s*$/.test(second.content.trim());
+      const replacement = match[1] === 'textcolor' && decorativeRule ? '' : match[1] === 'foreignlanguage' || match[1] === 'href' || match[1] === 'textcolor' ? second.content : first.content;
       output += text.slice(cursor, match.index ?? 0) + replacement;
       cursor = second.end; changed = true;
     }
@@ -397,17 +406,28 @@ function normalizeTextLineBreaks(source) {
   return output;
 }
 
+function stripLatexComments(source) {
+  const value = String(source || ''); let output = '';
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== '%') { output += value[index]; continue; }
+    let slashes = 0;
+    for (let previous = index - 1; previous >= 0 && value[previous] === '\\'; previous -= 1) slashes += 1;
+    if (slashes % 2 === 1) { output += value[index]; continue; }
+    while (index + 1 < value.length && value[index + 1] !== '\n' && value[index + 1] !== '\r') index += 1;
+  }
+  return output;
+}
+
 function readableLatex(source) {
-  const prepared = normalizeXyMatrices(normalizePrescriptCommands(String(source || '')));
+  const prepared = stripLatexComments(normalizeXyMatrices(normalizePrescriptCommands(String(source || ''))));
   const readable = unwrapLatexTwoArgumentCommands(unwrapLatexTextCommands(normalizeMathTextCommands(prepared)))
-    .replace(/(^|[^\\])%[^\n]*/g, '$1')
     .replace(/\\selectlanguage\s*\{[^}]*\}/g, '')
     .replace(/\\begin\{(?:otherlanguage\*?|thebibliography)\}(?:\{[^}]*\})?/g, '')
     .replace(/\\end\{(?:otherlanguage\*?|thebibliography)\}/g, '')
     .replace(/\\(?:tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge)\b/g, '')
     .replace(/\\label\s*\{[^}]*\}/g, '')
     .replace(/\\(?:eqref|ref|autoref|cref|Cref)\s*\{[^}]*\}/g, 'the referenced result')
-    .replace(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/g, (_match, locator, keys) => String(keys).split(',').map((key) => `[[cite:${key.trim()}${locator ? `|${locator.trim()}` : ''}]]`).join(' '))
+    .replace(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/g, (_match, preNote, postNote, keys) => { const locator = [preNote, postNote].map((item) => String(item || '').trim()).filter(Boolean).join('; '); return String(keys).split(',').map((key) => `[[cite:${key.trim()}${locator ? `|${locator}` : ''}]]`).join(' '); })
     .replace(/\\begin\{tikzcd\}(?:\[[^\]]*\])?/g, '\\begin{array}{cccccccccccc}')
     .replace(/\\end\{tikzcd\}/g, '\\end{array}')
     .replace(/\\ar(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/g, '')
@@ -420,7 +440,7 @@ function readableLatex(source) {
     .replace(/\\"\{?([aeiouAEIOU])\}?/g, (_match, letter) => ({ a: 'ä', e: 'ë', i: 'ï', o: 'ö', u: 'ü', A: 'Ä', E: 'Ë', I: 'Ï', O: 'Ö', U: 'Ü' }[letter] || letter))
     .replace(/\\~\{?([anoANO])\}?/g, (_match, letter) => ({ a: 'ã', n: 'ñ', o: 'õ', A: 'Ã', N: 'Ñ', O: 'Õ' }[letter] || letter))
     .replace(/\\c\{?([cC])\}?/g, (_match, letter) => letter === 'C' ? 'Ç' : 'ç')
-    .replace(/\\v\{?([cszCSZ])\}?/g, (_match, letter) => ({ c: 'č', s: 'š', z: 'ž', C: 'Č', S: 'Š', Z: 'Ž' }[letter] || letter))
+    .replace(/\\v(?:\{([cszCSZ])\}|\s+([cszCSZ])\b)/g, (_match, braced, spaced) => { const letter = braced || spaced; return ({ c: 'č', s: 'š', z: 'ž', C: 'Č', S: 'Š', Z: 'Ž' }[letter] || letter); })
     .replace(/\\o\{\}/g, 'ø')
     .replace(/\\O\{\}/g, 'Ø')
     .replace(/\\ss\b/g, 'ß')
@@ -436,12 +456,13 @@ function readableLatex(source) {
     // `aligned` is an inner math environment and is commonly already wrapped
     // in \[...\]. Converting it to another pair of delimiters creates invalid
     // nested math such as \[$$...$$\]. Only promote top-level environments.
-    .replace(/\\begin\{(?:align|align\*|gather|gather\*|multline|multline\*)\}/g, () => '$$\\begin{aligned}')
-    .replace(/\\end\{(?:align|align\*|gather|gather\*|multline|multline\*)\}/g, () => '\\end{aligned}$$')
+    .replace(/\\begin\{(?:align|align\*|gather|gather\*|multline|multline\*|eqnarray|eqnarray\*)\}/g, () => '$$\\begin{aligned}')
+    .replace(/\\end\{(?:align|align\*|gather|gather\*|multline|multline\*|eqnarray|eqnarray\*)\}/g, () => '\\end{aligned}$$')
     .replace(/\\begin\{(?:enumerate|itemize|description)\}(?:\[[^\]]*\])?/g, '')
     .replace(/\\end\{(?:enumerate|itemize|description)\}/g, '')
     .replace(/\\item(?:\[[^\]]*\])?/g, '\n• ')
     .replace(/\\(?:emph|textbf|textit|texttt|textsc|textrm|textsf|underline|centerline|mbox)\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\\(?:vspace|hspace)\*?\s*\{[^}]*\}/g, ' ')
     .replace(/\\(?:medskip|smallskip|bigskip|noindent|par)\b/g, '\n')
     .replace(/~+/g, ' ')
     .replace(/\n[ \t]+/g, '\n')
@@ -464,9 +485,9 @@ function citationKeys(source) {
 
 function citationMentions(source) {
   const mentions = [];
-  for (const match of String(source || '').matchAll(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)) {
-    for (const key of match[2].split(',').map((item) => item.trim()).filter(Boolean)) {
-      const locator = String(match[1] || '').trim();
+  for (const match of String(source || '').matchAll(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)) {
+    for (const key of match[3].split(',').map((item) => item.trim()).filter(Boolean)) {
+      const locator = [match[1], match[2]].map((item) => String(item || '').trim()).filter(Boolean).join('; ');
       if (!mentions.some((item) => item.key === key && item.locator === locator)) mentions.push({ key, locator });
     }
   }
@@ -565,7 +586,7 @@ async function extractBibliographyTree(source, sourceRoot) {
     const candidate = path.resolve(sourceRoot, filename);
     const relative = path.relative(sourceRoot, candidate);
     if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
-    try { for (const [key, reference] of extractBibtex(await readFile(candidate, 'utf8'))) references.set(key, reference); }
+    try { for (const [key, reference] of extractBibtex(decodeSourceBuffer(await readFile(candidate)))) references.set(key, reference); }
     catch { /* A missing bibliography remains a non-fatal, explicit lookup. */ }
   }
   return references;
@@ -697,7 +718,8 @@ function environmentDisplayLabel(label, displayName, printedNumber = '') {
 }
 
 function graphicPaths(source) {
-  return [...String(source || '').matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].map((match) => match[1].trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+  const activeSource = stripLatexComments(source);
+  return [...activeSource.matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].map((match) => match[1].trim().replace(/^["']|["']$/g, '')).filter(Boolean);
 }
 
 function literalSourceRanges(source) {
@@ -740,10 +762,15 @@ function extractSourceUnits(source) {
     displayNames.set(environment, displayName);
     theoremCounters.set(environment, { root: sharedCounter || environment, within, numbered: !match[1] });
   }
+  const proofEnvironments = new Set(['proof']);
+  for (const match of originalSource.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) {
+    if (/^proof/i.test(match[1]) || /proof|preuve|démonstration/i.test(match[3] || '')) proofEnvironments.add(match[1]);
+  }
   const names = [...environments.keys()].sort((a, b) => b.length - a.length).map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   if (!names) return [];
   const unitPattern = new RegExp(`\\\\begin\\{(${names})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
-  const embeddedProofPattern = /\\begin\{proof\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{proof\}/g;
+  const proofNames = [...proofEnvironments].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const embeddedProofPattern = new RegExp(`\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
   const sectionStarts = [...normalizedSource.matchAll(/\\section(?!\*)\s*(?:\[[^\]]*\])?\s*\{/g)].filter((match) => !insideSourceRanges(match.index ?? 0, literalRanges)).map((match) => match.index ?? 0);
   const counterValues = new Map();
   const units = [];
@@ -754,30 +781,94 @@ function extractSourceUnits(source) {
     const embeddedProofs = [...match[3].matchAll(embeddedProofPattern)];
     const statementSource = match[3].replace(embeddedProofPattern, '');
     const counter = theoremCounters.get(match[1]); const owner = theoremCounters.get(counter?.root) || counter; const sectionNumber = sectionStarts.filter((sectionStart) => sectionStart < start).length; const scope = owner?.within === 'section' ? sectionNumber : 0; const counterKey = `${counter?.root || match[1]}:${scope}`; const nextNumber = (counterValues.get(counterKey) || 0) + 1; if (counter?.numbered !== false) counterValues.set(counterKey, nextNumber); const printedNumber = counter?.numbered === false ? '' : owner?.within === 'section' ? `${sectionNumber}.${nextNumber}` : `${nextNumber}`;
-    units.push({ environment: match[1], kind: environments.get(match[1]), displayName: displayNames.get(match[1]) || readableLatex(match[1]), printedNumber, title: match[2] || '', texLabel: label, start, end, statement: readableLatex(statementSource), proofText: embeddedProofs.map((proof) => readableLatex(proof[1])).filter(Boolean).join('\n\n'), assetPaths: graphicPaths(statementSource), proofAssetPaths: embeddedProofs.flatMap((proof) => graphicPaths(proof[1])), embeddedProof: embeddedProofs.length > 0, citationMentions: citationMentions(`${match[2] || ''} ${match[3]}`), citationKeys: citationKeys(`${match[2] || ''} ${match[3]}`) });
+    units.push({ environment: match[1], kind: environments.get(match[1]), displayName: displayNames.get(match[1]) || readableLatex(match[1]), printedNumber, title: match[2] || '', texLabel: label, start, end, statement: readableLatex(statementSource), proofText: embeddedProofs.map((proof) => readableLatex(proof[3])).filter(Boolean).join('\n\n'), assetPaths: graphicPaths(statementSource), proofAssetPaths: embeddedProofs.flatMap((proof) => graphicPaths(proof[3])), embeddedProof: embeddedProofs.length > 0, citationMentions: citationMentions(`${match[2] || ''} ${match[3]}`), citationKeys: citationKeys(`${match[2] || ''} ${match[3]}`) });
   }
   const byLabel = new Map(units.filter((unit) => unit.texLabel).map((unit) => [unit.texLabel, unit]));
-  const proofPattern = /\\begin\{proof\}(?:\[[^\]]*\])?([\s\S]*?)\\end\{proof\}/g;
+  const proofPattern = new RegExp(`\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
   for (const proof of normalizedSource.matchAll(proofPattern)) {
     const proofStart = proof.index ?? 0;
     if (insideSourceRanges(proofStart, literalRanges)) continue;
     if (units.some((unit) => unit.start < proofStart && proofStart < unit.end)) continue;
     const nearest = units.filter((unit) => unit.end <= proofStart).at(-1) || null;
     const prelude = normalizedSource.slice(Math.max(nearest?.end ?? 0, proofStart - 2200), proofStart);
-    const explicitMatch = [...prelude.matchAll(/(?:proof\s+of|prove|complet(?:e|es|ed)\s+the\s+proof\s+of)[\s\S]{0,180}?(?:\\ref\s*\{([^}]+)\}|\\hyperref\s*\[([^\]]+)\])/gi)].at(-1);
+    const proofLead = `${proof[2] || ''} ${prelude}`;
+    const explicitMatch = [...proofLead.matchAll(/(?:proof\s+of|prove|complet(?:e|es|ed)\s+the\s+proof\s+of|preuve\s+(?:de|du|des)|d[ée]monstration\s+(?:de|du|des))[\s\S]{0,180}?(?:\\ref\s*\{([^}]+)\}|\\hyperref\s*\[([^\]]+)\])/gi)].at(-1);
     const explicit = explicitMatch?.[1] || explicitMatch?.[2];
     let target = explicit ? byLabel.get(explicit) : null;
     if (!target && nearest && !nearest.proofText) target = nearest;
     if (target && !target.proofText) {
-      target.proofText = readableLatex(proof[1]);
-      target.proofAssetPaths = graphicPaths(proof[1]);
-      for (const mention of citationMentions(proof[1])) if (!target.citationMentions.some((item) => item.key === mention.key && item.locator === mention.locator)) target.citationMentions.push(mention);
+      target.proofText = readableLatex(proof[3]);
+      target.proofAssetPaths = graphicPaths(proof[3]);
+      for (const mention of citationMentions(proof[3])) if (!target.citationMentions.some((item) => item.key === mention.key && item.locator === mention.locator)) target.citationMentions.push(mention);
       target.citationKeys = target.citationMentions.map((mention) => mention.key);
       target.proofStart = proofStart;
       target.proofEnd = proofStart + proof[0].length;
     }
   }
   return units;
+}
+
+function resolveLatexReferences(source, sourceUnits = []) {
+  const value = String(source || '');
+  const labels = new Map(sourceUnits.filter((unit) => unit.texLabel && unit.printedNumber).map((unit) => [unit.texLabel, unit.printedNumber]));
+  const literalRanges = literalSourceRanges(value);
+  const proofNames = new Set(['proof']);
+  for (const match of value.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) if (/^proof/i.test(match[1]) || /proof|preuve|démonstration/i.test(match[3] || '')) proofNames.add(match[1]);
+  const proofNamePattern = [...proofNames].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const proofHeaderRanges = [];
+  for (const match of value.matchAll(new RegExp(`\\\\begin\\{(?:${proofNamePattern})\\}\\s*\\[`, 'g'))) {
+    const group = balancedGroup(value, (match.index ?? 0) + match[0].length - 1, '[', ']');
+    if (group) proofHeaderRanges.push([match.index ?? 0, group.end]);
+  }
+  const sectionAt = [];
+  const sectionCounters = [0, 0, 0, 0];
+  const sectionPattern = /\\(part|section|subsection|subsubsection)(\*)?(?:\[[^\]]*\])?\s*\{/g;
+  const sectionLevels = { part: 0, section: 1, subsection: 2, subsubsection: 3 };
+  for (const match of value.matchAll(sectionPattern)) {
+    const start = match.index ?? 0;
+    if (match[2] || insideSourceRanges(start, literalRanges)) continue;
+    const level = sectionLevels[match[1]] ?? 1;
+    sectionCounters[level] += 1;
+    for (let index = level + 1; index < sectionCounters.length; index += 1) sectionCounters[index] = 0;
+    const number = sectionCounters.slice(match[1] === 'part' ? 0 : 1, level + 1).filter(Boolean).join('.');
+    const title = balancedGroup(value, start + match[0].length - 1);
+    const immediateLabel = title ? /^\s*\\label\s*\{([^}]+)\}/.exec(value.slice(title.end, title.end + 240)) : null;
+    if (immediateLabel?.[1] && number) labels.set(immediateLabel[1], number);
+    if (match[1] === 'section') sectionAt.push({ start, number: sectionCounters[1] });
+  }
+
+  for (const environment of ['figure', 'table']) {
+    let counter = 0;
+    const pattern = environment === 'table' ? /\\begin\{(table\*?|longtable)\}([\s\S]*?)\\end\{\1\}/g : /\\begin\{(figure\*?)\}([\s\S]*?)\\end\{\1\}/g;
+    for (const match of value.matchAll(pattern)) {
+      if (insideSourceRanges(match.index ?? 0, literalRanges)) continue;
+      counter += 1;
+      for (const label of match[2].matchAll(/\\label\s*\{([^}]+)\}/g)) labels.set(label[1], String(counter));
+    }
+  }
+
+  const sectionalEquations = /\\(?:numberwithin|counterwithin)\s*\{equation\}\s*\{section\}/.test(value);
+  let equationCounter = 0; let equationSection = 0;
+  const equationPattern = /\\begin\{(equation|align|gather|multline|eqnarray)(\*)?\}([\s\S]*?)\\end\{\1\2\}/g;
+  for (const match of value.matchAll(equationPattern)) {
+    if (match[2] || insideSourceRanges(match.index ?? 0, literalRanges)) continue;
+    const currentSection = sectionAt.filter((section) => section.start < (match.index ?? 0)).at(-1)?.number || 0;
+    if (sectionalEquations && currentSection !== equationSection) { equationSection = currentSection; equationCounter = 0; }
+    const equationLabels = [...match[3].matchAll(/\\label\s*\{([^}]+)\}/g)].map((item) => item[1]);
+    if (!equationLabels.length) { equationCounter += 1; continue; }
+    const tag = /\\tag\*?\s*\{([^}]+)\}/.exec(match[3])?.[1];
+    for (const label of equationLabels) {
+      equationCounter += 1;
+      labels.set(label, tag || (sectionalEquations && currentSection ? `${currentSection}.${equationCounter}` : String(equationCounter)));
+    }
+  }
+
+  return value.replace(/\\(eqref|ref|autoref|cref|Cref)\s*\{([^}]+)\}/g, (match, command, key, offset) => {
+    if (insideSourceRanges(offset, literalRanges) || insideSourceRanges(offset, proofHeaderRanges)) return match;
+    const number = labels.get(String(key).trim());
+    if (!number) return match;
+    return command === 'eqref' ? `(${number})` : number;
+  });
 }
 
 function citationReference(mention, bibliography, aiCitations = []) {
@@ -811,8 +902,10 @@ function readableBodyFragment(source) {
     .replace(/\\setcounter\s*\{[^}]*\}\s*\{[^}]*\}/g, '')
     .replace(/\\(?:bibliography|bibliographystyle|addbibresource)\s*\{[^}]*\}/g, '')
     .replace(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]*)\}/g, (_match, file) => `\n[Figure from the original source: ${file}]\n`)
+    .replace(/\\begin\{wrapfigure\}(?:\[[^\]]*\])?\s*\{[^}]*\}\s*\{[^}]*\}|\\end\{wrapfigure\}/g, '')
     .replace(/\\begin\{(?:center|flushleft|flushright|quote|quotation|figure\*?|table\*?|minipage)\}(?:\[[^\]]*\])?(?:\{[^}]*\})?/g, '')
     .replace(/\\end\{(?:center|flushleft|flushright|quote|quotation|figure\*?|table\*?|minipage)\}/g, '')
+    .replace(/\\begin\{tcolorbox\}(?:\[[^\]]*\])?|\\end\{tcolorbox\}/g, '')
     .replace(/\\begin\{tabular\}(?:\[[^\]]*\])?\s*\{[^}]*\}/g, '\n')
     .replace(/\\end\{tabular\}/g, '\n')
     .replace(/\\&/g, '&');
@@ -827,15 +920,15 @@ function tableEvents(source) {
     return readableLatex(balancedGroup(fragment, (match.index ?? 0) + match[0].length - 1)?.content || '');
   };
   const tabular = (fragment) => /\\begin\{(?:tabular\*?|tabularx)\}[\s\S]*?\\end\{(?:tabular\*?|tabularx)\}/.exec(fragment)?.[0] || '';
-  for (const match of String(source || '').matchAll(/\\begin\{table\*?\}([\s\S]*?)\\end\{table\*?\}/g)) {
+  for (const match of String(source || '').matchAll(/\\begin\{(table\*?|longtable)\}([\s\S]*?)\\end\{\1\}/g)) {
     const start = match.index ?? 0;
     if (insideSourceRanges(start, literalRanges)) continue;
-    const content = tabular(match[0]);
+    const content = match[1] === 'longtable' ? match[0] : tabular(match[0]);
     if (!content) continue;
     const end = start + match[0].length; covered.push([start, end]);
     events.push({ type: 'table', start, end, content, caption: caption(match[0]), citations: citationMentions(match[0]) });
   }
-  for (const match of String(source || '').matchAll(/\\begin\{(?:tabular\*?|tabularx)\}[\s\S]*?\\end\{(?:tabular\*?|tabularx)\}/g)) {
+  for (const match of String(source || '').matchAll(/\\begin\{(?:tabular\*?|tabularx|longtable)\}[\s\S]*?\\end\{(?:tabular\*?|tabularx|longtable)\}/g)) {
     const start = match.index ?? 0;
     if (insideSourceRanges(start, literalRanges) || covered.some(([left, right]) => left <= start && start < right)) continue;
     events.push({ type: 'table', start, end: start + match[0].length, content: match[0], caption: '', citations: citationMentions(match[0]) });
@@ -962,7 +1055,8 @@ async function enrichAuditFromTex(rawText, primarySource) {
   try { audit = JSON.parse(clean.slice(first, last + 1)); }
   catch { return rawText; }
   if (!Array.isArray(audit.nodes)) return rawText;
-  const expanded = await readExpandedTex(primarySource.entryFile, primarySource.sourceDirectory);
+  const unresolved = await readExpandedTex(primarySource.entryFile, primarySource.sourceDirectory);
+  const expanded = resolveLatexReferences(unresolved, extractSourceUnits(unresolved));
   const sourceUnits = extractSourceUnits(expanded);
   const bibliography = await extractBibliographyTree(expanded, primarySource.sourceDirectory);
   const cursors = new Map();
@@ -1804,4 +1898,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
 }
 
-export { enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readExpandedTex };
+export { enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences };
