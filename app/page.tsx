@@ -17,7 +17,7 @@ function normalizeNotes(notes: Note[]) {
 type ReadingMark = '' | 'understood' | 'question' | 'error';
 type Anchor = { label: string; page: number | null; confidence: 'verified' | 'approximate' | 'unverified' };
 type CitationReference = { key: string; locator: string; statement: string; definitions?: { notation: string; definition: string; source: string }[]; title: string; authors: string; text: string; url: string; searchUrl: string; doi: string; arxivId: string; direct: boolean };
-type NodeKind = 'definition' | 'assumption' | 'notation' | 'lemma' | 'proposition' | 'theorem' | 'corollary' | 'proof' | 'equation' | 'remark' | 'example' | 'section' | 'paragraph' | 'figure' | 'external-result';
+type NodeKind = 'definition' | 'assumption' | 'notation' | 'lemma' | 'proposition' | 'theorem' | 'corollary' | 'proof' | 'equation' | 'remark' | 'example' | 'section' | 'paragraph' | 'figure' | 'table' | 'external-result';
 type AuditNode = { id: string; kind: NodeKind; label: string; title: string; statement: string; proofText: string; citations: CitationReference[]; status: 'verified' | 'needs-verification' | 'unavailable'; anchor: Anchor; role: string; dependencies: string[]; proofSketch: string[]; whyItMatters: string; expandable: boolean };
 type WorkingPatch = { id: string; kind: 'replace' | 'delete' | 'add'; nodeId: string; title: string; statement: string; proofText: string; nodeKind: NodeKind | ''; afterNodeId: string; rationale: string; dependencies: string[]; proofSketch: string[]; source: 'manual' | 'ai'; createdAt: string };
 type EditorialSuggestion = { hasIssue: boolean; replacement: string; rationale: string; confidence: 'high' | 'medium' | 'low' };
@@ -25,7 +25,7 @@ type VersionChange = { label: string; changeType: 'added' | 'removed' | 'strengt
 type VersionComparison = { summary: string; changedUnits: VersionChange[]; proofChanges: string[]; notationChanges: string[]; editorialChanges: string[]; dependencyImpact: string[]; readingRecommendation: string; warnings: string[] };
 type CrossLink = { id: string; from: { paperId: string; nodeId: string }; to: { paperId: string; nodeId: string }; relation: 'uses' | 'extends' | 'background' | 'contrasts'; note: string; source: 'manual' | 'audit'; createdAt?: string };
 type AuditCrossLink = { fromNodeId: string; targetPaperId: string; targetNodeId: string; relation: CrossLink['relation']; rationale: string };
-type SourceBlockKind = 'section' | 'paragraph' | 'result' | 'proof' | 'figure';
+type SourceBlockKind = 'section' | 'paragraph' | 'result' | 'proof' | 'figure' | 'table';
 type SourceBlock = { id: string; kind: SourceBlockKind; level: number; title: string; content: string; proofText: string; nodeId: string; resultKind: string; citations: CitationReference[]; assetPaths: string[]; caption: string };
 type PaperAudit = { threadId: string; generatedAt: string; rawText: string; audit: { sourceStatus: 'full-text-read' | 'partial-text-read' | 'blocked'; sourceSummary: string; centralQuestion: string; mainContribution: string; verificationWarnings: string[] }; nodes: AuditNode[]; sourceBlocks: SourceBlock[]; readingPaths: { goal: string; nodeIds: string[]; reason: string }[]; crossPaperLinks: AuditCrossLink[]; openQuestions: string[]; editorialCorrections?: { nodeId: string; field: 'statement' | 'proofText'; original: string; replacement: string; rationale: string; confidence: 'high' | 'medium' | 'low' }[] };
 type GraphNode = { id: string; paperId: string; paperTitle: string; arxivId: string; nodeId: string; label: string; title: string; kind: NodeKind; page: number | null; status: AuditNode['status'] };
@@ -196,7 +196,7 @@ function parseAudit(rawText: string, threadId: string): PaperAudit {
   const data = JSON.parse(clean.slice(first, last + 1)) as Record<string, unknown>;
   const auditData = data.audit as Record<string, unknown> | undefined;
   if (!auditData || !Array.isArray(data.nodes)) throw new Error('Codex returned an incomplete audit. Try again.');
-  const kinds = new Set<NodeKind>(['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'proof', 'equation', 'remark', 'example', 'section', 'external-result']);
+  const kinds = new Set<NodeKind>(['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'proof', 'equation', 'remark', 'example', 'section', 'table', 'external-result']);
   const statuses = new Set<AuditNode['status']>(['verified', 'needs-verification', 'unavailable']);
   const sourceStatus = new Set<PaperAudit['audit']['sourceStatus']>(['full-text-read', 'partial-text-read', 'blocked']);
   const confidence = new Set<Anchor['confidence']>(['verified', 'approximate', 'unverified']);
@@ -215,7 +215,7 @@ function parseAudit(rawText: string, threadId: string): PaperAudit {
       const entry = item as Record<string, unknown>; const anchor = entry.anchor as Record<string, unknown> | undefined;
       return { id: readString(entry.id, `unit-${index + 1}`), kind: kinds.has(entry.kind as NodeKind) ? entry.kind as NodeKind : 'section', label: readString(entry.label, `Unit ${index + 1}`), title: readString(entry.title, readString(entry.label, `Unit ${index + 1}`)), statement: readString(entry.statement), proofText: readString(entry.proofText), citations: asArray(entry.citations).map(readCitation), status: statuses.has(entry.status as AuditNode['status']) ? entry.status as AuditNode['status'] : 'needs-verification', anchor: { label: readString(anchor?.label, 'Source location unavailable'), page: typeof anchor?.page === 'number' ? anchor.page : null, confidence: confidence.has(anchor?.confidence as Anchor['confidence']) ? anchor?.confidence as Anchor['confidence'] : 'unverified' }, role: readString(entry.role), dependencies: asArray(entry.dependencies).map(String), proofSketch: asArray(entry.proofSketch).map(String), whyItMatters: readString(entry.whyItMatters), expandable: Boolean(entry.expandable) };
     }),
-    sourceBlocks: asArray(data.sourceBlocks).map((item, index): SourceBlock => { const block = item as Record<string, unknown>; const kind = readString(block.kind) as SourceBlockKind; return { id: readString(block.id, `source-block-${index + 1}`), kind: ['section', 'paragraph', 'result', 'proof', 'figure'].includes(kind) ? kind : 'paragraph', level: typeof block.level === 'number' ? block.level : 4, title: readString(block.title), content: readString(block.content), proofText: readString(block.proofText), nodeId: readString(block.nodeId), resultKind: readString(block.resultKind), citations: asArray(block.citations).map(readCitation), assetPaths: asArray(block.assetPaths).map(String), caption: readString(block.caption) }; }),
+    sourceBlocks: asArray(data.sourceBlocks).map((item, index): SourceBlock => { const block = item as Record<string, unknown>; const kind = readString(block.kind) as SourceBlockKind; return { id: readString(block.id, `source-block-${index + 1}`), kind: ['section', 'paragraph', 'result', 'proof', 'figure', 'table'].includes(kind) ? kind : 'paragraph', level: typeof block.level === 'number' ? block.level : 4, title: readString(block.title), content: readString(block.content), proofText: readString(block.proofText), nodeId: readString(block.nodeId), resultKind: readString(block.resultKind), citations: asArray(block.citations).map(readCitation), assetPaths: asArray(block.assetPaths).map(String), caption: readString(block.caption) }; }),
     readingPaths: asArray(data.readingPaths).map((item) => { const path = item as Record<string, unknown>; return { goal: readString(path.goal, 'Reading path'), nodeIds: asArray(path.nodeIds).map(String), reason: readString(path.reason) }; }),
     crossPaperLinks: asArray(data.crossPaperLinks).map((item) => { const link = item as Record<string, unknown>; const relation = ['uses', 'extends', 'background', 'contrasts'].includes(readString(link.relation)) ? readString(link.relation) as CrossLink['relation'] : 'uses'; return { fromNodeId: readString(link.fromNodeId), targetPaperId: readString(link.targetPaperId), targetNodeId: readString(link.targetNodeId), relation, rationale: readString(link.rationale) }; }).filter((link) => link.fromNodeId && link.targetPaperId && link.targetNodeId),
     openQuestions: asArray(data.openQuestions).map(String),
@@ -236,6 +236,7 @@ function displayUnitLabel(unit: Pick<AuditNode, 'kind' | 'label' | 'title'> | Pi
   if (unit.kind === 'external-result') return 'External result';
   if (unit.kind === 'paragraph') return 'Paragraph';
   if (unit.kind === 'figure') return 'Figure';
+  if (unit.kind === 'table') return 'Table';
   return unit.kind[0].toUpperCase() + unit.kind.slice(1);
 }
 function unitId(paperId: string, nodeId: string) { return `${paperId}::${nodeId}`; }
@@ -260,8 +261,8 @@ function sourceBlockValue(block: SourceBlock, patches: WorkingPatch[]) {
 }
 function sourceBlockAsNode(block: SourceBlock, patches: WorkingPatch[]): AuditNode {
   const value = sourceBlockValue(block, patches);
-  const kind: NodeKind = block.kind === 'section' ? 'section' : block.kind === 'figure' ? 'figure' : 'paragraph';
-  return { id: sourceBlockUnitId(block), kind, label: kind === 'section' ? value : '', title: kind === 'section' ? value : kind === 'figure' ? value || 'Paper figure' : 'Author text', statement: value, proofText: '', citations: block.citations ?? [], status: 'verified', anchor: { label: kind === 'section' ? value : 'Author text', page: null, confidence: 'verified' }, role: kind === 'section' ? 'Section heading and the text that follows it.' : kind === 'figure' ? 'An original figure and its caption.' : 'A paragraph of the original author text.', dependencies: [], proofSketch: [], whyItMatters: '', expandable: false };
+  const kind: NodeKind = block.kind === 'section' ? 'section' : block.kind === 'figure' ? 'figure' : block.kind === 'table' ? 'table' : 'paragraph';
+  return { id: sourceBlockUnitId(block), kind, label: kind === 'section' ? value : '', title: kind === 'section' ? value : kind === 'figure' ? value || 'Paper figure' : kind === 'table' ? block.caption || 'Paper table' : 'Author text', statement: value, proofText: '', citations: block.citations ?? [], status: 'verified', anchor: { label: kind === 'section' ? value : kind === 'table' ? 'Author table' : 'Author text', page: null, confidence: 'verified' }, role: kind === 'section' ? 'Section heading and the text that follows it.' : kind === 'figure' ? 'An original figure and its caption.' : kind === 'table' ? 'An original table from the paper.' : 'A paragraph of the original author text.', dependencies: [], proofSketch: [], whyItMatters: '', expandable: false };
 }
 
 function resolveSourceBlockIndex(requestedId: string, requestedNode: AuditNode | undefined, sourceBlocks: SourceBlock[], patches: WorkingPatch[]) {
@@ -326,6 +327,7 @@ function buildPaperExport(paper: Paper, audit: PaperAudit, nodes: AuditNode[], p
     const workingValue = sourceBlockValue(block, patches);
     if (block.kind === 'section' && selection.prose) lines.push(`${'#'.repeat(Math.min(6, block.level + 2))} ${workingValue}`, '');
     if (block.kind === 'paragraph' && selection.prose) { lines.push(workingValue, ''); addCitations(block.citations); }
+    if (block.kind === 'table' && selection.prose) { lines.push(workingValue, ''); if (block.caption) lines.push(`*${block.caption}*`, ''); addCitations(block.citations); }
     if (block.kind === 'figure' && selection.figures) { for (const asset of block.assetPaths) lines.push(`![${workingValue || 'Original figure'}](../attachments/source/${asset})`, ''); if (workingValue) lines.push(`*${workingValue}*`, ''); addCitations(block.citations); }
     if ((block.kind === 'result' || block.kind === 'proof') && block.nodeId && !visible.has(block.nodeId)) continue;
     const node = block.nodeId ? byId.get(block.nodeId) : undefined;
@@ -859,9 +861,10 @@ function InteractiveDocument({ paper, audit, nodes, notes, saveNote, updateNote,
     </header>
     <div className="original-source-flow">{sourceBlocks.map((block, blockIndex) => {
       if (sectionRanges.some((range) => collapsedSections[range.id] && blockIndex > range.start && blockIndex < range.end)) return null;
-      if (focused && !focusedSourceBlockIndexes.has(blockIndex) && (block.kind === 'paragraph' || block.kind === 'figure' || ((block.kind === 'result' || block.kind === 'proof') && !visibleNodeIds.has(block.nodeId)))) return null;
+      if (focused && !focusedSourceBlockIndexes.has(blockIndex) && (block.kind === 'paragraph' || block.kind === 'figure' || block.kind === 'table' || ((block.kind === 'result' || block.kind === 'proof') && !visibleNodeIds.has(block.nodeId)))) return null;
       if (block.kind === 'section') { const Heading = block.level <= 1 ? 'h2' : block.level === 2 ? 'h3' : 'h4'; const collapsed = Boolean(collapsedSections[block.id]); const unit = sourceBlockAsNode(block, patches); const attachedNotes = notes.filter((item) => item.nodeId === unit.id); const patch = patchForNode(patches, unit.id); return <section key={block.id} data-node-id={unit.id} className={`source-section-unit ${selectedNodeId === unit.id ? 'source-block-selected' : ''}`} onClick={() => setSelectedNodeId(unit.id)}><UnitStatusRail noteCount={attachedNotes.length} openNote={() => { setSelectedNodeId(unit.id); openAssistant('compose-note'); }} patch={patch} originalValue={block.title} currentValue={unit.statement} citations={block.citations} revert={() => patch ? revertPatch(patch) : Promise.resolve()} /><Heading className={`source-section-heading source-section-level-${block.level} ${collapsed ? 'source-section-collapsed' : ''}`}><EditableTexBlock label="Section title TeX" value={unit.statement} originalValue={block.title} changeRationale={patch?.rationale} citations={block.citations} emptyText="Untitled section" onSave={(value) => saveSourceBlockTex(block, value)} /><button className="source-section-toggle" onClick={(event) => { event.stopPropagation(); setCollapsedSections((current) => ({ ...current, [block.id]: !current[block.id] })); }} aria-expanded={!collapsed} title={collapsed ? 'Expand section' : 'Collapse section'}><span aria-hidden="true">{collapsed ? '▸' : '▾'}</span><small>{collapsed ? 'Expand' : 'Collapse'}</small></button></Heading><SourceBlockActions unit={unit} select={() => setSelectedNodeId(unit.id)} openAssistant={openAssistant} /></section>; }
       if (block.kind === 'paragraph') { const unit = sourceBlockAsNode(block, patches); const attachedNotes = notes.filter((item) => item.nodeId === unit.id); const patch = patchForNode(patches, unit.id); return <section key={block.id} data-node-id={unit.id} className={`source-paragraph source-prose-unit ${selectedNodeId === unit.id ? 'source-block-selected' : ''}`} onClick={() => setSelectedNodeId(unit.id)}><UnitStatusRail noteCount={attachedNotes.length} openNote={() => { setSelectedNodeId(unit.id); openAssistant('compose-note'); }} patch={patch} originalValue={block.content} currentValue={unit.statement} citations={block.citations} revert={() => patch ? revertPatch(patch) : Promise.resolve()} /><EditableTexBlock label="Paragraph TeX" value={unit.statement} originalValue={block.content} changeRationale={patch?.rationale} citations={block.citations} emptyText="Empty paragraph" onSave={(value) => saveSourceBlockTex(block, value)} /><SourceBlockActions unit={unit} select={() => setSelectedNodeId(unit.id)} openAssistant={openAssistant} /></section>; }
+      if (block.kind === 'table') { const unit = sourceBlockAsNode(block, patches); const attachedNotes = notes.filter((item) => item.nodeId === unit.id); const patch = patchForNode(patches, unit.id); return <section key={block.id} data-node-id={unit.id} className={`source-table-unit ${selectedNodeId === unit.id ? 'source-block-selected' : ''}`} onClick={() => setSelectedNodeId(unit.id)}><UnitStatusRail noteCount={attachedNotes.length} openNote={() => { setSelectedNodeId(unit.id); openAssistant('compose-note'); }} patch={patch} originalValue={block.content} currentValue={unit.statement} citations={block.citations} revert={() => patch ? revertPatch(patch) : Promise.resolve()} /><EditableSourceTable value={unit.statement} caption={block.caption} citations={block.citations} onSave={(value) => saveSourceBlockTex(block, value)} /><SourceBlockActions unit={unit} select={() => setSelectedNodeId(unit.id)} openAssistant={openAssistant} /></section>; }
       if (block.kind === 'figure') { const unit = sourceBlockAsNode(block, patches); const attachedNotes = notes.filter((item) => item.nodeId === unit.id); const patch = patchForNode(patches, unit.id); return <section key={block.id} data-node-id={unit.id} className={`source-figure-unit ${selectedNodeId === unit.id ? 'source-block-selected' : ''}`} onClick={() => setSelectedNodeId(unit.id)}><UnitStatusRail noteCount={attachedNotes.length} openNote={() => { setSelectedNodeId(unit.id); openAssistant('compose-note'); }} patch={patch} originalValue={block.caption} currentValue={unit.statement} citations={block.citations} revert={() => patch ? revertPatch(patch) : Promise.resolve()} /><SourceFigure paperId={paper.id} assetPaths={block.assetPaths} caption="" />{(unit.statement || block.caption) && <div className="source-figure-editable-caption"><EditableTexBlock label="Figure caption TeX" value={unit.statement} originalValue={block.caption} changeRationale={patch?.rationale} citations={block.citations} emptyText="No figure caption" onSave={(value) => saveSourceBlockTex(block, value)} /></div>}<SourceBlockActions unit={unit} select={() => setSelectedNodeId(unit.id)} openAssistant={openAssistant} /></section>; }
       const node = nodes.find((item) => item.id === block.nodeId) ?? applyWorkingPatches(audit.nodes, patches).find((item) => item.id === block.nodeId);
       if (!node) { const unit = sourceBlockAsNode({ ...block, kind: 'paragraph' }, patches); const attachedNotes = notes.filter((item) => item.nodeId === unit.id); const patch = patchForNode(patches, unit.id); return block.content ? <section key={block.id} data-node-id={unit.id} className={`source-paragraph source-prose-unit ${selectedNodeId === unit.id ? 'source-block-selected' : ''}`} onClick={() => setSelectedNodeId(unit.id)}><UnitStatusRail noteCount={attachedNotes.length} openNote={() => { setSelectedNodeId(unit.id); openAssistant('compose-note'); }} patch={patch} originalValue={block.content} currentValue={unit.statement} citations={block.citations} revert={() => patch ? revertPatch(patch) : Promise.resolve()} /><EditableTexBlock label="Text TeX" value={unit.statement} originalValue={block.content} changeRationale={patch?.rationale} citations={block.citations} emptyText="Empty text block" onSave={(value) => saveSourceBlockTex({ ...block, kind: 'paragraph' }, value)} /><SourceBlockActions unit={unit} select={() => setSelectedNodeId(unit.id)} openAssistant={openAssistant} /></section> : null; }
@@ -900,6 +903,90 @@ function WholePaperNotes({ notes, save, update }: { notes: Note[]; save: (text: 
 
 function SourceFigure({ paperId, assetPaths, caption }: { paperId: string; assetPaths: string[]; caption: string }) {
   return <figure className="source-figure"><div>{assetPaths.map((asset, index) => <FigureAsset key={`${asset}:${index}`} paperId={paperId} asset={asset} alt={caption || `Figure ${index + 1}`} />)}</div>{caption && <figcaption><MathText value={caption} block /></figcaption>}</figure>;
+}
+
+type ParsedTableCell = { value: string; colSpan: number };
+type ParsedSourceTable = { alignments: ('left' | 'center' | 'right')[]; rows: ParsedTableCell[][] };
+
+function readTeXGroup(source: string, opening: number) {
+  if (source[opening] !== '{') return null;
+  let depth = 0;
+  for (let index = opening; index < source.length; index += 1) {
+    if (source[index] === '{' && source[index - 1] !== '\\') depth += 1;
+    if (source[index] === '}' && source[index - 1] !== '\\') {
+      depth -= 1;
+      if (depth === 0) return { value: source.slice(opening + 1, index), end: index + 1 };
+    }
+  }
+  return null;
+}
+
+function tableAlignments(specification: string) {
+  const result: ('left' | 'center' | 'right')[] = [];
+  for (let index = 0; index < specification.length; index += 1) {
+    const token = specification[index];
+    if ('@!><'.includes(token) && specification[index + 1] === '{') { const group = readTeXGroup(specification, index + 1); if (group) index = group.end - 1; continue; }
+    if ('pmb'.includes(token) && specification[index + 1] === '{') { result.push('left'); const group = readTeXGroup(specification, index + 1); if (group) index = group.end - 1; continue; }
+    if (token === 'l' || token === 'X') result.push('left');
+    if (token === 'c' || token === 'S') result.push('center');
+    if (token === 'r') result.push('right');
+  }
+  return result;
+}
+
+function splitTableRow(source: string) {
+  const cells: string[] = []; let cursor = 0; let depth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === '{' && source[index - 1] !== '\\') depth += 1;
+    if (source[index] === '}' && source[index - 1] !== '\\') depth = Math.max(0, depth - 1);
+    if (source[index] === '&' && source[index - 1] !== '\\' && depth === 0) { cells.push(source.slice(cursor, index)); cursor = index + 1; }
+  }
+  cells.push(source.slice(cursor));
+  return cells;
+}
+
+function cleanTableCell(source: string): ParsedTableCell {
+  let value = source.trim().replace(/^(?:\\(?:hline|toprule|midrule|bottomrule)\s*|\\(?:cline|cmidrule)(?:\([^)]*\))?\s*\{[^}]*\}\s*)+/g, '').trim();
+  let colSpan = 1;
+  const multi = /^\\multicolumn\s*\{(\d+)\}\s*\{[^}]*\}\s*\{/.exec(value);
+  if (multi) { const group = readTeXGroup(value, (multi.index ?? 0) + multi[0].length - 1); if (group) { colSpan = Math.max(1, Number(multi[1]) || 1); value = group.value.trim(); } }
+  value = value.replace(/^\\multirow(?:\[[^\]]*\])?\s*\{[^}]*\}\s*\{[^}]*\}\s*\{([\s\S]*)\}$/g, '$1').trim();
+  return { value, colSpan };
+}
+
+function parseSourceTable(source: string): ParsedSourceTable {
+  const begin = /\\begin\{(tabular\*?|tabularx)\}(?:\[[^\]]*\])?/.exec(source);
+  if (!begin) return { alignments: [], rows: [] };
+  let cursor = (begin.index ?? 0) + begin[0].length;
+  while (/\s/.test(source[cursor] || '')) cursor += 1;
+  let specification = readTeXGroup(source, cursor);
+  if ((begin[1] === 'tabular*' || begin[1] === 'tabularx') && specification) { cursor = specification.end; while (/\s/.test(source[cursor] || '')) cursor += 1; specification = readTeXGroup(source, cursor); }
+  if (!specification) return { alignments: [], rows: [] };
+  const bodyStart = specification.end;
+  const end = source.lastIndexOf(`\\end{${begin[1]}}`);
+  const body = source.slice(bodyStart, end >= bodyStart ? end : source.length).replace(/%[^\n\r]*/g, '');
+  const rawRows: string[] = []; let rowStart = 0; let depth = 0;
+  for (let index = 0; index < body.length - 1; index += 1) {
+    if (body[index] === '{' && body[index - 1] !== '\\') depth += 1;
+    if (body[index] === '}' && body[index - 1] !== '\\') depth = Math.max(0, depth - 1);
+    if (depth === 0 && body[index] === '\\' && body[index + 1] === '\\') { rawRows.push(body.slice(rowStart, index)); index += 1; while (/\s/.test(body[index + 1] || '')) index += 1; if (body[index + 1] === '[') { const close = body.indexOf(']', index + 2); if (close >= 0) index = close; } rowStart = index + 1; }
+  }
+  rawRows.push(body.slice(rowStart));
+  const rows = rawRows.map((row) => splitTableRow(row).map(cleanTableCell)).filter((row) => row.some((cell) => cell.value));
+  return { alignments: tableAlignments(specification.value), rows };
+}
+
+function SourceTable({ value, caption, citations }: { value: string; caption: string; citations: CitationReference[] }) {
+  const parsed = useMemo(() => parseSourceTable(value), [value]);
+  if (!parsed.rows.length) return <pre className="source-table-fallback">{value}</pre>;
+  return <div className="source-table-scroll"><table><tbody>{parsed.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => { const Cell = rowIndex === 0 ? 'th' : 'td'; return <Cell key={cellIndex} colSpan={cell.colSpan} style={{ textAlign: parsed.alignments[cellIndex] || 'left' }}><MathText value={cell.value} citations={citations} /></Cell>; })}</tr>)}</tbody></table>{caption && <p className="source-table-caption"><MathText value={caption} citations={citations} /></p>}</div>;
+}
+
+function EditableSourceTable({ value, caption, citations, onSave }: { value: string; caption: string; citations: CitationReference[]; onSave: (value: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false); const [draft, setDraft] = useState(value); const [saving, setSaving] = useState(false); const [error, setError] = useState('');
+  async function save(event: ReactMouseEvent) { event.stopPropagation(); if (!parseSourceTable(draft).rows.length) { setError('This TeX does not contain a readable tabular environment.'); return; } setSaving(true); try { await onSave(draft); setEditing(false); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save this table.'); } finally { setSaving(false); } }
+  if (!editing) return <div className="source-table-rendered" role="button" tabIndex={0} title="Click to edit table TeX" onClick={(event) => { event.stopPropagation(); if (document.body.dataset.readerMarkupActive !== 'true') { setDraft(value); setError(''); setEditing(true); } }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setDraft(value); setError(''); setEditing(true); } }}><span className="tex-edit-hint">Click to edit</span><SourceTable value={value} caption={caption} citations={citations} /></div>;
+  return <div className="editable-tex-source source-table-editor" onClick={(event) => event.stopPropagation()}><header><b>Table TeX</b></header><textarea value={draft} onChange={(event) => { setDraft(event.target.value); setError(''); }} spellCheck={false} autoFocus />{error && <p className="tex-compile-error">{error}</p>}<div className="tex-source-preview"><span>Live preview</span><SourceTable value={draft} caption={caption} citations={citations} /></div><footer><button onClick={(event) => { event.stopPropagation(); setEditing(false); setError(''); }}>Cancel</button><button onClick={(event) => void save(event)} disabled={saving}>{saving ? 'Saving…' : 'Save to working edition'}</button></footer></div>;
 }
 
 function FigureAsset({ paperId, asset, alt }: { paperId: string; asset: string; alt: string }) {

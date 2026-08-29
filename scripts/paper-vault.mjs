@@ -251,7 +251,7 @@ export class PaperVault {
   async savePatches(paperId, patches) {
     const record = await this.recordFor(paperId);
     const allowedKinds = new Set(['replace', 'delete', 'add']);
-    const allowedNodeKinds = new Set(['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'proof', 'equation', 'remark', 'example', 'section', 'paragraph', 'figure', 'external-result']);
+    const allowedNodeKinds = new Set(['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'proof', 'equation', 'remark', 'example', 'section', 'paragraph', 'figure', 'table', 'external-result']);
     const safePatches = Array.isArray(patches) ? patches.slice(0, 500).map((patch) => ({
       id: typeof patch.id === 'string' ? patch.id : randomUUID(),
       kind: allowedKinds.has(patch.kind) ? patch.kind : 'replace',

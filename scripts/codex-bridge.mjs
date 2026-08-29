@@ -656,6 +656,30 @@ function readableBodyFragment(source) {
   return readableLatex(cleaned).replace(/\\(?:vspace|hspace)\*?\s*\{[^}]*\}/g, ' ').trim();
 }
 
+function tableEvents(source) {
+  const events = []; const covered = []; const literalRanges = literalSourceRanges(source);
+  const caption = (fragment) => {
+    const match = /\\caption(?:\[[^\]]*\])?\s*\{/.exec(fragment);
+    if (!match) return '';
+    return readableLatex(balancedGroup(fragment, (match.index ?? 0) + match[0].length - 1)?.content || '');
+  };
+  const tabular = (fragment) => /\\begin\{(?:tabular\*?|tabularx)\}[\s\S]*?\\end\{(?:tabular\*?|tabularx)\}/.exec(fragment)?.[0] || '';
+  for (const match of String(source || '').matchAll(/\\begin\{table\*?\}([\s\S]*?)\\end\{table\*?\}/g)) {
+    const start = match.index ?? 0;
+    if (insideSourceRanges(start, literalRanges)) continue;
+    const content = tabular(match[0]);
+    if (!content) continue;
+    const end = start + match[0].length; covered.push([start, end]);
+    events.push({ type: 'table', start, end, content, caption: caption(match[0]), citations: citationMentions(match[0]) });
+  }
+  for (const match of String(source || '').matchAll(/\\begin\{(?:tabular\*?|tabularx)\}[\s\S]*?\\end\{(?:tabular\*?|tabularx)\}/g)) {
+    const start = match.index ?? 0;
+    if (insideSourceRanges(start, literalRanges) || covered.some(([left, right]) => left <= start && start < right)) continue;
+    events.push({ type: 'table', start, end: start + match[0].length, content: match[0], caption: '', citations: citationMentions(match[0]) });
+  }
+  return events;
+}
+
 function sourceParagraphBlocks(source, bibliography, state) {
   const readable = readableBodyFragment(source);
   if (!readable) return [];
@@ -677,10 +701,11 @@ function buildSourceBlocks(source, units, bibliography) {
   const events = [
     ...sectionEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
     ...figureEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
+    ...tableEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
     ...units.filter((unit) => unit.start >= bodyStart && unit.start < bodyEnd).map((unit) => ({ type: 'result', start: unit.start, end: unit.end, unit })),
     ...units.filter((unit) => Number.isFinite(unit.proofStart)).map((unit) => ({ type: 'proof-skip', start: unit.proofStart, end: unit.proofEnd, unit })),
   ].sort((left, right) => left.start - right.start || (left.type === 'section' ? -1 : 1));
-  const blocks = []; const state = { paragraph: 0, section: 0, result: 0, proof: 0 };
+  const blocks = []; const state = { paragraph: 0, section: 0, result: 0, proof: 0, table: 0 };
   let cursor = bodyStart;
   for (const event of events) {
     if (event.start < cursor) continue;
@@ -691,6 +716,9 @@ function buildSourceBlocks(source, units, bibliography) {
     } else if (event.type === 'figure') {
       state.figure = (state.figure || 0) + 1;
       blocks.push({ id: `source-figure-${state.figure}`, kind: 'figure', level: 4, title: '', content: '', proofText: '', nodeId: '', resultKind: '', citations: event.citations || [], assetPaths: event.assetPaths, caption: event.caption });
+    } else if (event.type === 'table') {
+      state.table += 1;
+      blocks.push({ id: `source-table-${state.table}`, kind: 'table', level: 4, title: '', content: event.content, proofText: '', nodeId: '', resultKind: '', citations: event.citations || [], assetPaths: [], caption: event.caption });
     } else if (event.type === 'result') {
       state.result += 1;
       blocks.push({ id: `source-result-${state.result}`, kind: 'result', level: 4, title: readableLatex(event.unit.title), content: event.unit.statement, proofText: '', nodeId: event.unit.nodeId || '', resultKind: event.unit.kind || 'theorem', citations: event.unit.citations || [], assetPaths: event.unit.assetPaths || [], caption: '' });

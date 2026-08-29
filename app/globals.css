@@ -789,11 +789,11 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .source-section-heading > button.source-section-toggle { display: inline-grid; width: 28px; min-width: 28px; height: 28px; flex: none; place-items: center; gap: 0; color: #8f1d2c; font: 900 13px/1 Inter, ui-sans-serif, sans-serif; text-align: center; }
 .source-section-heading > .editable-tex-rendered .math-text { overflow-wrap: normal; white-space: normal; word-break: normal; }
 .source-section-collapsed { border-bottom: 1px solid rgb(143 29 44 / 18%); padding-bottom: 8px; }
-.source-section-unit, .source-prose-unit, .source-figure-unit { position: relative; scroll-margin-top: 80px; border-radius: 4px; transition: background .15s ease, box-shadow .15s ease; }
+.source-section-unit, .source-prose-unit, .source-figure-unit, .source-table-unit { position: relative; scroll-margin-top: 80px; border-radius: 4px; transition: background .15s ease, box-shadow .15s ease; }
 .source-prose-unit { padding: 2px 5px 3px; }
-.source-section-unit.source-block-selected, .source-prose-unit.source-block-selected, .source-figure-unit.source-block-selected { background: rgb(143 29 44 / 2.8%); box-shadow: 0 0 0 4px rgb(143 29 44 / 3.5%); }
+.source-section-unit.source-block-selected, .source-prose-unit.source-block-selected, .source-figure-unit.source-block-selected, .source-table-unit.source-block-selected { background: rgb(143 29 44 / 2.8%); box-shadow: 0 0 0 4px rgb(143 29 44 / 3.5%); }
 .source-block-actions { display: flex; min-height: 22px; align-items: center; gap: 11px; margin-top: 3px; color: #8f1d2c; font-family: Inter, ui-sans-serif, sans-serif; font-size: 8px; font-style: normal; opacity: 0; transition: opacity .15s ease; }
-.source-section-unit:hover > .source-block-actions, .source-section-unit:focus-within > .source-block-actions, .source-prose-unit:hover > .source-block-actions, .source-prose-unit:focus-within > .source-block-actions, .source-figure-unit:hover > .source-block-actions, .source-figure-unit:focus-within > .source-block-actions, .source-block-selected > .source-block-actions { opacity: 1; }
+.source-section-unit:hover > .source-block-actions, .source-section-unit:focus-within > .source-block-actions, .source-prose-unit:hover > .source-block-actions, .source-prose-unit:focus-within > .source-block-actions, .source-figure-unit:hover > .source-block-actions, .source-figure-unit:focus-within > .source-block-actions, .source-table-unit:hover > .source-block-actions, .source-table-unit:focus-within > .source-block-actions, .source-block-selected > .source-block-actions { opacity: 1; }
 .source-block-actions button:not(.source-note-marker) { font-weight: 850; }
 .source-block-actions > span { margin-left: auto; color: #9d9189; font-size: 7px; }
 .source-block-actions .source-note-marker { width: 19px; height: 19px; }
@@ -801,6 +801,19 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .source-figure-unit { margin: 30px auto 32px; }
 .source-figure-unit .source-figure { margin: 0; }
 .source-figure-editable-caption { max-width: 760px; margin: 12px auto 0; color: #4e4641; font-family: Georgia, 'Times New Roman', serif; font-size: 12px; line-height: 1.55; text-align: center; }
+.source-table-unit { margin: 24px 0 30px; }
+.source-table-rendered { position: relative; min-width: 0; padding: 10px 4px 7px; cursor: text; }
+.source-table-rendered:focus-visible { outline: 2px solid rgb(143 29 44 / 30%); outline-offset: 4px; }
+.source-table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.source-table-scroll table { width: auto; min-width: min(100%, 520px); margin: 0 auto; border-collapse: collapse; color: #24201d; font-family: Georgia, 'Times New Roman', serif; font-size: .92em; line-height: 1.45; }
+.source-table-scroll th, .source-table-scroll td { min-width: 64px; padding: 8px 13px; border-block: 1px solid #d8cdc4; vertical-align: top; }
+.source-table-scroll th { background: rgb(143 29 44 / 4.5%); border-top: 1.5px solid #8f1d2c; color: #332b27; font-weight: 700; }
+.source-table-scroll tr:last-child td { border-bottom: 1.5px solid #8f1d2c; }
+.source-table-scroll .math-text { white-space: normal; }
+.source-table-caption { max-width: 760px; margin: 10px auto 0; color: #665b54; font-size: 12px; line-height: 1.5; text-align: center; }
+.source-table-fallback { max-width: 100%; overflow: auto; padding: 12px; background: #faf6f0; color: #665b54; font-size: 11px; white-space: pre-wrap; }
+.source-table-editor textarea { min-height: 170px; }
+.source-table-editor .tex-source-preview { overflow: visible; }
 
 /* A paper cannot be modified while its full-source audit is running. */
 .reader-edit-lock { display: inline-flex; flex: none; align-items: center; gap: 6px; border: 1px solid rgb(210 165 70 / 38%); border-radius: 999px; background: #fff7d9; padding: 4px 8px; color: #85600f; font-size: 8px; font-weight: 850; white-space: nowrap; }
