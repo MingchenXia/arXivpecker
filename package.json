@@ -6,7 +6,8 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "app": "node scripts/dev.mjs",
+    "app": "node scripts/dev.mjs --production",
+    "app:dev": "node scripts/dev.mjs",
     "dev": "vinext dev",
     "dev:web": "vinext dev",
     "build": "vinext build",

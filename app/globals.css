@@ -836,6 +836,9 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .source-section-heading > .editable-tex-rendered .math-text { overflow-wrap: normal; white-space: normal; word-break: normal; }
 .source-section-collapsed { border-bottom: 1px solid rgb(143 29 44 / 18%); padding-bottom: 8px; }
 .source-section-unit, .source-prose-unit, .source-figure-unit, .source-table-unit { position: relative; scroll-margin-top: 80px; border-radius: 4px; transition: background .15s ease, box-shadow .15s ease; }
+.source-section-unit, .source-prose-unit, .source-result, .source-proof, .source-figure-unit, .source-table-unit { content-visibility: auto; contain-intrinsic-size: auto 180px; }
+.source-proof { contain-intrinsic-size: auto 420px; }
+.source-figure-unit, .source-table-unit { contain-intrinsic-size: auto 520px; }
 .source-prose-unit { padding: 2px 5px 3px; }
 .source-section-unit.source-block-selected, .source-prose-unit.source-block-selected, .source-figure-unit.source-block-selected, .source-table-unit.source-block-selected { background: rgb(143 29 44 / 2.8%); box-shadow: 0 0 0 4px rgb(143 29 44 / 3.5%); }
 .source-block-actions { display: flex; min-height: 22px; align-items: center; gap: 11px; margin-top: 3px; color: #8f1d2c; font-family: Inter, ui-sans-serif, sans-serif; font-size: 8px; font-style: normal; opacity: 0; transition: opacity .15s ease; }

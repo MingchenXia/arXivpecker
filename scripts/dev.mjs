@@ -1,9 +1,17 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const production = process.argv.includes('--production');
+
+if (production) {
+  console.log('Preparing the optimized local reader…');
+  const build = spawnSync(npm, ['run', 'build'], { stdio: 'inherit' });
+  if (build.status !== 0) process.exit(build.status ?? 1);
+}
+
 const children = [
   spawn(npm, ['run', 'codex-bridge'], { stdio: 'inherit' }),
-  spawn(npm, ['run', 'dev:web'], { stdio: 'inherit' }),
+  spawn(npm, ['run', production ? 'start' : 'dev:web'], { stdio: 'inherit' }),
 ];
 let stopping = false;
 

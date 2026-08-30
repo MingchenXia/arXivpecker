@@ -25,7 +25,7 @@ Open the local URL shown in the terminal. A fresh clone opens the first-time rea
 - arXiv:2607.17203 — an unaudited paper for testing the audit flow; and
 - arXiv:2608.24719v1 — a fully structured audited paper with TeX source.
 
-`npm run app` starts both the web reader and the local Codex bridge. For separate terminals, run `npm run codex-bridge` and `npm run dev`.
+`npm run app` builds and starts the optimized web reader together with the local Codex bridge. Contributors who need hot reload can use `npm run app:dev`; for separate terminals, run `npm run codex-bridge` and `npm run dev`.
 
 ## Local data
 
