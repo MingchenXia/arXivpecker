@@ -1218,7 +1218,7 @@ function InteractiveDocumentComponent({ paper, audit, nodes, notes, saveNote, up
         <header><b>{displayUnitLabel(node)}.</b>{block.title && <span>(<MathText value={block.title} />)</span>}<ReadingMarkSelect value={readingMark} onChange={(value) => setMark(block.id, value)} openAssistant={() => { setSelectedNodeId(node.id); openAssistant('ask'); }} auditNode={node} /></header>
         <EditableTexBlock label="Statement TeX" value={node.statement || block.content} originalValue={sourceNode?.statement ?? block.content} changeRationale={patch?.rationale} citations={citations} emptyText="No standalone statement was extracted for this unit." onSave={(value) => saveInlineTex(node, 'statement', value)} />
         {block.assetPaths.length > 0 && <SourceFigure paperId={paper.id} assetPaths={block.assetPaths} caption={block.caption} />}
-        <footer>{!node.proofText && node.kind !== 'definition' ? <span className="source-no-proof">No attached proof</span> : null}<button onClick={(event) => { event.stopPropagation(); setSelectedNodeId(node.id); openAssistant('ask'); }}>Ask AI</button><button onClick={(event) => { event.stopPropagation(); setSelectedNodeId(node.id); openAssistant('compose-note'); }}>Note</button></footer>
+        <footer><button onClick={(event) => { event.stopPropagation(); setSelectedNodeId(node.id); openAssistant('ask'); }}>Ask AI</button><button onClick={(event) => { event.stopPropagation(); setSelectedNodeId(node.id); openAssistant('compose-note'); }}>Note</button>{!node.proofText && node.kind !== 'definition' ? <span className="source-no-proof">No attached proof</span> : null}</footer>
         {node.dependencies.length > 0 && <details className="source-dependencies"><summary>Logical dependencies</summary><div>{node.dependencies.map((dependency) => <UnitPreviewButton key={dependency} target={nodes.find((item) => item.id === dependency)} fallback="Referenced prerequisite" openNode={setSelectedNodeId} />)}</div></details>}
         {!node.proofText && citations.length > 0 && <CitationSources citations={citations} onExpand={(citation) => expandCitation(node, citation)} onOpen={openReference} onAttach={attachCitation} />}
       </section>;
@@ -1478,8 +1478,11 @@ function VisualLineNumbers({ children }: { children: ReactNode }) {
       schedule();
     };
     const deactivate = () => { active = false; resizeObserver?.disconnect(); resizeObserver = null; window.cancelAnimationFrame(frame); frame = 0; };
-    const visibilityObserver = 'IntersectionObserver' in window ? new IntersectionObserver(([entry]) => { if (entry.isIntersecting) activate(); else deactivate(); }, { root: null, rootMargin: '700px 0px', threshold: 0 }) : null;
-    if (visibilityObserver) visibilityObserver.observe(content); else activate();
+    const visibilityTarget = content.closest<HTMLElement>('.source-proof') ?? content;
+    const visibilityObserver = 'IntersectionObserver' in window ? new IntersectionObserver(([entry]) => { if (entry.isIntersecting) activate(); else deactivate(); }, { root: null, rootMargin: '900px 0px', threshold: 0 }) : null;
+    const initialRect = visibilityTarget.getBoundingClientRect();
+    if (initialRect.bottom >= -900 && initialRect.top <= window.innerHeight + 900) activate();
+    if (visibilityObserver) visibilityObserver.observe(visibilityTarget); else activate();
     window.addEventListener('resize', schedule);
     return () => { visibilityObserver?.disconnect(); deactivate(); window.removeEventListener('resize', schedule); };
   }, [children]);
