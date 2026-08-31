@@ -1359,6 +1359,10 @@ function normalizeArxivVersion(value) {
     .match(/(?:[a-z-]+(?:\.[A-Z]{2})?\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i)?.[0] ?? '';
 }
 
+function isArchivedSessionError(error) {
+  return /\b(?:session|thread)\b[^\r\n]*\b(?:is|was|has been) archived\b/i.test(error?.message ?? '');
+}
+
 class CodexAppServer {
   constructor() {
     this.process = null;
@@ -1373,8 +1377,8 @@ class CodexAppServer {
   }
 
   async start() {
-    if (this.process && !this.process.killed) return;
     if (this.starting) return this.starting;
+    if (this.process && !this.process.killed) return;
     this.starting = new Promise((resolve, reject) => {
       const child = spawn('codex', ['app-server'], { cwd: WORKDIR, stdio: ['pipe', 'pipe', 'pipe'] });
       this.process = child;
@@ -1483,8 +1487,38 @@ class CodexAppServer {
     }
   }
 
+  async restoreArchivedThread(threadId) {
+    this.loadedThreads.delete(threadId);
+    // Restore the original conversation, including the complete paper audit.
+    // Starting a blank thread here would silently discard that context.
+    await this.call('thread/unarchive', { threadId });
+    await this.call('thread/resume', { threadId });
+    this.loadedThreads.add(threadId);
+  }
+
+  async resumeThread(threadId) {
+    if (this.loadedThreads.has(threadId)) return;
+    try {
+      await this.call('thread/resume', { threadId });
+      this.loadedThreads.add(threadId);
+    } catch (error) {
+      if (!isArchivedSessionError(error)) throw error;
+      await this.restoreArchivedThread(threadId);
+    }
+  }
+
   async runTurn(params) {
-    const result = await this.call('turn/start', params, 30000);
+    let result;
+    try {
+      result = await this.call('turn/start', params, 30000);
+    } catch (error) {
+      // A loaded session can be archived by another Codex client. Retry once
+      // only when turn/start explicitly rejected it, never after a timeout or
+      // a turn/completed failure (which could duplicate already performed work).
+      if (!isArchivedSessionError(error)) throw error;
+      await this.restoreArchivedThread(params.threadId);
+      result = await this.call('turn/start', params, 30000);
+    }
     const turnId = result.turn?.id;
     if (!turnId) throw new Error('Codex did not return a turn id.');
     return new Promise((resolve, reject) => {
@@ -1580,10 +1614,7 @@ class CodexAppServer {
 
   async answerNode({ paper, profile, node, question, threadId }) {
     await this.start();
-    if (!this.loadedThreads.has(threadId)) {
-      await this.call('thread/resume', { threadId });
-      this.loadedThreads.add(threadId);
-    }
+    await this.resumeThread(threadId);
     const model = profile.model || undefined;
     return this.runTurn({
       threadId,
@@ -1597,10 +1628,7 @@ class CodexAppServer {
 
   async answerPaper({ paper, profile, currentNode, question, threadId }) {
     await this.start();
-    if (!this.loadedThreads.has(threadId)) {
-      await this.call('thread/resume', { threadId });
-      this.loadedThreads.add(threadId);
-    }
+    await this.resumeThread(threadId);
     return this.runTurn({
       threadId,
       input: [{ type: 'text', text: paperQuestionPrompt({ paper, currentNode, question }), text_elements: [] }],
@@ -1613,10 +1641,7 @@ class CodexAppServer {
 
   async suggestEditorialPatch({ paper, profile, node, threadId }) {
     await this.start();
-    if (!this.loadedThreads.has(threadId)) {
-      await this.call('thread/resume', { threadId });
-      this.loadedThreads.add(threadId);
-    }
+    await this.resumeThread(threadId);
     return this.runTurn({
       threadId,
       input: [{ type: 'text', text: editorialPrompt({ paper, node }), text_elements: [] }],
@@ -1898,4 +1923,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
 }
 
-export { enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences };
+export { CodexAppServer, enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences };

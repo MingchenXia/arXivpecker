@@ -550,6 +550,11 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .unit-hover-card::after { position: absolute; top: 100%; left: 50%; border: 6px solid transparent; border-top-color: #cfc0b6; content: ''; transform: translateX(-50%); }
 .unit-preview-trigger:hover .unit-hover-card, .unit-preview-trigger:focus .unit-hover-card, .audit-peek:hover .unit-hover-card, .audit-peek:focus .unit-hover-card { display: grid; gap: 6px; animation: details-open .14s ease both; }
 .unit-hover-card > b { color: #8f1d2c; font-size: 8px; letter-spacing: .05em; text-transform: uppercase; }.unit-hover-card > strong { color: #302a27; font-family: Georgia, 'Times New Roman', serif; font-size: 13px; font-weight: 650; }.unit-hover-card > span { max-height: 145px; overflow: hidden; color: #534b46; font-family: Georgia, 'Times New Roman', serif; font-size: 11px; line-height: 1.6; }.unit-hover-card > em { border-top: 1px solid #e5dad1; padding-top: 6px; color: #7f7168; font-size: 9px; }.unit-hover-card > small { color: #9a6c34; font-size: 8px; }
+.audit-hover-portal { position: fixed; z-index: 500; display: grid; gap: 9px; box-sizing: border-box; overflow: auto; overscroll-behavior: contain; border: 1px solid rgb(158 131 118 / 42%); border-top: 3px solid #8f1d2c; border-radius: 7px; background: rgb(255 254 250 / 94%); backdrop-filter: blur(14px); padding: 14px 16px; box-shadow: 0 12px 36px rgb(49 34 28 / 18%); color: #4b433e; font: 13px/1.6 Georgia, 'Times New Roman', serif; text-align: left; overflow-wrap: anywhere; }
+.audit-hover-portal > b { color: #8f1d2c; font: 700 11px/1.4 Inter, ui-sans-serif, sans-serif; }
+.audit-hover-portal > strong { color: #302a27; font-size: 15px; }
+.audit-hover-portal > .math-text { min-width: 0; margin: 0; font: inherit; }
+@media print { .audit-hover-portal { display: none; } }
 .audit-hover-card { right: -8px; left: auto; width: min(390px, 78vw); transform: none; }.audit-hover-card::after { right: 10px; left: auto; transform: none; }
 .working-editor-form label:nth-of-type(4) textarea { min-height: 180px; }
 .source-badge { background: transparent; color: #999088; padding-inline: 0; }
@@ -807,8 +812,9 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .annotation-toolbar { top: 50%; right: 62px; width: 180px; overflow: hidden; transform: translateY(-50%); }.annotation-toolbar > header span { white-space: normal; line-height: 1.35; }.annotation-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 8px; }.annotation-tools > button, .annotation-tools > label { display: flex; min-width: 0; min-height: 38px; align-items: center; justify-content: center; gap: 5px; border: 1px solid rgb(215 203 193 / 82%); border-radius: 5px; background: rgb(255 255 255 / 55%); color: #625851; font-family: Inter, ui-sans-serif, sans-serif; font-size: 7px; font-weight: 800; cursor: pointer; }.annotation-tools > button:hover, .annotation-tools > label:hover { border-color: #bd858b; background: rgb(255 250 246 / 90%); color: #8f1d2c; }.annotation-tools > button:disabled { cursor: default; opacity: .35; }.annotation-tools > button > b, .annotation-tools > button > i, .annotation-tools > button > u, .annotation-tools > button > span { font-family: Georgia, 'Times New Roman', serif; font-size: 13px; font-style: normal; }.annotation-highlighter { width: 15px; height: 6px; border: 1px solid rgb(97 81 69 / 20%); border-radius: 2px; }.annotation-tools > label { position: relative; flex-direction: column; gap: 2px; }.annotation-tools input[type="color"] { width: 25px; height: 17px; overflow: hidden; border: 0; border-radius: 3px; background: transparent; padding: 0; }.reader-annotation { border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }.markup-dock-icon { font-family: Georgia, 'Times New Roman', serif !important; font-size: 17px !important; }
 .annotation-tools > button.active { border-color: #a95e67; background: rgb(250 235 232 / 92%); color: #8f1d2c; box-shadow: inset 0 0 0 1px rgb(143 29 44 / 12%); }
 
-/* Proof line numbers live in a true outer gutter and never cover author text. */
-.source-proof:not(.source-proof-collapsed) { margin-left: clamp(48px, 5.5vw, 72px); }
+/* Reserve the gutter INSIDE the proof's paint-containment boundary. A margin
+   would put its labels outside content-visibility's clip, making them vanish. */
+.source-proof:not(.source-proof-collapsed) { margin-left: 0; padding-left: clamp(48px, 5.5vw, 72px); }
 .proof-numbered-text { overflow: visible; padding-left: 0; }
 .proof-numbered-text > .proof-line-gutter { position: absolute; top: 0; right: calc(100% + 10px); bottom: 0; left: auto; width: 38px; height: auto; border-right: 0; }
 .proof-numbered-text > .proof-line-gutter > span { right: 0; min-width: 34px; border-radius: 3px; background: rgb(255 254 250 / 82%); padding: 1px 4px; color: #665b54; font-size: 10px; text-align: right; text-shadow: none; }
@@ -817,7 +823,7 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
   .process-tray, .process-tray-collapsed { right: 10px; bottom: 52px; }
   .process-tray { width: min(340px, calc(100vw - 20px)); }
   .annotation-toolbar { top: auto; right: 8px; bottom: 52px; width: min(250px, calc(100vw - 16px)); transform: none; }
-  .source-proof:not(.source-proof-collapsed) { margin-left: 38px; }
+  .source-proof:not(.source-proof-collapsed) { margin-left: 0; padding-left: 38px; }
   .proof-numbered-text > .proof-line-gutter { right: calc(100% + 5px); width: 30px; }
   .proof-numbered-text > .proof-line-gutter > span { min-width: 28px; padding-inline: 2px; font-size: 9px; }
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import katex from 'katex';
-import { CSSProperties, FormEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, memo, startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, FormEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, memo, startTransition, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 type View = 'reader' | 'library' | 'graph' | 'discover' | 'settings';
 type ReaderMode = 'source' | 'interactive';
@@ -1362,16 +1363,22 @@ function latexCompileError(value: string) {
   return '';
 }
 
+function proofCoordinateScale(content: HTMLElement) {
+  const reader = content.closest<HTMLElement>('.reader-document');
+  return reader ? Number(window.getComputedStyle(reader).zoom) || 1 : 1;
+}
+
 function visibleProofSourceLines(nodeId: string) {
   if (typeof document === 'undefined') return [];
   const proof = document.querySelector<HTMLElement>(`.source-proof[data-node-id="${CSS.escape(nodeId)}"]:not(.source-proof-collapsed)`);
   const content = proof?.querySelector<HTMLElement>('.proof-line-content');
   const root = content?.querySelector<HTMLElement>(':scope > .math-text');
-  if (!content || !root) return [];
+  if (!proof || !content || !root) return [];
   const lineTops = Array.from(proof.querySelectorAll<HTMLElement>('.proof-line-gutter > span')).map((label) => Number(label.style.top.replace('px', ''))).filter(Number.isFinite);
   if (!lineTops.length) return [];
   const lines = lineTops.map(() => '');
   const origin = content.getBoundingClientRect().top;
+  const scale = proofCoordinateScale(content);
   const style = window.getComputedStyle(root);
   const fontSize = Number(style.fontSize.replace('px', '')) || 16;
   const lineHeight = Number(style.lineHeight.replace('px', '')) || fontSize * 1.7;
@@ -1382,12 +1389,12 @@ function visibleProofSourceLines(nodeId: string) {
     const element = child as HTMLElement;
     const rect = element.getBoundingClientRect();
     if (element.classList.contains('math-display')) {
-      const targetTop = rect.top - origin + Math.max(0, (rect.height - lineHeight) / 2);
+      const targetTop = (rect.top - origin) / scale + Math.max(0, (rect.height / scale - lineHeight) / 2);
       append(nearestLine(targetTop), element.dataset.source || element.textContent || '');
       continue;
     }
     if (element.classList.contains('math-inline') || element.classList.contains('inline-citation')) {
-      append(nearestLine(rect.top - origin), element.dataset.source || element.textContent || '');
+      append(nearestLine((rect.top - origin) / scale), element.dataset.source || element.textContent || '');
       continue;
     }
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -1400,7 +1407,7 @@ function visibleProofSourceLines(nodeId: string) {
         range.setStart(textNode, start);
         range.setEnd(textNode, start + match[0].length);
         const tokenRect = Array.from(range.getClientRects()).find((item) => item.height > 0 && item.width > 0);
-        if (tokenRect) append(nearestLine(tokenRect.top - origin), match[0]);
+        if (tokenRect) append(nearestLine((tokenRect.top - origin) / scale), match[0]);
       }
       textNode = walker.nextNode() as Text | null;
     }
@@ -1412,16 +1419,48 @@ function indexedVisibleProof(nodeId: string) {
   return visibleProofSourceLines(nodeId).map((line, index) => `L${index + 1}: ${line}`).join('\n');
 }
 
+// One throttled fallback for all proofs: IntersectionObserver can miss a jump
+// into zoomed, content-visibility-skipped content. Only check container bounds;
+// expensive text measurement still runs only for nearby proofs that need it.
+const proofViewportChecks = new Set<() => void>();
+let proofViewportTimer: number | undefined;
+function scheduleProofViewportChecks() {
+  if (proofViewportTimer !== undefined) return;
+  proofViewportTimer = window.setTimeout(() => {
+    proofViewportTimer = undefined;
+    for (const check of proofViewportChecks) check();
+  }, 100);
+}
+function watchProofViewport(check: () => void) {
+  if (!proofViewportChecks.size) {
+    window.addEventListener('scroll', scheduleProofViewportChecks, { capture: true, passive: true });
+    window.addEventListener('resize', scheduleProofViewportChecks);
+  }
+  proofViewportChecks.add(check);
+  return () => {
+    proofViewportChecks.delete(check);
+    if (!proofViewportChecks.size) {
+      window.removeEventListener('scroll', scheduleProofViewportChecks, true);
+      window.removeEventListener('resize', scheduleProofViewportChecks);
+      window.clearTimeout(proofViewportTimer);
+      proofViewportTimer = undefined;
+    }
+  };
+}
+
 function VisualLineNumbers({ children }: { children: ReactNode }) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [lineTops, setLineTops] = useState<number[]>([]);
   useEffect(() => {
     const content = contentRef.current;
     if (!content) return;
-    let frame = 0; let active = false; let resizeObserver: ResizeObserver | null = null;
+    let frame = 0; let active = false; let measured = false; let resizeObserver: ResizeObserver | null = null;
     const measure = () => {
       frame = 0;
       const origin = content.getBoundingClientRect().top;
+      // Client rects already include the reader's CSS zoom; label offsets are
+      // local CSS pixels. Otherwise changing text size scales positions twice.
+      const scale = proofCoordinateScale(content);
       const root = content.querySelector<HTMLElement>(':scope > .math-text') ?? content;
       const style = window.getComputedStyle(root);
       const fontSize = Number(style.fontSize.replace('px', '')) || 16;
@@ -1448,25 +1487,26 @@ function VisualLineNumbers({ children }: { children: ReactNode }) {
         range.selectNodeContents(element);
         for (const rect of Array.from(range.getClientRects())) {
           if (rect.height <= 0 || rect.width <= 0) continue;
-          const top = rect.top - origin;
+          const top = (rect.top - origin) / scale;
           if (!proseTops.some((value) => Math.abs(value - top) < proseTolerance)) proseTops.push(top);
         }
       }
 
       const tops = [...proseTops];
       for (const rect of inlineRects) {
-        const top = rect.top - origin;
-        const bottom = rect.bottom - origin;
+        const top = (rect.top - origin) / scale;
+        const bottom = (rect.bottom - origin) / scale;
         const sharesProseLine = tops.some((value) => value < bottom && value + lineHeight > top);
         if (!sharesProseLine) tops.push(top);
       }
       // A displayed equation is one reader-visible line, regardless of the
       // number of rows or nested boxes in KaTeX's internal DOM.
-      for (const rect of displayRects) tops.push(rect.top - origin + Math.max(0, (rect.height - lineHeight) / 2));
+      for (const rect of displayRects) tops.push((rect.top - origin) / scale + Math.max(0, (rect.height / scale - lineHeight) / 2));
 
       tops.sort((left, right) => left - right);
       const mergeTolerance = Math.max(5, fontSize * .45);
       const merged = tops.filter((top, index) => index === 0 || Math.abs(top - tops[index - 1]) >= mergeTolerance);
+      measured = merged.length > 0;
       setLineTops(merged.map((top) => Math.round(top * 2) / 2));
     };
     const schedule = () => { if (!active) return; window.cancelAnimationFrame(frame); frame = window.requestAnimationFrame(measure); };
@@ -1480,11 +1520,21 @@ function VisualLineNumbers({ children }: { children: ReactNode }) {
     const deactivate = () => { active = false; resizeObserver?.disconnect(); resizeObserver = null; window.cancelAnimationFrame(frame); frame = 0; };
     const visibilityTarget = content.closest<HTMLElement>('.source-proof') ?? content;
     const visibilityObserver = 'IntersectionObserver' in window ? new IntersectionObserver(([entry]) => { if (entry.isIntersecting) activate(); else deactivate(); }, { root: null, rootMargin: '900px 0px', threshold: 0 }) : null;
-    const initialRect = visibilityTarget.getBoundingClientRect();
-    if (initialRect.bottom >= -900 && initialRect.top <= window.innerHeight + 900) activate();
+    const checkVisibility = () => {
+      const rect = visibilityTarget.getBoundingClientRect();
+      if (rect.bottom >= -900 && rect.top <= window.innerHeight + 900) { activate(); if (!measured) schedule(); }
+      else deactivate();
+    };
+    checkVisibility();
+    const unwatchViewport = watchProofViewport(checkVisibility);
+    visibilityTarget.addEventListener('focusin', checkVisibility);
     if (visibilityObserver) visibilityObserver.observe(visibilityTarget); else activate();
+    // A nearby content-visibility container may still be skipped when the
+    // intersection callback first fires. Measure again once it is painted.
+    visibilityTarget.addEventListener('contentvisibilityautostatechange', schedule);
+    document.fonts.addEventListener('loadingdone', schedule);
     window.addEventListener('resize', schedule);
-    return () => { visibilityObserver?.disconnect(); deactivate(); window.removeEventListener('resize', schedule); };
+    return () => { visibilityObserver?.disconnect(); unwatchViewport(); deactivate(); visibilityTarget.removeEventListener('focusin', checkVisibility); visibilityTarget.removeEventListener('contentvisibilityautostatechange', schedule); document.fonts.removeEventListener('loadingdone', schedule); window.removeEventListener('resize', schedule); };
   }, [children]);
   return <div className="proof-numbered-text"><div className="proof-line-gutter" aria-hidden="true">{lineTops.map((top, index) => <span key={`${index}:${top}`} style={{ top }}>{`L${index + 1}`}</span>)}</div><div className="proof-line-content" ref={contentRef}>{children}</div></div>;
 }
@@ -1502,10 +1552,45 @@ function EditableTexBlock({ label, value, originalValue, changeRationale, citati
 }
 
 function AuditPeek({ node, open }: { node: AuditNode; open: () => void }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tooltipId = useId();
+  const [preview, setPreview] = useState(false);
+  const [position, setPosition] = useState<CSSProperties>({ visibility: 'hidden' });
   const statusLabel = node.status === 'verified' ? 'Checked' : node.status === 'needs-verification' ? 'Needs review' : 'Not verified';
-  return <button className={`audit-peek audit-peek-${node.status}`} aria-label={`${statusLabel}: preview AI audit for ${displayUnitLabel(node)}`} onClick={(event) => { event.stopPropagation(); open(); }}>
-    <span aria-hidden="true">{node.status === 'verified' ? '✓' : node.status === 'needs-verification' ? '!' : '?'}</span><span className="unit-hover-card audit-hover-card" role="tooltip"><b>AI audit</b><strong>{statusLabel}</strong><span>{node.role || 'No separate role was classified.'}</span>{node.whyItMatters && <em>{node.whyItMatters}</em>}<small>Click for details, notes, and editing.</small></span>
-  </button>;
+  function keepOpen() { if (closeTimer.current) clearTimeout(closeTimer.current); setPreview(true); }
+  function hideSoon() { if (closeTimer.current) clearTimeout(closeTimer.current); closeTimer.current = setTimeout(() => setPreview(false), 220); }
+  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
+  useLayoutEffect(() => {
+    if (!preview) return;
+    const place = () => {
+      const anchor = triggerRef.current?.getBoundingClientRect();
+      const card = cardRef.current;
+      if (!anchor || !card) return;
+      const edge = 12; const gap = 8;
+      const width = Math.min(390, window.innerWidth - edge * 2);
+      const maxHeight = Math.min(480, window.innerHeight - edge * 2);
+      const height = Math.min(card.scrollHeight + 2, maxHeight);
+      const below = window.innerHeight - anchor.bottom - edge - gap;
+      const above = anchor.top - edge - gap;
+      const preferredTop = below >= height || below >= above ? anchor.bottom + gap : anchor.top - gap - height;
+      setPosition({ width, maxHeight, left: Math.max(edge, Math.min(anchor.right - width, window.innerWidth - width - edge)), top: Math.max(edge, Math.min(preferredTop, window.innerHeight - height - edge)), visibility: 'visible' });
+    };
+    const dismiss = (event: KeyboardEvent) => { if (event.key === 'Escape') setPreview(false); };
+    const outside = (event: PointerEvent) => { if (!triggerRef.current?.contains(event.target as Node) && !cardRef.current?.contains(event.target as Node)) setPreview(false); };
+    place();
+    const observer = new ResizeObserver(place);
+    if (cardRef.current) observer.observe(cardRef.current);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    document.addEventListener('keydown', dismiss);
+    document.addEventListener('pointerdown', outside);
+    return () => { observer.disconnect(); window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); document.removeEventListener('keydown', dismiss); document.removeEventListener('pointerdown', outside); };
+  }, [preview]);
+  return <><button ref={triggerRef} className={`audit-peek audit-peek-${node.status}`} aria-label={`${statusLabel}: preview AI audit for ${displayUnitLabel(node)}`} aria-describedby={preview ? tooltipId : undefined} onMouseEnter={keepOpen} onMouseLeave={hideSoon} onFocus={keepOpen} onBlur={hideSoon} onClick={(event) => { event.stopPropagation(); setPreview(false); open(); }}>
+    <span aria-hidden="true">{node.status === 'verified' ? '✓' : node.status === 'needs-verification' ? '!' : '?'}</span>
+  </button>{preview && createPortal(<aside ref={cardRef} id={tooltipId} className="audit-hover-portal" role="tooltip" style={position} onMouseEnter={keepOpen} onMouseLeave={hideSoon} onClick={(event) => event.stopPropagation()}><b>AI audit · {statusLabel}</b><strong>{displayUnitLabel(node)}</strong>{node.role && <MathText value={node.role} block />}{node.whyItMatters && <MathText value={node.whyItMatters} block />}</aside>, document.fullscreenElement ?? document.body)}</>;
 }
 
 function NoteMarker({ count, open }: { count: number; open: () => void }) {

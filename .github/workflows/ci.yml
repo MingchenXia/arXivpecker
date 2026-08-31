@@ -21,4 +21,5 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm run test:starter
+      - run: npm run test:sessions
       - run: npm run audit-formulas
