@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { extractSourceUnits, readableLatex, resolveLatexReferences } from './codex-bridge.mjs';
+import { ar5ivFigureUrl, extractSourceUnits, readableLatex, resolveLatexReferences } from './codex-bridge.mjs';
 
 const source = String.raw`\documentclass{article}
 \usepackage{amsmath}
@@ -42,4 +42,7 @@ assert.equal(delayedUnits[1].proofText, '', 'A delayed proof must remain attache
 const decorative = readableLatex(String.raw`\textcolor{meta-color}{\textbf{Subset}}: Common Crawl \textcolor{wkblue}{\rule{\linewidth}{0.4pt}}`);
 assert.equal(decorative, 'Subset: Common Crawl', 'Decorative TeX color and rule commands must not leak into reader prose.');
 
-console.log('TeX reader: references resolved, literal source preserved, decorative commands removed.');
+assert.equal(ar5ivFigureUrl('math/0702066v2', 'figures/famcurv.eps'), 'https://ar5iv.labs.arxiv.org/html/math/0702066/assets/famcurv.png');
+assert.equal(ar5ivFigureUrl('local-upload', 'famcurv.eps'), '', 'Uploaded papers must never trigger a guessed remote asset URL.');
+
+console.log('TeX reader: references resolved, literal source preserved, decorative commands removed, arXiv figure fallback normalized.');

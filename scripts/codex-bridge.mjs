@@ -20,6 +20,9 @@ const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
 const CODEX_TURN_IDLE_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_TURN_IDLE_TIMEOUT_MS || process.env.CODEX_TURN_TIMEOUT_MS) || 30 * 60 * 1000);
 const CODEX_TURN_HARD_TIMEOUT_MS = Math.max(CODEX_TURN_IDLE_TIMEOUT_MS, Number(process.env.CODEX_TURN_HARD_TIMEOUT_MS) || 2 * 60 * 60 * 1000);
 const CODEX_STARTUP_RPC_TIMEOUT_MS = Math.max(30_000, Number(process.env.CODEX_STARTUP_RPC_TIMEOUT_MS) || 60_000);
+// Resuming a large archived audit can require Codex to restore its full rollout
+// from disk. It is a lifecycle operation, not a normal lightweight RPC.
+const CODEX_THREAD_RESTORE_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_THREAD_RESTORE_TIMEOUT_MS) || 2 * 60 * 1000);
 
 function decodeSourceBuffer(payload) {
   const utf8 = Buffer.from(payload).toString('utf8');
@@ -1369,7 +1372,7 @@ function isArchivedSessionError(error) {
 }
 
 class CodexAppServer {
-  constructor({ turnIdleTimeoutMs = CODEX_TURN_IDLE_TIMEOUT_MS, turnHardTimeoutMs = CODEX_TURN_HARD_TIMEOUT_MS } = {}) {
+  constructor({ turnIdleTimeoutMs = CODEX_TURN_IDLE_TIMEOUT_MS, turnHardTimeoutMs = CODEX_TURN_HARD_TIMEOUT_MS, threadRestoreTimeoutMs = CODEX_THREAD_RESTORE_TIMEOUT_MS } = {}) {
     this.process = null;
     this.starting = null;
     this.nextId = 1;
@@ -1381,6 +1384,7 @@ class CodexAppServer {
     this.lastError = null;
     this.turnIdleTimeoutMs = turnIdleTimeoutMs;
     this.turnHardTimeoutMs = Math.max(turnIdleTimeoutMs, turnHardTimeoutMs);
+    this.threadRestoreTimeoutMs = Math.max(60_000, threadRestoreTimeoutMs);
   }
 
   async start() {
@@ -1513,15 +1517,15 @@ class CodexAppServer {
     this.loadedThreads.delete(threadId);
     // Restore the original conversation, including the complete paper audit.
     // Starting a blank thread here would silently discard that context.
-    await this.call('thread/unarchive', { threadId });
-    await this.call('thread/resume', { threadId });
+    await this.call('thread/unarchive', { threadId }, this.threadRestoreTimeoutMs);
+    await this.call('thread/resume', { threadId }, this.threadRestoreTimeoutMs);
     this.loadedThreads.add(threadId);
   }
 
   async resumeThread(threadId) {
     if (this.loadedThreads.has(threadId)) return;
     try {
-      await this.call('thread/resume', { threadId });
+      await this.call('thread/resume', { threadId }, this.threadRestoreTimeoutMs);
       this.loadedThreads.add(threadId);
     } catch (error) {
       if (!isArchivedSessionError(error)) throw error;
@@ -1767,6 +1771,35 @@ function enqueueVaultMutation(work) {
 }
 
 const figureExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf', '.eps', '.ps', '.tif', '.tiff', '.bmp'];
+const MAX_FIGURE_BYTES = 20 * 1024 * 1024;
+
+function ar5ivFigureUrl(arxivId, requestedPath) {
+  const normalizedId = normalizeArxivVersion(arxivId).replace(/v\d+$/i, '');
+  const requested = String(requestedPath || '').replaceAll('\\', '/').trim();
+  const filename = path.basename(requested);
+  const stem = filename.slice(0, filename.length - path.extname(filename).length).trim();
+  if (!normalizedId || !stem || normalizedId.startsWith('local-') || /[\0\r\n]/.test(stem)) return '';
+  const encodedId = normalizedId.split('/').map(encodeURIComponent).join('/');
+  return `https://ar5iv.labs.arxiv.org/html/${encodedId}/assets/${encodeURIComponent(stem)}.png`;
+}
+
+async function fetchAr5ivFigurePreview(arxivId, requestedPath, destination) {
+  const url = ar5ivFigureUrl(arxivId, requestedPath);
+  if (!url) throw new Error('No arXiv figure fallback is available for this paper.');
+  const response = await fetch(url, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(30_000),
+    headers: { 'User-Agent': 'arXivpecker/0.2 (local mathematics paper reader; figure fallback)' },
+  });
+  if (!response.ok) throw new Error(`The arXiv figure fallback returned ${response.status}.`);
+  const declared = Number(response.headers.get('content-length') || 0);
+  if (declared > MAX_FIGURE_BYTES) throw new Error('The arXiv figure fallback is too large.');
+  const payload = Buffer.from(await response.arrayBuffer());
+  const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (!payload.length || payload.length > MAX_FIGURE_BYTES || !payload.subarray(0, 8).equals(pngSignature)) throw new Error('The arXiv figure fallback did not return a valid PNG image.');
+  await writeFile(destination, payload);
+  return destination;
+}
 
 async function collectFigureFiles(directory, root = directory, depth = 0) {
   if (depth > 8) return [];
@@ -1804,16 +1837,32 @@ async function figureAsset(paperId, requestedPath) {
     const found = files.find((file) => alternatives.some((alternative) => file.relative.toLowerCase().endsWith(alternative.toLowerCase()))) || files.find((file) => path.basename(file.relative, path.extname(file.relative)).toLowerCase() === path.basename(basename, path.extname(basename)));
     candidate = found?.absolute || null;
   }
-  if (!candidate) throw new Error('The referenced figure asset is not present in this paper source.');
+  const previewDirectory = path.join(sourceRoot, '.proofroom-previews');
+  const previewToken = Buffer.from(requested).toString('base64url').slice(0, 72);
+  const remotePreview = path.join(previewDirectory, `${previewToken}.png`);
+  if (!candidate) {
+    await mkdir(previewDirectory, { recursive: true });
+    try { if (!(await stat(remotePreview)).isFile()) throw new Error('Not a file.'); }
+    catch { await fetchAr5ivFigurePreview(savedPaper.arxivId, requested, remotePreview); }
+    return { payload: await readFile(remotePreview), mime: 'image/png' };
+  }
   const sourceExtension = path.extname(candidate).toLowerCase();
   if (['.pdf', '.eps', '.ps', '.tif', '.tiff', '.bmp'].includes(sourceExtension)) {
-    const previewDirectory = path.join(sourceRoot, '.proofroom-previews'); await mkdir(previewDirectory, { recursive: true });
+    await mkdir(previewDirectory, { recursive: true });
     const token = Buffer.from(path.relative(sourceRoot, candidate)).toString('base64url').slice(0, 72); const preview = path.join(previewDirectory, `${token}.png`);
     try { await stat(preview); }
     catch {
-      if (sourceExtension === '.pdf') await runProgram('pdftoppm', ['-png', '-singlefile', '-r', '180', candidate, preview.slice(0, -4)]);
-      else if (sourceExtension === '.eps' || sourceExtension === '.ps') await runProgram('gs', ['-dSAFER', '-dBATCH', '-dNOPAUSE', '-sDEVICE=pngalpha', '-r180', `-sOutputFile=${preview}`, candidate]);
-      else await runProgram('sips', ['-s', 'format', 'png', candidate, '--out', preview]);
+      try {
+        if (sourceExtension === '.pdf') await runProgram('pdftoppm', ['-png', '-singlefile', '-r', '180', candidate, preview.slice(0, -4)]);
+        else if (sourceExtension === '.eps' || sourceExtension === '.ps') await runProgram('gs', ['-dSAFER', '-dBATCH', '-dNOPAUSE', '-sDEVICE=pngalpha', '-r180', `-sOutputFile=${preview}`, candidate]);
+        else await runProgram('sips', ['-s', 'format', 'png', candidate, '--out', preview]);
+      } catch {
+        // TeX-first arXiv bundles often contain EPS figures, while a tester's
+        // machine may not have Ghostscript. ar5iv already publishes safe PNG
+        // renderings of those same primary-source assets, so cache that image
+        // rather than leaving a permanent placeholder in the reader.
+        await fetchAr5ivFigurePreview(savedPaper.arxivId, requested, preview);
+      }
     }
     candidate = preview;
   }
@@ -1972,4 +2021,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
 }
 
-export { CodexAppServer, enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences };
+export { CodexAppServer, ar5ivFigureUrl, enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences };

@@ -38,7 +38,7 @@ function mockServer(handler) {
   const server = new CodexAppServer();
   const calls = [];
   server.start = async () => {};
-  server.call = async (method, request) => { calls.push({ method, request }); return handler(method, request, server); };
+  server.call = async (method, request, timeoutMs) => { calls.push({ method, request, timeoutMs }); return handler(method, request, server); };
   return { server, calls };
 }
 
@@ -63,6 +63,7 @@ test('archived audit resumes in the same thread without creating a blank session
   await server.resumeThread(threadId);
   assert.deepEqual(calls.map(c => c.method), ['thread/resume', 'thread/unarchive', 'thread/resume']);
   assert.ok(calls.every(c => c.request.threadId === threadId));
+  assert.ok(calls.every(c => c.timeoutMs >= 60_000), 'Archived audit restoration must not use the 30-second generic RPC timeout.');
   assert.ok(server.loadedThreads.has(threadId));
   await server.resumeThread(threadId);
   assert.equal(calls.length, 3, 'Already loaded threads are reused.');
