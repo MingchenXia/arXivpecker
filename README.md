@@ -33,6 +33,8 @@ The repository's reusable examples live in `examples/starter-library/`. On first
 
 Set `PROOFROOM_LIBRARY_DIR` to use another writable library. Set `ARXIVPECKER_SKIP_STARTER_LIBRARY=1` when an intentionally empty library is desired.
 
+Long audits are not stopped merely because they exceed 30 minutes. The bridge waits up to 30 minutes **without a Codex progress event** and keeps a separate two-hour safety ceiling. Maintainers can override these with `CODEX_TURN_IDLE_TIMEOUT_MS` and `CODEX_TURN_HARD_TIMEOUT_MS`; the legacy `CODEX_TURN_TIMEOUT_MS` remains an alias for the idle limit.
+
 ## Project map
 
 - `app/` — reader interface and arXiv metadata route

@@ -14,7 +14,11 @@ const vaultRoot = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || path.join(WO
 const starterRoot = process.env.ARXIVPECKER_SKIP_STARTER_LIBRARY === '1' ? null : path.resolve(process.env.ARXIVPECKER_STARTER_LIBRARY_DIR || path.join(WORKDIR, 'examples', 'starter-library'));
 const vault = new PaperVault(vaultRoot, { starterRoot });
 const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
-const CODEX_TURN_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_TURN_TIMEOUT_MS) || 30 * 60 * 1000);
+// Long mathematical audits can legitimately take more than 30 minutes. Treat
+// the old timeout as an inactivity limit, and keep a separate upper bound so a
+// genuinely wedged local Codex process cannot consume the subscription forever.
+const CODEX_TURN_IDLE_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_TURN_IDLE_TIMEOUT_MS || process.env.CODEX_TURN_TIMEOUT_MS) || 30 * 60 * 1000);
+const CODEX_TURN_HARD_TIMEOUT_MS = Math.max(CODEX_TURN_IDLE_TIMEOUT_MS, Number(process.env.CODEX_TURN_HARD_TIMEOUT_MS) || 2 * 60 * 60 * 1000);
 
 function decodeSourceBuffer(payload) {
   const utf8 = Buffer.from(payload).toString('utf8');
@@ -1364,7 +1368,7 @@ function isArchivedSessionError(error) {
 }
 
 class CodexAppServer {
-  constructor() {
+  constructor({ turnIdleTimeoutMs = CODEX_TURN_IDLE_TIMEOUT_MS, turnHardTimeoutMs = CODEX_TURN_HARD_TIMEOUT_MS } = {}) {
     this.process = null;
     this.starting = null;
     this.nextId = 1;
@@ -1374,6 +1378,8 @@ class CodexAppServer {
     this.account = null;
     this.models = [];
     this.lastError = null;
+    this.turnIdleTimeoutMs = turnIdleTimeoutMs;
+    this.turnHardTimeoutMs = Math.max(turnIdleTimeoutMs, turnHardTimeoutMs);
   }
 
   async start() {
@@ -1470,6 +1476,16 @@ class CodexAppServer {
       this.account = params.authMode ? { type: params.authMode, planType: params.planType ?? null } : null;
       return;
     }
+    // App-server streams turn/* and item/* events throughout an active turn.
+    // Any event scoped to this turn is evidence that Codex is still working,
+    // including reasoning deltas and token-usage updates that this bridge does
+    // not otherwise need to render.
+    const notifiedTurnId = params.turnId ?? params.turn?.id;
+    let activeTurn = notifiedTurnId ? this.turns.get(notifiedTurnId) : null;
+    if (!activeTurn && params.threadId) {
+      activeTurn = [...this.turns.values()].find((turn) => turn.threadId === params.threadId);
+    }
+    if (activeTurn && message.method !== 'turn/completed') activeTurn.touch();
     if (message.method === 'item/completed' && params.item?.type === 'agentMessage') {
       const turn = this.turns.get(params.turnId);
       if (turn) turn.messages.push(params.item.text ?? '');
@@ -1507,7 +1523,7 @@ class CodexAppServer {
     }
   }
 
-  async runTurn(params) {
+  async runTurn(params, { taskLabel = 'Codex task' } = {}) {
     let result;
     try {
       result = await this.call('turn/start', params, 30000);
@@ -1522,19 +1538,46 @@ class CodexAppServer {
     const turnId = result.turn?.id;
     if (!turnId) throw new Error('Codex did not return a turn id.');
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      let idleTimer;
+      let hardTimer;
+      let settled = false;
+      const clearTimers = () => {
+        clearTimeout(idleTimer);
+        clearTimeout(hardTimer);
+      };
+      const interruptAndReject = (error) => {
+        if (settled) return;
+        settled = true;
         this.turns.delete(turnId);
-        // Do not leave a provider retry consuming the local subscription after
-        // the reader has already reported a timeout. Interruption is best-effort
-        // because older app-server builds may finish between these two calls.
+        clearTimers();
         void this.call('turn/interrupt', { threadId: params.threadId, turnId }, 10000).catch(() => {});
-        reject(new Error(`Codex analysis exceeded the ${Math.round(CODEX_TURN_TIMEOUT_MS / 60_000)}-minute local wait limit.`));
-      }, CODEX_TURN_TIMEOUT_MS);
-      this.turns.set(turnId, {
+        reject(error);
+      };
+      const idleTimeout = () => interruptAndReject(new Error(`${taskLabel} received no Codex progress for ${Math.round(this.turnIdleTimeoutMs / 60_000)} minutes and was interrupted.`));
+      const touch = () => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(idleTimeout, this.turnIdleTimeoutMs);
+      };
+      const turn = {
+        threadId: params.threadId,
         messages: [],
-        resolve: (value) => { clearTimeout(timer); resolve(value); },
-        reject: (error) => { clearTimeout(timer); reject(error); },
-      });
+        touch,
+        resolve: (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimers();
+          resolve(value);
+        },
+        reject: (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimers();
+          reject(error);
+        },
+      };
+      this.turns.set(turnId, turn);
+      touch();
+      hardTimer = setTimeout(() => interruptAndReject(new Error(`${taskLabel} reached the ${Math.round(this.turnHardTimeoutMs / 60_000)}-minute safety limit and was interrupted.`)), this.turnHardTimeoutMs);
     });
   }
 
@@ -1559,7 +1602,7 @@ class CodexAppServer {
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'readOnly', networkAccess: true },
       outputSchema: makeAuditSchema(),
-    });
+    }, { taskLabel: 'AI audit' });
     return { threadId, ...output };
   }
 

@@ -28,6 +28,16 @@ function mockServer(handler) {
   return { server, calls };
 }
 
+function mockTimedServer({ idle = 80, hard = 320 } = {}) {
+  const server = new CodexAppServer({ turnIdleTimeoutMs: idle, turnHardTimeoutMs: hard });
+  const calls = [];
+  server.call = async (method, request) => {
+    calls.push({ method, request });
+    return method === 'turn/start' ? { turn: { id: 'reply' } } : {};
+  };
+  return { server, calls };
+}
+
 function complete(server, status = 'completed', error) {
   setImmediate(() => server.handleNotification({ method: 'turn/completed', params: { turn: { id: 'reply', status, error, items: [{ type: 'agentMessage', text: 'The original audit is still in context.' }] } } }));
   return { turn: { id: 'reply' } };
@@ -95,4 +105,32 @@ test('a failed accepted turn is never replayed', async () => {
   const { server, calls } = mockServer((method, request, instance) => complete(instance, 'failed', { message: archived().message }));
   await assert.rejects(server.runTurn(params), /is archived/);
   assert.equal(calls.length, 1);
+});
+
+test('active turn notifications extend the inactivity watchdog', async () => {
+  const { server, calls } = mockTimedServer({ idle: 200, hard: 1_200 });
+  const reply = server.runTurn(params, { taskLabel: 'AI audit' });
+  const progress = setInterval(() => server.handleNotification({ method: 'item/reasoning/summaryTextDelta', params: { threadId, turnId: 'reply', delta: '.' } }), 40);
+  await new Promise(resolve => setTimeout(resolve, 520));
+  clearInterval(progress);
+  server.handleNotification({ method: 'turn/completed', params: { turn: { id: 'reply', status: 'completed', items: [{ type: 'agentMessage', text: 'Long audit completed.' }] } } });
+  assert.equal((await reply).text, 'Long audit completed.');
+  assert.equal(calls.some(call => call.method === 'turn/interrupt'), false);
+});
+
+test('an inactive turn is interrupted after its idle limit', async () => {
+  const { server, calls } = mockTimedServer({ idle: 100, hard: 800 });
+  await assert.rejects(server.runTurn(params, { taskLabel: 'AI audit' }), /no Codex progress/);
+  assert.equal(calls.filter(call => call.method === 'turn/interrupt').length, 1);
+});
+
+test('the hard safety limit still stops a continuously active turn', async () => {
+  const { server, calls } = mockTimedServer({ idle: 200, hard: 600 });
+  const progress = setInterval(() => server.handleNotification({ method: 'thread/tokenUsage/updated', params: { threadId } }), 40);
+  try {
+    await assert.rejects(server.runTurn(params, { taskLabel: 'AI audit' }), /safety limit/);
+  } finally {
+    clearInterval(progress);
+  }
+  assert.equal(calls.filter(call => call.method === 'turn/interrupt').length, 1);
 });
