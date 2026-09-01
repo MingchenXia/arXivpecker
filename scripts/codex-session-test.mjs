@@ -20,6 +20,20 @@ test('concurrent callers wait for the app-server initialization handshake', asyn
   assert.equal(ready, true);
 });
 
+test('a failed app-server child is terminated without harming its replacement', () => {
+  const server = new CodexAppServer();
+  let failedKills = 0;
+  const failed = { killed: false, kill: () => { failedKills += 1; failed.killed = true; } };
+  server.process = failed;
+  server.stopWithError(new Error('initialize timed out.'), failed);
+  assert.equal(failedKills, 1);
+  assert.equal(server.process, null);
+  const replacement = { killed: false, kill: () => assert.fail('A stale exit must not kill the replacement.') };
+  server.process = replacement;
+  server.stopWithError(new Error('stale child exited'), failed);
+  assert.equal(server.process, replacement);
+});
+
 function mockServer(handler) {
   const server = new CodexAppServer();
   const calls = [];

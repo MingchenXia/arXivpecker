@@ -19,6 +19,7 @@ const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
 // genuinely wedged local Codex process cannot consume the subscription forever.
 const CODEX_TURN_IDLE_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_TURN_IDLE_TIMEOUT_MS || process.env.CODEX_TURN_TIMEOUT_MS) || 30 * 60 * 1000);
 const CODEX_TURN_HARD_TIMEOUT_MS = Math.max(CODEX_TURN_IDLE_TIMEOUT_MS, Number(process.env.CODEX_TURN_HARD_TIMEOUT_MS) || 2 * 60 * 60 * 1000);
+const CODEX_STARTUP_RPC_TIMEOUT_MS = Math.max(30_000, Number(process.env.CODEX_STARTUP_RPC_TIMEOUT_MS) || 60_000);
 
 function decodeSourceBuffer(payload) {
   const utf8 = Buffer.from(payload).toString('utf8');
@@ -1389,25 +1390,25 @@ class CodexAppServer {
       const child = spawn('codex', ['app-server'], { cwd: WORKDIR, stdio: ['pipe', 'pipe', 'pipe'] });
       this.process = child;
       const lines = createInterface({ input: child.stdout });
-      const startupTimeout = setTimeout(() => reject(new Error('Codex app-server did not start within 20 seconds.')), 20000);
+      const startupTimeout = setTimeout(() => reject(new Error('Codex app-server did not finish its local startup checks.')), CODEX_STARTUP_RPC_TIMEOUT_MS * 2 + 5_000);
 
       lines.on('line', (line) => this.handleLine(line));
       child.stderr.on('data', (chunk) => {
         const text = String(chunk).trim();
         if (text) console.error(`[proofroom-codex] ${text}`);
       });
-      child.on('error', (error) => this.stopWithError(error));
-      child.on('exit', (code) => this.stopWithError(new Error(`Codex app-server exited (${code ?? 'unknown'}).`)));
+      child.on('error', (error) => this.stopWithError(error, child));
+      child.on('exit', (code) => this.stopWithError(new Error(`Codex app-server exited (${code ?? 'unknown'}).`), child));
 
       (async () => {
         try {
           await this.call('initialize', {
             clientInfo: { name: 'arxivpecker_local_reader', title: 'arXivpecker local reader', version: '0.2.0' },
-          }, 18000);
+          }, CODEX_STARTUP_RPC_TIMEOUT_MS);
           this.notify('initialized', {});
           const [accountResult, modelsResult] = await Promise.all([
-            this.call('account/read', { refreshToken: false }, 18000),
-            this.call('model/list', { limit: 50 }, 18000),
+            this.call('account/read', { refreshToken: false }, CODEX_STARTUP_RPC_TIMEOUT_MS),
+            this.call('model/list', { limit: 50 }, CODEX_STARTUP_RPC_TIMEOUT_MS),
           ]);
           this.account = accountResult.account ?? null;
           this.models = modelsResult.data ?? modelsResult.models ?? [];
@@ -1425,7 +1426,11 @@ class CodexAppServer {
     return this.starting;
   }
 
-  stopWithError(error) {
+  stopWithError(error, sourceProcess = this.process) {
+    // An exit event from an older failed child can arrive after a replacement
+    // has started. It must never tear down that healthy replacement.
+    if (sourceProcess && sourceProcess !== this.process) return;
+    const failedProcess = this.process;
     this.lastError = error instanceof Error ? error.message : String(error);
     for (const { reject, timer } of this.pending.values()) { clearTimeout(timer); reject(error); }
     this.pending.clear();
@@ -1433,6 +1438,7 @@ class CodexAppServer {
     this.turns.clear();
     this.loadedThreads.clear();
     this.process = null;
+    if (failedProcess && !failedProcess.killed && typeof failedProcess.kill === 'function') failedProcess.kill();
   }
 
   write(message) {
