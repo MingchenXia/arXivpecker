@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { ar5ivFigureUrl, extractSourceUnits, readableLatex, resolveLatexReferences } from './codex-bridge.mjs';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { ar5ivFigureUrl, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences } from './codex-bridge.mjs';
 
 const source = String.raw`\documentclass{article}
 \usepackage{amsmath}
@@ -23,6 +26,60 @@ assert.ok(resolved.includes(String.raw`\begin{verbatim}\ref{thm:key}\end{verbati
 const theorem = extractSourceUnits(resolved)[0];
 assert.equal(theorem.printedNumber, '1.1');
 assert.match(theorem.statement, /Equation \(1\.1\) implies the claim\./);
+
+const sharedSectionSource = String.raw`\newtheorem{claim}[section]{Claim}
+\begin{document}
+\section{First}
+\begin{claim}First claim.\end{claim}
+\begin{claim}Second claim.\end{claim}
+\section{Second}
+\begin{claim}Third claim.\end{claim}
+\end{document}`;
+assert.deepEqual(extractSourceUnits(sharedSectionSource).map((unit) => unit.printedNumber), ['1', '1', '2'], 'A theorem sharing the section counter must display the current section number without incrementing it.');
+
+const nestedCounterSource = String.raw`\newtheorem{lemma}{Lemma}[subsection]
+\begin{document}
+\section{Setup}\subsection{First}
+\begin{lemma}Nested one.\end{lemma}
+\begin{lemma}Nested two.\end{lemma}
+\subsection{Second}
+\begin{lemma}Nested three.\end{lemma}
+\end{document}`;
+assert.deepEqual(extractSourceUnits(nestedCounterSource).map((unit) => unit.printedNumber), ['1.1.1', '1.1.2', '1.2.1'], 'Theorem counters scoped to subsections must retain the full structural number.');
+
+const sharedTheoremSource = String.raw`\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem*{remark}{Remark}
+\section{Setup}
+\begin{theorem}First result.\end{theorem}
+\begin{proposition}Shared result.\end{proposition}
+\begin{remark}Unnumbered note.\end{remark}`;
+assert.deepEqual(extractSourceUnits(sharedTheoremSource).map((unit) => unit.printedNumber), ['1.1', '1.2', ''], 'Shared theorem counters and starred unnumbered environments must retain their LaTeX semantics.');
+
+const longSource = `${String.raw`\newtheorem{observation}{Observation}[section]\begin{document}`}${Array.from({ length: 320 }, (_, index) => `${index % 80 === 0 ? `\\section{Part ${index / 80 + 1}}` : ''}\\begin{observation}Long-form source item ${index + 1}.\\end{observation}`).join('')}\\end{document}`;
+const longUnits = extractSourceUnits(longSource);
+assert.equal(longUnits.length, 320, 'Long papers must retain every extracted result.');
+assert.equal(longUnits.at(-1)?.printedNumber, '4.80', 'Long papers must reset section-scoped counters at section boundaries.');
+
+const sourceRoot = await mkdtemp(path.join(tmpdir(), 'arxivpecker-reader-'));
+try {
+  await mkdir(path.join(sourceRoot, 'chapters'));
+  await writeFile(path.join(sourceRoot, 'main.tex'), String.raw`\begin{document}
+\input{chapters/intro}
+% \input{chapters/ignored}
+\begin{verbatim}\input{chapters/literal}\end{verbatim}
+\end{document}`);
+  await writeFile(path.join(sourceRoot, 'chapters/intro.tex'), 'Included chapter text.');
+  await writeFile(path.join(sourceRoot, 'chapters/ignored.tex'), 'This commented chapter must stay excluded.');
+  await writeFile(path.join(sourceRoot, 'chapters/literal.tex'), 'This literal TeX example must stay excluded.');
+  const expanded = await readExpandedTex(path.join(sourceRoot, 'main.tex'), sourceRoot);
+  assert.match(expanded, /Included chapter text\./);
+  assert.doesNotMatch(expanded, /commented chapter must stay excluded|literal TeX example must stay excluded/);
+  assert.match(expanded, /% \\input\{chapters\/ignored\}/, 'Commented input commands must remain source text, not expanded content.');
+  assert.match(expanded, /\\begin\{verbatim\}\\input\{chapters\/literal\}/, 'Literal TeX examples must remain source text, not expanded content.');
+} finally {
+  await rm(sourceRoot, { recursive: true, force: true });
+}
 
 const figureUnit = extractSourceUnits(String.raw`\newtheorem{example}{Example}\begin{example}% \includegraphics{discarded.png}
 \includegraphics{kept.pdf}\end{example}`)[0];

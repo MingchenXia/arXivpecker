@@ -268,14 +268,26 @@ async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 
   seen.add(entryFile);
   let source = decodeSourceBuffer(await readFile(entryFile));
   const include = /\\(?:input|include)\s*\{([^}]+)\}/g;
+  const literalRanges = literalSourceRanges(source);
+  const isCommentedInput = (index) => {
+    for (let cursor = index - 1; cursor >= 0 && source[cursor] !== '\n' && source[cursor] !== '\r'; cursor -= 1) {
+      if (source[cursor] !== '%') continue;
+      let slashes = 0;
+      for (let previous = cursor - 1; previous >= 0 && source[previous] === '\\'; previous -= 1) slashes += 1;
+      return slashes % 2 === 0;
+    }
+    return false;
+  };
   let expanded = ''; let cursor = 0;
   for (const match of source.matchAll(include)) {
+    const start = match.index ?? 0;
+    if (insideSourceRanges(start, literalRanges) || isCommentedInput(start)) continue;
     expanded += source.slice(cursor, match.index);
     const requested = match[1].trim();
     const candidate = path.resolve(path.dirname(entryFile), /\.[A-Za-z0-9]+$/.test(requested) ? requested : `${requested}.tex`);
     try { expanded += await readExpandedTex(candidate, sourceRoot, seen, depth + 1); }
     catch { expanded += `\n% arXivpecker could not resolve ${requested}\n`; }
-    cursor = (match.index ?? 0) + match[0].length;
+    cursor = start + match[0].length;
   }
   expanded += source.slice(cursor);
   return expanded;
@@ -779,7 +791,27 @@ function extractSourceUnits(source) {
   const unitPattern = new RegExp(`\\\\begin\\{(${names})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
   const proofNames = [...proofEnvironments].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const embeddedProofPattern = new RegExp(`\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
-  const sectionStarts = [...normalizedSource.matchAll(/\\section(?!\*)\s*(?:\[[^\]]*\])?\s*\{/g)].filter((match) => !insideSourceRanges(match.index ?? 0, literalRanges)).map((match) => match.index ?? 0);
+  const headingLevels = { part: 0, chapter: 1, section: 2, subsection: 3, subsubsection: 4 };
+  const headingEvents = [];
+  const headingCounters = [0, 0, 0, 0, 0];
+  const headingPattern = /\\(part|chapter|section|subsection|subsubsection)(?!\*)\s*(?:\[[^\]]*\])?\s*\{/g;
+  for (const match of normalizedSource.matchAll(headingPattern)) {
+    const start = match.index ?? 0;
+    if (insideSourceRanges(start, literalRanges)) continue;
+    const level = headingLevels[match[1]];
+    headingCounters[level] += 1;
+    for (let index = level + 1; index < headingCounters.length; index += 1) headingCounters[index] = 0;
+    headingEvents.push({ start, counters: [...headingCounters] });
+  }
+  const structuralCounterNumber = (counterName, position) => {
+    const level = headingLevels[counterName];
+    if (level === undefined) return '';
+    const state = headingEvents.filter((event) => event.start < position).at(-1)?.counters || headingCounters.map(() => 0);
+    if (!state[level]) return '0';
+    if (counterName === 'part' || counterName === 'chapter') return String(state[level]);
+    const first = state[1] ? 1 : 2;
+    return state.slice(first, level + 1).filter(Boolean).join('.') || '0';
+  };
   const counterValues = new Map();
   const units = [];
   for (const match of normalizedSource.matchAll(unitPattern)) {
@@ -788,7 +820,7 @@ function extractSourceUnits(source) {
     const label = /\\label\s*\{([^}]+)\}/.exec(match[3])?.[1] || '';
     const embeddedProofs = [...match[3].matchAll(embeddedProofPattern)];
     const statementSource = match[3].replace(embeddedProofPattern, '');
-    const counter = theoremCounters.get(match[1]); const owner = theoremCounters.get(counter?.root) || counter; const sectionNumber = sectionStarts.filter((sectionStart) => sectionStart < start).length; const scope = owner?.within === 'section' ? sectionNumber : 0; const counterKey = `${counter?.root || match[1]}:${scope}`; const nextNumber = (counterValues.get(counterKey) || 0) + 1; if (counter?.numbered !== false) counterValues.set(counterKey, nextNumber); const printedNumber = counter?.numbered === false ? '' : owner?.within === 'section' ? `${sectionNumber}.${nextNumber}` : `${nextNumber}`;
+    const counter = theoremCounters.get(match[1]); const owner = theoremCounters.get(counter?.root) || counter; const sharedStructuralCounter = counter?.root && headingLevels[counter.root] !== undefined ? counter.root : ''; const withinStructuralCounter = owner?.within && headingLevels[owner.within] !== undefined ? owner.within : ''; const scopeNumber = withinStructuralCounter ? structuralCounterNumber(withinStructuralCounter, start) : ''; const counterKey = `${counter?.root || match[1]}:${scopeNumber || 'global'}`; const nextNumber = (counterValues.get(counterKey) || 0) + 1; if (counter?.numbered !== false && !sharedStructuralCounter) counterValues.set(counterKey, nextNumber); const printedNumber = counter?.numbered === false ? '' : sharedStructuralCounter ? structuralCounterNumber(sharedStructuralCounter, start) : withinStructuralCounter ? `${scopeNumber}.${nextNumber}` : `${nextNumber}`;
     units.push({ environment: match[1], kind: environments.get(match[1]), displayName: displayNames.get(match[1]) || readableLatex(match[1]), printedNumber, title: match[2] || '', texLabel: label, start, end, statement: readableLatex(statementSource), proofText: embeddedProofs.map((proof) => readableLatex(proof[3])).filter(Boolean).join('\n\n'), assetPaths: graphicPaths(statementSource), proofAssetPaths: embeddedProofs.flatMap((proof) => graphicPaths(proof[3])), embeddedProof: embeddedProofs.length > 0, citationMentions: citationMentions(`${match[2] || ''} ${match[3]}`), citationKeys: citationKeys(`${match[2] || ''} ${match[3]}`) });
   }
   const byLabel = new Map(units.filter((unit) => unit.texLabel).map((unit) => [unit.texLabel, unit]));
