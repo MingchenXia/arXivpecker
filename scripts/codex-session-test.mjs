@@ -69,6 +69,26 @@ test('archived audit resumes in the same thread without creating a blank session
   assert.equal(calls.length, 3, 'Already loaded threads are reused.');
 });
 
+test('a checkpointed audit reuses its saved thread and asks for one complete replacement audit', async () => {
+  const resumedThread = 'checkpointed-audit-thread';
+  const { server, calls } = mockServer((method, request, instance) => {
+    if (method === 'turn/start') return complete(instance);
+    return {};
+  });
+  let checkpointed = '';
+  const result = await server.analyze({
+    paper: { title: 'Checkpointed paper', authors: 'Reader', arxivId: '2601.12345', abstract: '' },
+    profile: { level: 'Graduate student', areas: ['math.AG'], goal: 'Understand proofs', reasoning: 'xhigh' },
+    resumeThreadId: resumedThread,
+    onThreadReady: async (threadId) => { checkpointed = threadId; },
+  });
+  assert.equal(result.threadId, resumedThread);
+  assert.equal(checkpointed, resumedThread);
+  assert.deepEqual(calls.map((call) => call.method), ['thread/resume', 'turn/start']);
+  assert.match(calls[1].request.input[0].text, /RESUME SAVED AUDIT/);
+  assert.doesNotMatch(calls.map((call) => call.method).join(','), /thread\/start/);
+});
+
 test('a cached thread archived by another client recovers at turn/start', async () => {
   let starts = 0;
   const { server, calls } = mockServer((method, request, instance) => {

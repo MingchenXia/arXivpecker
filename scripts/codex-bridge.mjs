@@ -1275,7 +1275,7 @@ function makeVersionComparisonSchema() {
   };
 }
 
-function auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit = true, detailedAudit = true, updateContext = null }) {
+function auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit = true, detailedAudit = true, updateContext = null, continuation = false }) {
   const libraryContext = localInventory.length
     ? JSON.stringify(localInventory, null, 2)
     : 'No other audited papers are available in the local vault yet.';
@@ -1307,6 +1307,9 @@ Read that local LaTeX document first, but treat the original PDF at https://arxi
   const versionInstructions = updateContext
     ? `VERSION UPDATE CONTEXT: This paper is replacing an earlier locally audited arXiv version. Read and audit the new primary source independently, then use this compact comparison only to make sure changed assumptions, results, proofs, notation, citations, and downstream dependencies receive special scrutiny. Do not copy stale statements or proof text from the previous audit. Do not discard a new source unit merely because it has no predecessor.\n${JSON.stringify(updateContext, null, 2)}`
     : '';
+  const continuationInstructions = continuation
+    ? `RESUME SAVED AUDIT: This is a continuation of an unfinished audit in this same Codex thread. Keep the primary-source work already completed in this conversation, then continue from any sections, citations, proof checks, or JSON fields that remain incomplete. Return one complete replacement audit JSON document for the whole paper, not a progress note or a partial delta. Do not start a new audit thread or discard verified work merely because this turn resumed after a browser or computer restart.`
+    : '';
   return `You are arXivpecker's mathematical-paper audit engine. Work for a ${profile.level} interested in ${profile.areas.join(', ')}, whose goal is "${profile.goal}".
 
 FIRST: Read the WHOLE primary source before making a guide. Inspect the introduction, every section heading, all named definitions, assumptions, propositions, lemmas, theorems, corollaries, conjectures, and the proof architecture. Do not use only the abstract. If full text is unavailable, report partial-text-read or blocked and do not invent missing mathematical statements.
@@ -1333,6 +1336,8 @@ ${correctnessInstructions}
 ${depthInstructions}
 
 ${versionInstructions}
+
+${continuationInstructions}
 
 The proofSketch is a separate short AI explanation of the proof route; it never substitutes for the complete source proof shown to the reader.
 
@@ -1630,22 +1635,27 @@ class CodexAppServer {
     });
   }
 
-  async analyze({ paper, profile, localInventory = [], primarySource = null, correctnessAudit = true, detailedAudit = true, updateContext = null }) {
+  async analyze({ paper, profile, localInventory = [], primarySource = null, correctnessAudit = true, detailedAudit = true, updateContext = null, resumeThreadId = '', onThreadReady = null }) {
     await this.start();
     const model = profile.model || this.models.find((item) => item.isDefault)?.model || undefined;
-    const created = await this.call('thread/start', {
-      model,
-      cwd: WORKDIR,
-      approvalPolicy: 'never',
-      sandbox: 'read-only',
-      developerInstructions: 'You are a mathematical reading assistant. Do not modify any files. Primary-source accuracy is more important than speed.',
-    });
-    const threadId = created.thread?.id;
-    if (!threadId) throw new Error('Codex did not create an analysis thread.');
-    this.loadedThreads.add(threadId);
+    let threadId = String(resumeThreadId || '');
+    if (threadId) await this.resumeThread(threadId);
+    else {
+      const created = await this.call('thread/start', {
+        model,
+        cwd: WORKDIR,
+        approvalPolicy: 'never',
+        sandbox: 'read-only',
+        developerInstructions: 'You are a mathematical reading assistant. Do not modify any files. Primary-source accuracy is more important than speed.',
+      });
+      threadId = created.thread?.id;
+      if (!threadId) throw new Error('Codex did not create an analysis thread.');
+      this.loadedThreads.add(threadId);
+    }
+    if (onThreadReady) await onThreadReady(threadId);
     const output = await this.runTurn({
       threadId,
-      input: [{ type: 'text', text: auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit, detailedAudit, updateContext }), text_elements: [] }],
+      input: [{ type: 'text', text: auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit, detailedAudit, updateContext, continuation: Boolean(resumeThreadId) }), text_elements: [] }],
       model,
       effort: profile.reasoning,
       approvalPolicy: 'never',
@@ -1764,9 +1774,20 @@ class CodexAppServer {
 const codex = new CodexAppServer();
 const threadQueues = new Map();
 let vaultMutationQueue = Promise.resolve();
+const activeAuditPaperIds = new Set();
 
 function validatePaper(value) {
   return value && typeof value.title === 'string' && typeof value.arxivId === 'string' && typeof value.abstract === 'string';
+}
+
+async function vaultSnapshotWithAuditStatus() {
+  const snapshot = await vault.snapshot();
+  const auditJobs = Object.fromEntries(Object.entries(snapshot.auditJobs ?? {}).map(([paperId, job]) => {
+    const active = activeAuditPaperIds.has(paperId);
+    const state = active ? 'running' : ['preparing', 'running'].includes(job.state) ? 'paused' : job.state;
+    return [paperId, { ...job, state }];
+  }));
+  return { ...snapshot, auditJobs };
 }
 
 function normalizeProfile(value) {
@@ -1929,7 +1950,7 @@ const server = createServer(async (request, response) => {
       response.writeHead(200, { 'Content-Type': asset.mime, 'Cache-Control': 'private, max-age=3600', ...(origin && isAllowedOrigin(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) });
       return response.end(asset.payload);
     }
-    if (request.method === 'GET' && pathname === '/vault') return sendJson(response, 200, await vault.snapshot(), origin);
+    if (request.method === 'GET' && pathname === '/vault') return sendJson(response, 200, await vaultSnapshotWithAuditStatus(), origin);
     if (request.method === 'GET' && pathname === '/cloud/status') return sendJson(response, 200, await cloudStatus(vault), origin);
     if (request.method === 'GET' && pathname === '/vault/graph') {
       const snapshot = await vault.snapshot();
@@ -1983,7 +2004,7 @@ const server = createServer(async (request, response) => {
     if (pathname === '/vault/paper' || pathname === '/vault/paper/update') return sendJson(response, 200, { paper: await enqueueVaultMutation(() => vault.upsertPaper(body.paper)) }, origin);
     if (pathname === '/vault/audit') {
       if (!body.audit || !Array.isArray(body.audit.nodes)) return sendJson(response, 400, { error: 'A structured audit is required.' }, origin);
-      const saved = await enqueueVaultMutation(async () => { const paper = await vault.saveAudit(body.paper, body.audit); const snapshot = await vault.snapshot(); return { paper, graph: snapshot.graph, links: snapshot.links }; });
+      const saved = await enqueueVaultMutation(async () => { const paper = await vault.saveAudit(body.paper, body.audit); await vault.completeAuditJob(paper.id); const snapshot = await vault.snapshot(); return { paper, graph: snapshot.graph, links: snapshot.links }; });
       return sendJson(response, 200, saved, origin);
     }
     const profile = normalizeProfile(body.profile);
@@ -2001,29 +2022,41 @@ const server = createServer(async (request, response) => {
       }
       if (pathname === '/analyze') {
         const paper = { ...body.paper, id: String(body.paper.id) }; await vault.recordFor(paper.id);
-        const localInventory = await vault.compactInventory();
-        let primarySource;
+        const checkpointing = !body.updateMode;
+        if (checkpointing && activeAuditPaperIds.has(paper.id)) throw new Error('An AI audit for this paper is already running. Wait for it to finish or reload the page to see its saved status.');
+        const requestedOptions = { convertPdfToLatex: Boolean(body.convertPdfToLatex), correctnessAudit: body.correctnessAudit !== false, detailedAudit: body.detailedAudit !== false };
+        const auditJob = checkpointing ? await vault.startAuditJob(paper.id, requestedOptions, { resume: Boolean(body.resumeAudit) }) : null;
+        if (checkpointing) activeAuditPaperIds.add(paper.id);
         try {
-          primarySource = await acquireArxivSource(paper, paper.arxivId, Boolean(body.updateMode));
-          if (!body.updateMode) await vault.saveSourceRecord(paper.id, { analysisFormat: 'tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.fetchedAt });
-          if (primarySource.kind === 'uploaded-pdf' && body.convertPdfToLatex) {
-            const converted = await codex.convertPdfToLatex({ paper, profile, pdfPath: primarySource.entryFile });
-            primarySource = await saveAiLatexSource(paper, converted);
-            const sourceRoot = await vault.sourceDirectory(paper.id);
-            await writeSourceManifest(path.join(sourceRoot, 'proofroom-uploaded-source.json'), primarySource);
-            await vault.saveSourceRecord(paper.id, { analysisFormat: 'ai-tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.convertedAt, sourceError: 'Reader-supplied PDF converted to an editable LaTeX working source.' });
+          const localInventory = await vault.compactInventory();
+          let primarySource;
+          try {
+            primarySource = await acquireArxivSource(paper, paper.arxivId, Boolean(body.updateMode));
+            if (!body.updateMode) await vault.saveSourceRecord(paper.id, { analysisFormat: 'tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.fetchedAt });
+            if (primarySource.kind === 'uploaded-pdf' && body.convertPdfToLatex) {
+              const converted = await codex.convertPdfToLatex({ paper, profile, pdfPath: primarySource.entryFile });
+              primarySource = await saveAiLatexSource(paper, converted);
+              const sourceRoot = await vault.sourceDirectory(paper.id);
+              await writeSourceManifest(path.join(sourceRoot, 'proofroom-uploaded-source.json'), primarySource);
+              await vault.saveSourceRecord(paper.id, { analysisFormat: 'ai-tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.convertedAt, sourceError: 'Reader-supplied PDF converted to an editable LaTeX working source.' });
+            }
+          } catch (error) {
+            primarySource = { kind: 'pdf', error: error instanceof Error ? error.message : 'TeX source unavailable' };
+            if (body.convertPdfToLatex) {
+              const converted = await codex.convertPdfToLatex({ paper, profile });
+              primarySource = await saveAiLatexSource(paper, converted);
+              await vault.saveSourceRecord(paper.id, { analysisFormat: 'ai-tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.convertedAt, sourceError: 'Author TeX unavailable; saved AI transcription from the primary PDF.' });
+            } else if (!body.updateMode) await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
           }
+          const analyzed = await codex.analyze({ paper, profile, primarySource, correctnessAudit: body.correctnessAudit !== false, detailedAudit: body.detailedAudit !== false, localInventory: localInventory.filter((item) => item.paperId !== paper.id), updateContext: body.updateContext ?? null, resumeThreadId: auditJob?.threadId ?? '', onThreadReady: checkpointing ? async (threadId) => vault.saveAuditJob(paper.id, { state: 'running', threadId, message: 'AI audit in progress. This thread can be resumed after a restart.' }) : null });
+          const text = primarySource.kind === 'tex' || primarySource.kind === 'ai-tex' ? await enrichAuditFromTex(analyzed.text, primarySource) : analyzed.text;
+          return { ...analyzed, text, paper, primarySource: { kind: primarySource.kind, fileCount: primarySource.fileCount ?? 0, cached: Boolean(primarySource.cached), error: primarySource.error ?? null }, ...(body.updateMode ? { sourceRecord: { analysisFormat: primarySource.kind === 'tex' ? 'tex' : primarySource.kind, sourceDirectory: primarySource.sourceDirectory ?? '', mainTex: primarySource.entryFile ?? '', sourceFetchedAt: primarySource.fetchedAt ?? primarySource.convertedAt ?? new Date().toISOString(), sourceError: primarySource.error ?? '' } } : {}) };
         } catch (error) {
-          primarySource = { kind: 'pdf', error: error instanceof Error ? error.message : 'TeX source unavailable' };
-          if (body.convertPdfToLatex) {
-            const converted = await codex.convertPdfToLatex({ paper, profile });
-            primarySource = await saveAiLatexSource(paper, converted);
-            await vault.saveSourceRecord(paper.id, { analysisFormat: 'ai-tex', sourceDirectory: primarySource.sourceDirectory, mainTex: primarySource.entryFile, sourceFetchedAt: primarySource.convertedAt, sourceError: 'Author TeX unavailable; saved AI transcription from the primary PDF.' });
-          } else if (!body.updateMode) await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
+          if (checkpointing) await vault.pauseAuditJob(paper.id, error instanceof Error ? error.message : 'The audit was interrupted.');
+          throw error;
+        } finally {
+          if (checkpointing) activeAuditPaperIds.delete(paper.id);
         }
-        const analyzed = await codex.analyze({ paper, profile, primarySource, correctnessAudit: body.correctnessAudit !== false, detailedAudit: body.detailedAudit !== false, localInventory: localInventory.filter((item) => item.paperId !== paper.id), updateContext: body.updateContext ?? null });
-        const text = primarySource.kind === 'tex' || primarySource.kind === 'ai-tex' ? await enrichAuditFromTex(analyzed.text, primarySource) : analyzed.text;
-        return { ...analyzed, text, paper, primarySource: { kind: primarySource.kind, fileCount: primarySource.fileCount ?? 0, cached: Boolean(primarySource.cached), error: primarySource.error ?? null }, ...(body.updateMode ? { sourceRecord: { analysisFormat: primarySource.kind === 'tex' ? 'tex' : primarySource.kind, sourceDirectory: primarySource.sourceDirectory ?? '', mainTex: primarySource.entryFile ?? '', sourceFetchedAt: primarySource.fetchedAt ?? primarySource.convertedAt ?? new Date().toISOString(), sourceError: primarySource.error ?? '' } } : {}) };
       }
       if (pathname === '/paper-question') {
         if (!body.threadId || typeof body.question !== 'string') throw new Error('threadId and a question are required.');

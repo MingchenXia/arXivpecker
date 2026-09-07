@@ -263,6 +263,74 @@ export class PaperVault {
     return storedPaper;
   }
 
+  async auditJob(paperId) {
+    const record = await this.recordFor(paperId);
+    const job = await readJson(path.join(this.paperDirectory(record), 'audit-progress.json'), null);
+    if (!job || typeof job !== 'object') return null;
+    const states = new Set(['preparing', 'running', 'paused', 'completed']);
+    return {
+      version: 1,
+      paperId: String(paperId),
+      state: states.has(job.state) ? job.state : 'paused',
+      threadId: typeof job.threadId === 'string' ? job.threadId : '',
+      options: {
+        convertPdfToLatex: Boolean(job.options?.convertPdfToLatex),
+        correctnessAudit: job.options?.correctnessAudit !== false,
+        detailedAudit: job.options?.detailedAudit !== false,
+      },
+      attempts: Number.isFinite(job.attempts) ? Math.max(0, Math.floor(job.attempts)) : 0,
+      startedAt: typeof job.startedAt === 'string' ? job.startedAt : '',
+      updatedAt: typeof job.updatedAt === 'string' ? job.updatedAt : '',
+      message: typeof job.message === 'string' ? job.message : '',
+    };
+  }
+
+  async saveAuditJob(paperId, update) {
+    const record = await this.recordFor(paperId);
+    const previous = await this.auditJob(paperId);
+    const now = new Date().toISOString();
+    const states = new Set(['preparing', 'running', 'paused', 'completed']);
+    const options = update?.options && typeof update.options === 'object' ? update.options : previous?.options ?? {};
+    const job = {
+      version: 1,
+      paperId: String(paperId),
+      state: states.has(update?.state) ? update.state : previous?.state ?? 'paused',
+      threadId: typeof update?.threadId === 'string' ? update.threadId : previous?.threadId ?? '',
+      options: {
+        convertPdfToLatex: Boolean(options.convertPdfToLatex),
+        correctnessAudit: options.correctnessAudit !== false,
+        detailedAudit: options.detailedAudit !== false,
+      },
+      attempts: Number.isFinite(update?.attempts) ? Math.max(0, Math.floor(update.attempts)) : previous?.attempts ?? 0,
+      startedAt: typeof update?.startedAt === 'string' && update.startedAt ? update.startedAt : previous?.startedAt || now,
+      updatedAt: now,
+      message: typeof update?.message === 'string' ? update.message.slice(0, 4000) : previous?.message ?? '',
+    };
+    await writeJson(path.join(this.paperDirectory(record), 'audit-progress.json'), job);
+    return job;
+  }
+
+  async startAuditJob(paperId, options, { resume = false } = {}) {
+    const previous = await this.auditJob(paperId);
+    const reusingThread = Boolean(resume && previous?.threadId);
+    return this.saveAuditJob(paperId, {
+      state: 'preparing',
+      threadId: reusingThread ? previous.threadId : '',
+      options: resume && previous?.options ? previous.options : options,
+      attempts: (previous?.attempts ?? 0) + 1,
+      startedAt: previous?.startedAt || new Date().toISOString(),
+      message: reusingThread ? 'Resuming the saved Codex audit thread.' : 'Preparing the primary source for an AI audit.',
+    });
+  }
+
+  async pauseAuditJob(paperId, message) {
+    return this.saveAuditJob(paperId, { state: 'paused', message: String(message || 'The audit was paused and can be resumed.') });
+  }
+
+  async completeAuditJob(paperId) {
+    return this.saveAuditJob(paperId, { state: 'completed', message: '' });
+  }
+
   async saveReader(paperId, reader) {
     const record = await this.recordFor(paperId);
     const safeReader = {
@@ -414,14 +482,15 @@ export class PaperVault {
     const records = [];
     for (const record of index.papers) {
       const directory = this.paperDirectory(record);
-      const [paper, audit, reader, patches, updates] = await Promise.all([
+      const [paper, audit, reader, patches, updates, auditJob] = await Promise.all([
         readJson(path.join(directory, 'paper.json'), null),
         readJson(path.join(directory, 'audit.json'), null),
         readJson(path.join(directory, 'reader.json'), { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} }),
         readJson(path.join(directory, 'editions', 'working', 'patches.json'), { patches: [] }),
         readJson(path.join(directory, 'updates.json'), { updates: [] }),
+        this.auditJob(record.id),
       ]);
-      if (paper) records.push({ paper, audit, reader, patches: Array.isArray(patches.patches) ? patches.patches : [], updates: Array.isArray(updates.updates) ? updates.updates : [], folder: record.folder });
+      if (paper) records.push({ paper, audit, reader, patches: Array.isArray(patches.patches) ? patches.patches : [], updates: Array.isArray(updates.updates) ? updates.updates : [], auditJob, folder: record.folder });
     }
     return records;
   }
@@ -439,7 +508,8 @@ export class PaperVault {
     const marks = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.marks ?? {}]));
     const patches = Object.fromEntries(records.map((record) => [record.paper.id, record.patches ?? []]));
     const updates = Object.fromEntries(records.map((record) => [record.paper.id, record.updates ?? []]));
-    return { papers, audits, notes, nodeNotes, nodeAnswers, expanded, marks, patches, updates, profile, links: index.links, graph, vault: { folder: this.root, paperFolders: records.map((record) => ({ paperId: record.paper.id, folder: record.folder })) } };
+    const auditJobs = Object.fromEntries(records.filter((record) => record.auditJob && record.auditJob.state !== 'completed').map((record) => [record.paper.id, record.auditJob]));
+    return { papers, audits, notes, nodeNotes, nodeAnswers, expanded, marks, patches, updates, auditJobs, profile, links: index.links, graph, vault: { folder: this.root, paperFolders: records.map((record) => ({ paperId: record.paper.id, folder: record.folder })) } };
   }
 
   async compactInventory() {
