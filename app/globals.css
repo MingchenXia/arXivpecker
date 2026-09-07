@@ -503,7 +503,8 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .editable-tex-rendered > p { color: #7f756e; font-family: Inter, ui-sans-serif, sans-serif; font-size: 10px; font-style: normal; }
 .tex-edit-hint { position: absolute; z-index: 2; top: -19px; right: 0; border-radius: 3px; background: #8f1d2c; padding: 3px 6px; color: #fff; font-family: Inter, ui-sans-serif, sans-serif; font-size: 7px; font-style: normal; font-weight: 800; letter-spacing: .03em; opacity: 0; pointer-events: none; transform: translateY(3px); transition: opacity .15s ease, transform .15s ease; }
 .editable-tex-rendered:hover .tex-edit-hint, .editable-tex-rendered:focus-visible .tex-edit-hint { opacity: 1; transform: none; }
-.editable-tex-source { overflow: hidden; border: 1px solid #cdbbb1; border-radius: 5px; background: #fffdf9; box-shadow: 0 8px 24px rgb(62 43 36 / 8%); font-family: Inter, ui-sans-serif, sans-serif; font-style: normal; }
+.editable-tex-source { position: relative; overflow: visible; border: 1px solid #cdbbb1; border-radius: 5px; background: #fffdf9; box-shadow: 0 8px 24px rgb(62 43 36 / 8%); font-family: Inter, ui-sans-serif, sans-serif; font-style: normal; }
+.editable-tex-source:focus-within { z-index: 2; }
 .editable-tex-source > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid #e5dbd1; background: #f7f0e9; padding: 8px 10px; }
 .editable-tex-source > header b { color: #6f1d28; font-size: 9px; }.editable-tex-source > header span { color: #8b8179; font-size: 7px; }
 .editable-tex-source textarea { display: block; width: 100%; min-height: 180px; resize: vertical; border: 0; background: #24211f; padding: 13px; color: #f4eee8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.65; outline: 0; tab-size: 2; }

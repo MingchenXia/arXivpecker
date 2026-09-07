@@ -14,11 +14,16 @@ const vaultRoot = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || path.join(WO
 const starterRoot = process.env.ARXIVPECKER_SKIP_STARTER_LIBRARY === '1' ? null : path.resolve(process.env.ARXIVPECKER_STARTER_LIBRARY_DIR || path.join(WORKDIR, 'examples', 'starter-library'));
 const vault = new PaperVault(vaultRoot, { starterRoot });
 const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
-// Long mathematical audits can legitimately take more than 30 minutes. Treat
-// the old timeout as an inactivity limit, and keep a separate upper bound so a
-// genuinely wedged local Codex process cannot consume the subscription forever.
-const CODEX_TURN_IDLE_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_TURN_IDLE_TIMEOUT_MS || process.env.CODEX_TURN_TIMEOUT_MS) || 30 * 60 * 1000);
-const CODEX_TURN_HARD_TIMEOUT_MS = Math.max(CODEX_TURN_IDLE_TIMEOUT_MS, Number(process.env.CODEX_TURN_HARD_TIMEOUT_MS) || 2 * 60 * 60 * 1000);
+// Mathematical audits may need to run for hours. They keep running by default
+// until Codex completes, fails, or the reader stops them. Operators can opt in
+// to an idle or absolute cutoff by setting the corresponding environment value.
+function optionalTimeoutFromEnv(keys) {
+  const raw = keys.map((key) => process.env[key]).find((value) => value !== undefined && value !== '');
+  const timeout = Number(raw);
+  return Number.isFinite(timeout) && timeout > 0 ? Math.max(60_000, timeout) : 0;
+}
+const CODEX_TURN_IDLE_TIMEOUT_MS = optionalTimeoutFromEnv(['CODEX_TURN_IDLE_TIMEOUT_MS', 'CODEX_TURN_TIMEOUT_MS']);
+const CODEX_TURN_HARD_TIMEOUT_MS = optionalTimeoutFromEnv(['CODEX_TURN_HARD_TIMEOUT_MS']);
 const CODEX_STARTUP_RPC_TIMEOUT_MS = Math.max(30_000, Number(process.env.CODEX_STARTUP_RPC_TIMEOUT_MS) || 60_000);
 // Resuming a large archived audit can require Codex to restore its full rollout
 // from disk. It is a lifecycle operation, not a normal lightweight RPC.
@@ -1414,8 +1419,9 @@ class CodexAppServer {
     this.account = null;
     this.models = [];
     this.lastError = null;
-    this.turnIdleTimeoutMs = turnIdleTimeoutMs;
-    this.turnHardTimeoutMs = Math.max(turnIdleTimeoutMs, turnHardTimeoutMs);
+    this.turnIdleTimeoutMs = Math.max(0, Number(turnIdleTimeoutMs) || 0);
+    const hardTimeout = Number(turnHardTimeoutMs);
+    this.turnHardTimeoutMs = Number.isFinite(hardTimeout) && hardTimeout > 0 ? Math.max(this.turnIdleTimeoutMs, hardTimeout) : 0;
     this.threadRestoreTimeoutMs = Math.max(60_000, threadRestoreTimeoutMs);
   }
 
@@ -1597,6 +1603,7 @@ class CodexAppServer {
       };
       const idleTimeout = () => interruptAndReject(new Error(`${taskLabel} received no Codex progress for ${Math.round(this.turnIdleTimeoutMs / 60_000)} minutes and was interrupted.`));
       const touch = () => {
+        if (!this.turnIdleTimeoutMs) return;
         clearTimeout(idleTimer);
         idleTimer = setTimeout(idleTimeout, this.turnIdleTimeoutMs);
       };
@@ -1619,7 +1626,7 @@ class CodexAppServer {
       };
       this.turns.set(turnId, turn);
       touch();
-      hardTimer = setTimeout(() => interruptAndReject(new Error(`${taskLabel} reached the ${Math.round(this.turnHardTimeoutMs / 60_000)}-minute safety limit and was interrupted.`)), this.turnHardTimeoutMs);
+      if (this.turnHardTimeoutMs) hardTimer = setTimeout(() => interruptAndReject(new Error(`${taskLabel} reached the ${Math.round(this.turnHardTimeoutMs / 60_000)}-minute safety limit and was interrupted.`)), this.turnHardTimeoutMs);
     });
   }
 

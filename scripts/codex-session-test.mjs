@@ -139,6 +139,15 @@ test('an inactive turn is interrupted after its idle limit', async () => {
   assert.equal(calls.filter(call => call.method === 'turn/interrupt').length, 1);
 });
 
+test('an audit has no automatic cutoff when neither watchdog is configured', async () => {
+  const { server, calls } = mockTimedServer({ idle: 0, hard: 0 });
+  const reply = server.runTurn(params, { taskLabel: 'AI audit' });
+  await new Promise(resolve => setTimeout(resolve, 140));
+  server.handleNotification({ method: 'turn/completed', params: { turn: { id: 'reply', status: 'completed', items: [{ type: 'agentMessage', text: 'Audit completed after an unbounded run.' }] } } });
+  assert.match((await reply).text, /unbounded run/);
+  assert.equal(calls.some(call => call.method === 'turn/interrupt'), false);
+});
+
 test('the hard safety limit still stops a continuously active turn', async () => {
   const { server, calls } = mockTimedServer({ idle: 200, hard: 600 });
   const progress = setInterval(() => server.handleNotification({ method: 'thread/tokenUsage/updated', params: { threadId } }), 40);
