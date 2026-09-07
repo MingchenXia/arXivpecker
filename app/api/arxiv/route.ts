@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { normalizeArxivId } from './arxiv-id.mjs';
 
 type ArxivPaper = {
   id: string;
@@ -27,14 +28,6 @@ function decodeXml(value: string) {
 
 function valueOf(xml: string, tag: string) {
   return decodeXml(xml.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, 'i'))?.[1] ?? '');
-}
-
-function normalizeArxivId(value: string) {
-  const cleaned = decodeURIComponent(value.trim())
-    .replace(/^https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\//i, '')
-    .replace(/\.pdf(?:\?.*)?$/i, '')
-    .replace(/[?#].*$/, '');
-  return cleaned.match(/(?:[a-z-]+(?:\.[A-Z]{2})?\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i)?.[0] ?? '';
 }
 
 function parseFeed(xml: string): ArxivPaper[] {
@@ -275,7 +268,11 @@ async function fetchPaper(arxivId: string) {
 }
 
 export async function GET(request: NextRequest) {
-  const arxivId = normalizeArxivId(request.nextUrl.searchParams.get('id') ?? '');
+  const rawArxivId = request.nextUrl.searchParams.get('id');
+  const arxivId = normalizeArxivId(rawArxivId ?? '');
+  if (rawArxivId && !arxivId) {
+    return NextResponse.json({ papers: [], error: 'Enter a valid arXiv ID or URL.' }, { status: 400 });
+  }
   const categories = (request.nextUrl.searchParams.get('categories') || request.nextUrl.searchParams.get('category') || 'math')
     .split(',').map((value) => value.trim()).filter((value) => value === 'math' || /^math\.[A-Z]{2}$/.test(value));
   const latestBatch = request.nextUrl.searchParams.get('latest') === '1' && !arxivId;

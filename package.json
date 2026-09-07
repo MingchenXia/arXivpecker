@@ -16,9 +16,11 @@
     "reindex-audits": "node scripts/reindex-audits.mjs",
     "test:starter": "node scripts/starter-library-test.mjs",
     "test:reader": "node scripts/tex-reader-test.mjs",
+    "test:arxiv-id": "node scripts/arxiv-id-test.mjs",
     "test:sessions": "node --test scripts/codex-session-test.mjs",
     "audit-formulas": "node scripts/formula-audit.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "katex": "^0.18.4",
