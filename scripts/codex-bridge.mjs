@@ -14,6 +14,13 @@ const vaultRoot = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || path.join(WO
 const starterRoot = process.env.ARXIVPECKER_SKIP_STARTER_LIBRARY === '1' ? null : path.resolve(process.env.ARXIVPECKER_STARTER_LIBRARY_DIR || path.join(WORKDIR, 'examples', 'starter-library'));
 const vault = new PaperVault(vaultRoot, { starterRoot });
 const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
+const DEFAULT_JSON_BODY_CHARS = 1_000_000;
+// An audit save contains the model report plus extracted TeX/source evidence.
+// Give that endpoint its own generous ceiling without weakening small mutation
+// endpoints, which should still reject unexpectedly large requests quickly.
+const MAX_AUDIT_JSON_BODY_CHARS = 32_000_000;
+const MAX_PAPER_UPDATE_JSON_BODY_CHARS = 24_000_000;
+const MAX_SOURCE_UPLOAD_JSON_BODY_CHARS = 112_000_000;
 // Mathematical audits may need to run for hours. They keep running by default
 // until Codex completes, fails, or the reader stops them. Operators can opt in
 // to an idle or absolute cutoff by setting the corresponding environment value.
@@ -1801,7 +1808,14 @@ function normalizeProfile(value) {
   };
 }
 
-function readBody(request, maxChars = 1_000_000) {
+function bodyLimitFor(pathname) {
+  if (['/vault/source-upload', '/vault/citation-asset'].includes(pathname)) return MAX_SOURCE_UPLOAD_JSON_BODY_CHARS;
+  if (pathname === '/vault/audit') return MAX_AUDIT_JSON_BODY_CHARS;
+  if (['/vault/latex-export', '/vault/paper/update-commit'].includes(pathname)) return MAX_PAPER_UPDATE_JSON_BODY_CHARS;
+  return DEFAULT_JSON_BODY_CHARS;
+}
+
+function readBody(request, maxChars = DEFAULT_JSON_BODY_CHARS) {
   return new Promise((resolve, reject) => {
     let body = '';
     request.on('data', (chunk) => {
@@ -1963,7 +1977,7 @@ const server = createServer(async (request, response) => {
     if (request.method !== 'POST' || !['/analyze', '/compare-versions', '/paper-question', '/node-question', '/node-edit/suggest', '/vault/paper', '/vault/paper/update', '/vault/paper/update-commit', '/vault/paper/delete', '/vault/paper/order', '/vault/audit', '/vault/reader', '/vault/patches', '/vault/profile', '/vault/link', '/vault/link/delete', '/vault/export', '/vault/latex-export', '/vault/citation-asset', '/vault/source-upload', '/cloud/share'].includes(pathname)) {
       return sendJson(response, 404, { error: 'Not found.' }, origin);
     }
-    const body = await readBody(request, ['/vault/source-upload', '/vault/citation-asset'].includes(pathname) ? 112_000_000 : ['/vault/latex-export', '/vault/paper/update-commit'].includes(pathname) ? 24_000_000 : 1_000_000);
+    const body = await readBody(request, bodyLimitFor(pathname));
     if (pathname === '/cloud/share') return sendJson(response, 200, { share: await createCloudShare(vault, body) }, origin);
     if (pathname === '/vault/profile') return sendJson(response, 200, { profile: await vault.saveProfile(normalizeProfile(body.profile)) }, origin);
     if (pathname === '/vault/link') return sendJson(response, 200, await enqueueVaultMutation(async () => ({ link: await vault.addLink(body.link), graph: await vault.rebuildGraph() })), origin);
@@ -2093,4 +2107,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
 }
 
-export { CodexAppServer, ar5ivFigureUrl, enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences };
+export { CodexAppServer, ar5ivFigureUrl, bodyLimitFor, enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readBody, readExpandedTex, readableLatex, resolveLatexReferences };
