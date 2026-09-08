@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ar5ivFigureUrl, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences } from './codex-bridge.mjs';
+import { ar5ivFigureUrl, buildSourceBlocks, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences } from './codex-bridge.mjs';
 
 const source = String.raw`\documentclass{article}
 \usepackage{amsmath}
@@ -96,8 +96,22 @@ const delayedUnits = extractSourceUnits(delayedResolved);
 assert.match(delayedUnits[0].proofText, /Complete argument/);
 assert.equal(delayedUnits[1].proofText, '', 'A delayed proof must remain attached to its explicitly referenced result.');
 
+const delayedProofBlocks = buildSourceBlocks(delayedResolved, delayedUnits, new Map());
+assert.ok(delayedProofBlocks.some((block) => block.kind === 'proof' && /Complete argument/.test(block.proofText)), 'A delayed proof must remain visible at its original source location.');
+assert.equal(delayedProofBlocks.filter((block) => block.kind === 'proof' && /Complete argument/.test(block.proofText)).length, 1, 'A delayed proof must be rendered once, not duplicated beside its earlier theorem.');
+
+const standaloneProofBlocks = buildSourceBlocks(String.raw`\begin{document}\section{A standalone proof}\begin{proof}This proof is not linked to a theorem node.\end{proof}\end{document}`, [], new Map());
+assert.ok(standaloneProofBlocks.some((block) => block.kind === 'proof' && /not linked to a theorem node/.test(block.proofText)), 'An unlinked proof environment must remain visible in the source reader.');
+
+const bibliographyBlocks = buildSourceBlocks(String.raw`\begin{document}\begin{thebibliography}{9}\bibitem{alpha} A. Author. \newblock \emph{First reference.}\bibitem[Beta]{beta} B. Author. \newblock \textit{Second reference.}\end{thebibliography}\end{document}`, [], new Map());
+const bibliographyEntries = bibliographyBlocks.filter((block) => block.kind === 'bibliography');
+assert.deepEqual(bibliographyEntries.map((block) => block.title), ['alpha', 'beta'], 'Bibliography entries must be preserved as separate source blocks.');
+assert.ok(bibliographyEntries.every((block) => !/\\bibitem/.test(block.content)), 'Rendered bibliography entries must not leak their TeX item commands.');
+assert.ok(bibliographyBlocks.some((block) => block.kind === 'section' && block.title === 'References'), 'An inline bibliography must receive a readable references heading.');
+
 const decorative = readableLatex(String.raw`\textcolor{meta-color}{\textbf{Subset}}: Common Crawl \textcolor{wkblue}{\rule{\linewidth}{0.4pt}}`);
 assert.equal(decorative, 'Subset: Common Crawl', 'Decorative TeX color and rule commands must not leak into reader prose.');
+assert.equal(readableLatex(String.raw`P\u{a}un, B\l ocki, Musta\c{t}`), 'Păun, Błocki, Mustaţ', 'Common author-name accents must render cleanly in bibliography entries.');
 
 assert.equal(ar5ivFigureUrl('math/0702066v2', 'figures/famcurv.eps'), 'https://ar5iv.labs.arxiv.org/html/math/0702066/assets/famcurv.png');
 assert.equal(ar5ivFigureUrl('local-upload', 'famcurv.eps'), '', 'Uploaded papers must never trigger a guessed remote asset URL.');

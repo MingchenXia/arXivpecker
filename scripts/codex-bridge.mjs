@@ -471,8 +471,11 @@ function readableLatex(source) {
     .replace(/\\'\{?E\}?/g, 'É')
     .replace(/\\"\{?([aeiouAEIOU])\}?/g, (_match, letter) => ({ a: 'ä', e: 'ë', i: 'ï', o: 'ö', u: 'ü', A: 'Ä', E: 'Ë', I: 'Ï', O: 'Ö', U: 'Ü' }[letter] || letter))
     .replace(/\\~\{?([anoANO])\}?/g, (_match, letter) => ({ a: 'ã', n: 'ñ', o: 'õ', A: 'Ã', N: 'Ñ', O: 'Õ' }[letter] || letter))
-    .replace(/\\c\{?([cC])\}?/g, (_match, letter) => letter === 'C' ? 'Ç' : 'ç')
+    .replace(/\\u\{?([aeiouAEIOU])\}?/g, (_match, letter) => ({ a: 'ă', e: 'ĕ', i: 'ĭ', o: 'ŏ', u: 'ŭ', A: 'Ă', E: 'Ĕ', I: 'Ĭ', O: 'Ŏ', U: 'Ŭ' }[letter] || letter))
+    .replace(/\\c\{?([cCtTsS])\}?/g, (_match, letter) => ({ c: 'ç', C: 'Ç', t: 'ţ', T: 'Ţ', s: 'ş', S: 'Ş' }[letter] || letter))
     .replace(/\\v(?:\{([cszCSZ])\}|\s+([cszCSZ])\b)/g, (_match, braced, spaced) => { const letter = braced || spaced; return ({ c: 'č', s: 'š', z: 'ž', C: 'Č', S: 'Š', Z: 'Ž' }[letter] || letter); })
+    .replace(/\\l(?:\{\})?\s?/g, 'ł')
+    .replace(/\\L(?:\{\})?\s?/g, 'Ł')
     .replace(/\\o\{\}/g, 'ø')
     .replace(/\\O\{\}/g, 'Ø')
     .replace(/\\ss\b/g, 'ß')
@@ -769,6 +772,28 @@ function insideSourceRanges(index, ranges) {
   return ranges.some(([start, end]) => start <= index && index < end);
 }
 
+function sourceProofEvents(source, units = []) {
+  const value = String(source || '');
+  const literalRanges = literalSourceRanges(value);
+  const proofEnvironments = new Set(['proof']);
+  for (const match of value.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) {
+    if (/^proof/i.test(match[1]) || /proof|preuve|démonstration/i.test(match[3] || '')) proofEnvironments.add(match[1]);
+  }
+  const proofNames = [...proofEnvironments].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  if (!proofNames) return [];
+  const pattern = new RegExp(`\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1`, 'g');
+  const events = [];
+  for (const match of value.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (insideSourceRanges(start, literalRanges)) continue;
+    const end = start + match[0].length;
+    const linkedUnit = units.find((candidate) => candidate.proofStart === start) || units.find((candidate) => candidate.start < start && start < candidate.end);
+    const unit = linkedUnit || { proofText: readableLatex(match[3]), proofAssetPaths: graphicPaths(match[3]), citationMentions: citationMentions(match[3]), citations: [], nodeId: '', kind: 'theorem' };
+    events.push({ type: 'proof', start, end, unit });
+  }
+  return events;
+}
+
 function extractSourceUnits(source) {
   const originalSource = String(source || '');
   const normalizedSource = expandAuthorMacros(originalSource);
@@ -988,6 +1013,30 @@ function tableEvents(source) {
   return events;
 }
 
+function bibliographyEvents(source, bibliography) {
+  const value = String(source || '');
+  const literalRanges = literalSourceRanges(value);
+  const events = [];
+  const inlinePattern = /\\begin\{thebibliography\}(?:\{[^}]*\})?([\s\S]*?)\\end\{thebibliography\}/g;
+  for (const match of value.matchAll(inlinePattern)) {
+    const start = match.index ?? 0;
+    if (insideSourceRanges(start, literalRanges)) continue;
+    const body = match[1] || '';
+    const items = [...body.matchAll(/\\bibitem(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)];
+    const entries = items.map((item, index) => {
+      const raw = body.slice((item.index ?? 0) + item[0].length, items[index + 1]?.index ?? body.length);
+      return { key: item[1].trim(), content: cleanBibliographyFragment(raw) || item[1].trim() };
+    }).filter((entry) => entry.key);
+    if (entries.length) events.push({ type: 'bibliography', start, end: start + match[0].length, entries });
+  }
+  if (events.length || !bibliography?.size) return events;
+  const external = /\\(?:printbibliography|bibliography)\b(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/.exec(value);
+  if (!external || insideSourceRanges(external.index ?? 0, literalRanges)) return events;
+  const entries = [...bibliography.values()].map((reference) => ({ key: String(reference.key || ''), content: String(reference.text || [reference.authors, reference.title].filter(Boolean).join('. ') || reference.key || '') })).filter((entry) => entry.key && entry.content);
+  if (entries.length) events.push({ type: 'bibliography', start: external.index ?? 0, end: (external.index ?? 0) + external[0].length, entries });
+  return events;
+}
+
 function sourceParagraphBlocks(source, bibliography, state) {
   const readable = readableBodyFragment(source);
   if (!readable) return [];
@@ -1046,10 +1095,13 @@ function buildSourceBlocks(source, units, bibliography) {
     ...sectionEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
     ...figureEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
     ...tableEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
+    ...bibliographyEvents(normalized, bibliography).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
     ...units.filter((unit) => unit.start >= bodyStart && unit.start < bodyEnd).map((unit) => ({ type: 'result', start: unit.start, end: unit.end, unit })),
-    ...units.filter((unit) => Number.isFinite(unit.proofStart)).map((unit) => ({ type: 'proof-skip', start: unit.proofStart, end: unit.proofEnd, unit })),
+    // Preserve every proof in source order. A semantic link to a theorem
+    // enriches the reader, but never decides whether the proof is rendered.
+    ...sourceProofEvents(normalized, units).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
   ].sort((left, right) => left.start - right.start || (left.type === 'section' ? -1 : 1));
-  const blocks = []; const state = { paragraph: 0, section: 0, result: 0, proof: 0, table: 0 };
+  const blocks = []; const state = { paragraph: 0, section: 0, result: 0, proof: 0, table: 0, bibliography: 0 };
   let cursor = bodyStart;
   for (const event of events) {
     if (event.start < cursor) continue;
@@ -1060,16 +1112,29 @@ function buildSourceBlocks(source, units, bibliography) {
     } else if (event.type === 'figure') {
       state.figure = (state.figure || 0) + 1;
       blocks.push({ id: `source-figure-${state.figure}`, kind: 'figure', level: 4, title: '', content: '', proofText: '', nodeId: '', resultKind: '', citations: event.citations || [], assetPaths: event.assetPaths, caption: event.caption });
+    } else if (event.type === 'bibliography') {
+      const previous = blocks.at(-1);
+      if (previous?.kind !== 'section' || !/^(?:references|bibliography)$/i.test(previous.title.trim())) {
+        state.section += 1;
+        blocks.push({ id: 'source-section-' + state.section, kind: 'section', level: 1, title: 'References', content: '', proofText: '', nodeId: '', resultKind: '', citations: [] });
+      }
+      for (const entry of event.entries) {
+        state.bibliography += 1;
+        blocks.push({ id: 'source-bibliography-' + state.bibliography, kind: 'bibliography', level: 4, title: entry.key, content: entry.content, proofText: '', nodeId: '', resultKind: '', citations: [citationReference({ key: entry.key, locator: '' }, bibliography)], assetPaths: [], caption: '' });
+      }
     } else if (event.type === 'table') {
       state.table += 1;
       blocks.push({ id: `source-table-${state.table}`, kind: 'table', level: 4, title: '', content: event.content, proofText: '', nodeId: '', resultKind: '', citations: event.citations || [], assetPaths: [], caption: event.caption });
     } else if (event.type === 'result') {
       state.result += 1;
       blocks.push({ id: `source-result-${state.result}`, kind: 'result', level: 4, title: readableLatex(event.unit.title), content: event.unit.statement, proofText: '', nodeId: event.unit.nodeId || '', resultKind: event.unit.displayName || event.unit.kind || 'Theorem', citations: event.unit.citations || [], assetPaths: event.unit.assetPaths || [], caption: '' });
-      if (event.unit.proofText) {
+      if (event.unit.proofText && event.unit.embeddedProof) {
         state.proof += 1;
         blocks.push({ id: `source-proof-${state.proof}`, kind: 'proof', level: 4, title: '', content: '', proofText: event.unit.proofText, nodeId: event.unit.nodeId || '', resultKind: event.unit.kind || 'theorem', citations: event.unit.citations || [], assetPaths: event.unit.proofAssetPaths || [], caption: '' });
       }
+    } else if (event.type === 'proof') {
+      state.proof += 1;
+      blocks.push({ id: `source-proof-${state.proof}`, kind: 'proof', level: 4, title: '', content: '', proofText: event.unit.proofText || '', nodeId: event.unit.nodeId || '', resultKind: event.unit.kind || 'theorem', citations: event.unit.citations || [], assetPaths: event.unit.proofAssetPaths || [], caption: '' });
     }
     cursor = event.end;
   }
@@ -2107,4 +2172,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
 }
 
-export { CodexAppServer, ar5ivFigureUrl, bodyLimitFor, enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readBody, readExpandedTex, readableLatex, resolveLatexReferences };
+export { CodexAppServer, ar5ivFigureUrl, bodyLimitFor, buildSourceBlocks, enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readBody, readExpandedTex, readableLatex, resolveLatexReferences };

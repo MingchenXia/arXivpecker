@@ -574,6 +574,9 @@ main > aside > button { background: #f3e2df !important; color: #7f1d2b !importan
 .source-section-level-3 { margin: 34px 0 15px; font-size: 19px; font-style: italic; }
 .source-paragraph { margin: 0 0 17px; color: #312c29; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(15px, 1.18vw, 17px); line-height: 1.78; text-align: justify; text-wrap: pretty; }
 .source-paragraph .math-text, .source-proof .math-text, .source-result .math-text { white-space: pre-line; }
+.source-bibliography-entry { display: grid; grid-template-columns: minmax(56px, auto) minmax(0, 1fr); gap: 12px; margin: 0 0 13px; color: #453e39; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(14px, 1.05vw, 16px); line-height: 1.62; text-align: left; }
+.source-bibliography-entry > .math-text { min-width: 0; }
+.source-bibliography-key { color: #8f1d2c; font-family: Inter, ui-sans-serif, sans-serif; font-size: 11px; font-weight: 800; line-height: 1.65; overflow-wrap: anywhere; }
 .source-result { position: relative; scroll-margin-top: 80px; margin: 28px -18px 18px; border-left: 3px solid #8f1d2c; border-radius: 2px; background: #fcf8f2; padding: 18px 22px 14px; transition: background .16s ease, box-shadow .16s ease; }
 .source-result:hover, .source-result-selected { background: #fff7f1; box-shadow: 0 5px 22px rgb(68 45 34 / 7%); }
 .source-result > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-bottom: 8px; color: #2e2825; font-family: Georgia, 'Times New Roman', serif; font-size: 16px; }
