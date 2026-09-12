@@ -57,9 +57,9 @@ function sendJson(response, status, body, origin) {
   response.end(JSON.stringify(body));
 }
 
-function runProgram(command, args, maxOutput = MAX_SOURCE_BYTES) {
+function runProgram(command, args, maxOutput = MAX_SOURCE_BYTES, cwd = WORKDIR) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: WORKDIR, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     const stdout = []; const stderr = []; let size = 0;
     child.stdout.on('data', (chunk) => { size += chunk.length; if (size <= maxOutput) stdout.push(chunk); else child.kill(); });
     child.stderr.on('data', (chunk) => stderr.push(chunk));
@@ -165,7 +165,13 @@ async function saveCompleteLatexExport(paperId, exportRecord) {
   let texFiles = []; try { texFiles = await collectTexFiles(sourceRoot); } catch { /* A generated single-file export remains available. */ }
   if (texFiles.length <= 1) { const fileName = `arxivpecker-${edition}-edition.tex`; const file = path.join(exportDirectory, fileName); await writeFile(file, content, 'utf8'); return { fileName, relativePath: path.relative(vault.root, file), format: 'tex', bytes: Buffer.byteLength(content, 'utf8') }; }
   const fileName = `arxivpecker-${edition}-edition-source.zip`; const file = path.join(exportDirectory, fileName); const staging = await mkdtemp(path.join(exportDirectory, '.latex-export-'));
-  try { await cp(sourceRoot, path.join(staging, 'original-source'), { recursive: true }); await writeFile(path.join(staging, `arxivpecker-${edition}-edition.tex`), content, 'utf8'); await runProgram('ditto', ['-c', '-k', '--sequesterRsrc', staging, file]); }
+  try {
+    await cp(sourceRoot, path.join(staging, 'original-source'), { recursive: true });
+    await writeFile(path.join(staging, `arxivpecker-${edition}-edition.tex`), content, 'utf8');
+    // `ditto` is macOS-only. `zip` is available on both supported developer
+    // platforms and in CI, so multi-file LaTeX exports remain portable.
+    await runProgram('zip', ['-qr', file, '.'], 8 * 1024 * 1024, staging);
+  }
   finally { await rm(staging, { recursive: true, force: true }); }
   return { fileName, relativePath: path.relative(vault.root, file), format: 'zip', sourceFiles: texFiles.length };
 }
@@ -474,8 +480,11 @@ function readableLatex(source) {
     .replace(/\\u\{?([aeiouAEIOU])\}?/g, (_match, letter) => ({ a: 'ă', e: 'ĕ', i: 'ĭ', o: 'ŏ', u: 'ŭ', A: 'Ă', E: 'Ĕ', I: 'Ĭ', O: 'Ŏ', U: 'Ŭ' }[letter] || letter))
     .replace(/\\c\{?([cCtTsS])\}?/g, (_match, letter) => ({ c: 'ç', C: 'Ç', t: 'ţ', T: 'Ţ', s: 'ş', S: 'Ş' }[letter] || letter))
     .replace(/\\v(?:\{([cszCSZ])\}|\s+([cszCSZ])\b)/g, (_match, braced, spaced) => { const letter = braced || spaced; return ({ c: 'č', s: 'š', z: 'ž', C: 'Č', S: 'Š', Z: 'Ž' }[letter] || letter); })
-    .replace(/\\l(?:\{\})?\s?/g, 'ł')
-    .replace(/\\L(?:\{\})?\s?/g, 'Ł')
+    // `\\l` and `\\L` are Polish letter macros, but they are also prefixes of
+    // ordinary TeX commands such as `\\left` and `\\Lambda`. Only convert the
+    // standalone, non-letter commands; otherwise math is silently corrupted.
+    .replace(/\\l(?![A-Za-z@])(?:\{\})?\s?/g, 'ł')
+    .replace(/\\L(?![A-Za-z@])(?:\{\})?\s?/g, 'Ł')
     .replace(/\\o\{\}/g, 'ø')
     .replace(/\\O\{\}/g, 'Ø')
     .replace(/\\ss\b/g, 'ß')

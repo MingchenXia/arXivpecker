@@ -49,7 +49,14 @@ Long audits are not stopped merely because they exceed 30 minutes. The bridge wa
 npm run lint
 npm run build
 npm run test:starter
+npm run test:reader
+npm run test:audit-checkpoints
+npm run test:body-limits
+npm run test:vault
+npm run test:sessions
 npm run audit-formulas
 ```
 
-The repository is private during tester preview. A public open-source license will be selected before the repository is made public.
+## License
+
+arXivpecker's original source code and documentation are licensed under the [MIT License](LICENSE). The bundled paper examples are not relicensed; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) before reusing them outside the local test library.

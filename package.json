@@ -1,7 +1,8 @@
 {
   "name": "arxivpecker",
   "version": "0.2.0",
-  "private": true,
+  "private": false,
+  "license": "MIT",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -19,6 +20,7 @@
     "test:arxiv-id": "node scripts/arxiv-id-test.mjs",
     "test:audit-checkpoints": "node scripts/audit-checkpoint-test.mjs",
     "test:body-limits": "node scripts/body-limit-test.mjs",
+    "test:vault": "node scripts/bridge-vault-integration-test.mjs",
     "test:sessions": "node --test scripts/codex-session-test.mjs",
     "audit-formulas": "node scripts/formula-audit.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

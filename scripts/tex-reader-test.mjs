@@ -112,6 +112,7 @@ assert.ok(bibliographyBlocks.some((block) => block.kind === 'section' && block.t
 const decorative = readableLatex(String.raw`\textcolor{meta-color}{\textbf{Subset}}: Common Crawl \textcolor{wkblue}{\rule{\linewidth}{0.4pt}}`);
 assert.equal(decorative, 'Subset: Common Crawl', 'Decorative TeX color and rule commands must not leak into reader prose.');
 assert.equal(readableLatex(String.raw`P\u{a}un, B\l ocki, Musta\c{t}`), 'Păun, Błocki, Mustaţ', 'Common author-name accents must render cleanly in bibliography entries.');
+assert.equal(readableLatex(String.raw`$\left(\lambda + \Lambda\right)$`), String.raw`$\left(\lambda + \Lambda\right)$`, 'Polish letter conversion must not alter longer math commands that begin with \\l or \\L.');
 
 assert.equal(ar5ivFigureUrl('math/0702066v2', 'figures/famcurv.eps'), 'https://ar5iv.labs.arxiv.org/html/math/0702066/assets/famcurv.png');
 assert.equal(ar5ivFigureUrl('local-upload', 'famcurv.eps'), '', 'Uploaded papers must never trigger a guessed remote asset URL.');

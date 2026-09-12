@@ -1,6 +1,6 @@
 # Contributing to arXivpecker
 
-arXivpecker is currently in private tester preview.
+arXivpecker is an open-source, local-first mathematics paper reader.
 
 ## Development setup
 
@@ -17,8 +17,15 @@ Run:
 
 ```bash
 npm run lint
+npm run typecheck
 npm run build
 npm run test:starter
+npm run test:reader
+npm run test:arxiv-id
+npm run test:audit-checkpoints
+npm run test:body-limits
+npm run test:vault
+npm run test:sessions
 npm run audit-formulas
 ```
 
