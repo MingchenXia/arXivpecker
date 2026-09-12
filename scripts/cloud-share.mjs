@@ -67,6 +67,7 @@ async function portableCopy(source, destination, depth = 0) {
     await mkdir(destination, { recursive: true });
     for (const entry of await readdir(source, { withFileTypes: true })) {
       if (entry.name.startsWith('.') || ['proofroom-uploaded-source.json', '__MACOSX'].includes(entry.name)) continue;
+      if (depth === 0 && entry.isDirectory() && entry.name === 'versions') continue;
       await portableCopy(path.join(source, entry.name), path.join(destination, entry.name), depth + 1);
     }
     return;
@@ -82,6 +83,14 @@ function portablePaper(paper) {
     id: String(paper.id || ''), title: String(paper.title || ''), authors: String(paper.authors || ''), category: String(paper.category || ''), arxivId: String(paper.arxivId || ''), abstract: String(paper.abstract || ''), state: String(paper.state || 'To read'), tags: Array.isArray(paper.tags) ? paper.tags.map(String) : [],
     source: { analysisFormat: String(source.analysisFormat || ''), sourceFetchedAt: source.sourceFetchedAt || source.sourceUploadedAt || null, abstractUrl: source.abstractUrl || '', pdfUrl: source.pdfUrl || '', texUrl: source.texUrl || '' },
   };
+}
+
+function portableAudit(audit) {
+  if (!audit || typeof audit !== 'object') return audit;
+  // Codex thread identifiers are meaningful only on the originating machine
+  // and can reveal a private local conversation reference. A recipient's first
+  // Ask action will create and persist a fresh reader thread for their copy.
+  return { ...audit, threadId: '' };
 }
 
 function normalizeSelection(selection) {
@@ -106,7 +115,7 @@ async function buildShare(vault, request, destination) {
     const paperDestination = path.join(destination, 'papers', safeName(`${record.paper.arxivId}-${record.paper.title}`, record.paper.id));
     await mkdir(paperDestination, { recursive: true });
     await writeJson(path.join(paperDestination, 'paper.json'), portablePaper(record.paper));
-    if (selection.audit && record.audit) await writeJson(path.join(paperDestination, 'audit.json'), record.audit);
+    if (selection.audit && record.audit) await writeJson(path.join(paperDestination, 'audit.json'), portableAudit(record.audit));
     if (selection.notes) await writeJson(path.join(paperDestination, 'reader.json'), record.reader || { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} });
     if (selection.edits) await writeJson(path.join(paperDestination, 'working-edition.json'), { version: 1, patches: record.patches || [] });
     if (selection.source && await exists(path.join(paperDirectory, 'attachments', 'source'))) await portableCopy(path.join(paperDirectory, 'attachments', 'source'), path.join(paperDestination, 'source'));

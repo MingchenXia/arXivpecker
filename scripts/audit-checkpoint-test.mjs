@@ -31,9 +31,22 @@ try {
   assert.equal(snapshot.auditJobs[paper.id].threadId, 'saved-audit-thread');
   await vault.pauseAuditJob(paper.id, 'Computer restarted.');
   assert.equal((await vault.snapshot()).auditJobs[paper.id].state, 'paused');
-  await vault.completeAuditJob(paper.id);
-  assert.equal((await vault.snapshot()).auditJobs[paper.id], undefined, 'Completed audit checkpoints should not appear as resumable work.');
-  console.log('Audit checkpoint: reader thread persistence, options, pause/resume state, and completion filtering verified.');
+
+  // A new vault instance models the process state after a full computer/app
+  // restart. Resume must come entirely from the durable checkpoint on disk.
+  const restartedVault = new PaperVault(target);
+  const afterRestart = (await restartedVault.snapshot()).auditJobs[paper.id];
+  assert.equal(afterRestart.state, 'paused');
+  assert.equal(afterRestart.threadId, 'saved-audit-thread');
+  assert.deepEqual(afterRestart.options, options);
+  const restartedResume = await restartedVault.startAuditJob(paper.id, { convertPdfToLatex: false, correctnessAudit: false, detailedAudit: true }, { resume: true });
+  assert.equal(restartedResume.threadId, 'saved-audit-thread', 'A process restart must resume the exact same Codex audit thread.');
+  assert.equal(restartedResume.attempts, 3);
+  assert.deepEqual(restartedResume.options, options, 'A process restart must not silently change audit options.');
+
+  await restartedVault.completeAuditJob(paper.id);
+  assert.equal((await restartedVault.snapshot()).auditJobs[paper.id], undefined, 'Completed audit checkpoints should not appear as resumable work.');
+  console.log('Audit checkpoint: reader thread persistence, full process restart, options, pause/resume state, and completion filtering verified.');
 } finally {
   await rm(target, { recursive: true, force: true });
 }

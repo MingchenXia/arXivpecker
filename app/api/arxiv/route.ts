@@ -287,9 +287,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ papers: batch.papers, total: batch.total, mode: 'latest', batchLabel: batch.label, categories: [categories[0] || 'math'] });
     }
     const pageSize = 24; const query = `search_query=${encodeURIComponent(categoryQuery)}&sortBy=submittedDate&sortOrder=descending&start=0&max_results=${pageSize}`;
-    const response = await fetch(`https://export.arxiv.org/api/query?${query}`, { cache: 'no-store', headers: { 'User-Agent': 'arXivpecker/0.2 (local mathematics paper reader)' } });
-    if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
-    const papers = parseFeed(await response.text());
+    const papers = parseFeed(await fetchText(`https://export.arxiv.org/api/query?${query}`, 1));
     const unique = [...new Map(papers.map((paper) => [paper.arxivId, paper])).values()];
     return NextResponse.json({ papers: unique, total: unique.length, mode: 'feed', categories });
   } catch (error) {

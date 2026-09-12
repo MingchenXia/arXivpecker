@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { cloudStatus, createCloudShare } from './cloud-share.mjs';
@@ -14,6 +15,8 @@ const vaultRoot = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || path.join(WO
 const starterRoot = process.env.ARXIVPECKER_SKIP_STARTER_LIBRARY === '1' ? null : path.resolve(process.env.ARXIVPECKER_STARTER_LIBRARY_DIR || path.join(WORKDIR, 'examples', 'starter-library'));
 const vault = new PaperVault(vaultRoot, { starterRoot });
 const MAX_SOURCE_BYTES = 80 * 1024 * 1024;
+const MAX_EXPANDED_SOURCE_BYTES = 256 * 1024 * 1024;
+const MAX_SOURCE_ARCHIVE_ENTRIES = 2000;
 const DEFAULT_JSON_BODY_CHARS = 1_000_000;
 // An audit save contains the model report plus extracted TeX/source evidence.
 // Give that endpoint its own generous ceiling without weakening small mutation
@@ -35,6 +38,10 @@ const CODEX_STARTUP_RPC_TIMEOUT_MS = Math.max(30_000, Number(process.env.CODEX_S
 // Resuming a large archived audit can require Codex to restore its full rollout
 // from disk. It is a lifecycle operation, not a normal lightweight RPC.
 const CODEX_THREAD_RESTORE_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_THREAD_RESTORE_TIMEOUT_MS) || 2 * 60 * 1000);
+
+function relativePathEscapes(relative) {
+  return path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`);
+}
 
 function decodeSourceBuffer(payload) {
   const utf8 = Buffer.from(payload).toString('utf8');
@@ -83,7 +90,7 @@ async function writeSourceManifest(manifestFile, manifest) {
   for (const key of ['entryFile', 'sourceDirectory', 'uploadedFile']) {
     if (!portable[key] || !path.isAbsolute(portable[key])) continue;
     const relative = path.relative(directory, portable[key]);
-    if (!relative.startsWith('..') && !path.isAbsolute(relative)) portable[key] = relative || '.';
+    if (!relativePathEscapes(relative)) portable[key] = relative || '.';
   }
   await writeFile(manifestFile, `${JSON.stringify(portable, null, 2)}\n`, 'utf8');
 }
@@ -93,6 +100,10 @@ async function collectTexFiles(directory, root = directory, depth = 0) {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.name.startsWith('.') || ['__MACOSX', 'auto'].includes(entry.name)) continue;
+    // Version comparison caches live beside the active source tree. They are
+    // never part of the current manuscript and must not affect main-file
+    // selection or turn a single-file export into a huge multi-version ZIP.
+    if (depth === 0 && entry.isDirectory() && entry.name === 'versions') continue;
     const absolute = path.join(directory, entry.name);
     if (entry.isDirectory()) files.push(...await collectTexFiles(absolute, root, depth + 1));
     else if (entry.isFile() && /\.(tex|ltx)$/i.test(entry.name)) files.push({ absolute, relative: path.relative(root, absolute) });
@@ -123,6 +134,28 @@ async function uploadedPaperSource(paper) {
   return { ...manifest, cached: true };
 }
 
+async function inspectZipSource(archive) {
+  const summary = (await runProgram('unzip', ['-Z', '-t', archive], 1024 * 1024)).toString('utf8');
+  const totals = /(\d+) files?,\s+(\d+) bytes uncompressed\b/.exec(summary);
+  if (!totals) throw new Error('The ZIP source project has unreadable size metadata.');
+  const entryCount = Number(totals[1]); const expandedBytes = Number(totals[2]);
+  if (!Number.isSafeInteger(entryCount) || entryCount < 1 || entryCount > MAX_SOURCE_ARCHIVE_ENTRIES) throw new Error(`ZIP source projects are limited to ${MAX_SOURCE_ARCHIVE_ENTRIES} entries.`);
+  if (!Number.isSafeInteger(expandedBytes) || expandedBytes > MAX_EXPANDED_SOURCE_BYTES) throw new Error('The ZIP source project expands beyond the 256 MB safety limit.');
+  const listing = (await runProgram('unzip', ['-Z1', archive], 4 * 1024 * 1024)).toString('utf8').split('\n').filter(Boolean);
+  const unsafePath = listing.some((entry) => {
+    const portable = entry.replace(/\\/g, '/');
+    return portable.startsWith('/') || /^[A-Za-z]:\//.test(portable) || portable.split('/').includes('..') || portable.includes('\0');
+  });
+  if (!listing.length || unsafePath) throw new Error('The ZIP source project contains an unsafe path.');
+  if (!listing.some((entry) => /\.(?:tex|ltx)$/i.test(entry))) throw new Error('The ZIP source project does not contain a TeX file.');
+  const detailedListing = (await runProgram('unzip', ['-Z', '-l', archive], 4 * 1024 * 1024)).toString('utf8');
+  if (/^[lbcps][rwxStTs-]{9}\s/m.test(detailedListing)) throw new Error('The ZIP source project contains a symbolic link or special file.');
+  // Reading the central directory is insufficient for detecting a truncated or
+  // corrupt member. Validate every member before the vault receives a record.
+  await runProgram('unzip', ['-tqq', archive], 1024 * 1024);
+  return listing;
+}
+
 async function saveUploadedPaperSource(paper, upload) {
   const encoded = typeof upload?.dataBase64 === 'string' ? upload.dataBase64 : '';
   const payload = Buffer.from(encoded, 'base64');
@@ -131,6 +164,17 @@ async function saveUploadedPaperSource(paper, upload) {
   const requestedName = String(upload?.fileName || 'source.tex');
   const extension = path.extname(requestedName).toLowerCase();
   if (!['.tex', '.ltx', '.zip', '.pdf'].includes(extension)) throw new Error('Upload one TeX file, one PDF, or one ZIP source project.');
+  if (extension === '.pdf' && payload.subarray(0, 1024).indexOf(Buffer.from('%PDF-')) < 0) throw new Error('The uploaded PDF does not have a valid PDF header.');
+  if (extension === '.zip') {
+    // Validate the central directory before adding a paper record. A malformed,
+    // traversal, or high-expansion archive must leave the user's vault untouched.
+    const preflightDirectory = await mkdtemp(path.join(os.tmpdir(), 'arxivpecker-zip-check-'));
+    try {
+      const preflightArchive = path.join(preflightDirectory, 'source.zip');
+      await writeFile(preflightArchive, payload);
+      await inspectZipSource(preflightArchive);
+    } finally { await rm(preflightDirectory, { recursive: true, force: true }); }
+  }
   const stored = await vault.upsertPaper(paper);
   const sourceRoot = await vault.sourceDirectory(stored.id);
   const sourceDirectory = path.join(sourceRoot, `reader-upload-${Date.now()}`);
@@ -140,8 +184,6 @@ async function saveUploadedPaperSource(paper, upload) {
   await writeFile(uploadedFile, payload);
   let entryFile = uploadedFile; let fileCount = 1; let kind = extension === '.pdf' ? 'uploaded-pdf' : 'tex';
   if (extension === '.zip') {
-    const listing = (await runProgram('unzip', ['-Z1', uploadedFile], 4 * 1024 * 1024)).toString('utf8').split('\n').filter(Boolean);
-    if (!listing.length || listing.some((entry) => path.isAbsolute(entry) || path.normalize(entry).split(path.sep).includes('..'))) throw new Error('The ZIP source project contains an unsafe path.');
     const projectDirectory = path.join(sourceDirectory, 'project'); await mkdir(projectDirectory, { recursive: true });
     await runProgram('unzip', ['-q', uploadedFile, '-d', projectDirectory], 8 * 1024 * 1024);
     const texFiles = await collectTexFiles(projectDirectory); const main = await chooseMainTex(texFiles);
@@ -150,8 +192,8 @@ async function saveUploadedPaperSource(paper, upload) {
   }
   const manifest = { kind, origin: 'reader-upload', entryFile, sourceDirectory: extension === '.zip' ? path.dirname(entryFile) : sourceDirectory, fileCount, uploadedFile, uploadedAt: new Date().toISOString(), cached: false };
   await writeSourceManifest(path.join(sourceRoot, 'proofroom-uploaded-source.json'), manifest);
-  await vault.saveSourceRecord(stored.id, { analysisFormat: kind === 'tex' ? 'tex' : 'pdf', sourceDirectory: manifest.sourceDirectory, mainTex: kind === 'tex' ? entryFile : '', localPdf: kind === 'uploaded-pdf' ? entryFile : '', sourceUploadedAt: manifest.uploadedAt });
-  return { paper: stored, primarySource: manifest };
+  const source = await vault.saveSourceRecord(stored.id, { analysisFormat: kind === 'tex' ? 'tex' : 'pdf', sourceDirectory: manifest.sourceDirectory, mainTex: kind === 'tex' ? entryFile : '', localPdf: kind === 'uploaded-pdf' ? entryFile : '', sourceUploadedAt: manifest.uploadedAt });
+  return { paper: { ...stored, source }, primarySource: manifest };
 }
 
 async function saveCompleteLatexExport(paperId, exportRecord) {
@@ -159,14 +201,20 @@ async function saveCompleteLatexExport(paperId, exportRecord) {
   if (!content.includes('\\begin{document}') || !content.includes('\\end{document}')) throw new Error('The complete LaTeX export is missing its document boundary.');
   if (Buffer.byteLength(content, 'utf8') > 16 * 1024 * 1024) throw new Error('The complete LaTeX export is too large.');
   const record = await vault.recordFor(String(paperId));
-  const exportDirectory = path.join(vault.paperDirectory(record), 'exports'); await mkdir(exportDirectory, { recursive: true });
+  const paperDirectory = vault.paperDirectory(record);
+  const exportDirectory = path.join(paperDirectory, 'exports'); await mkdir(exportDirectory, { recursive: true });
   const edition = exportRecord?.edition === 'original' ? 'author' : 'working';
   const sourceRoot = await vault.sourceDirectory(String(paperId));
-  let texFiles = []; try { texFiles = await collectTexFiles(sourceRoot); } catch { /* A generated single-file export remains available. */ }
+  const savedPaper = JSON.parse(await readFile(path.join(paperDirectory, 'paper.json'), 'utf8'));
+  const configuredSource = typeof savedPaper?.source?.sourceDirectory === 'string' ? path.resolve(paperDirectory, savedPaper.source.sourceDirectory) : sourceRoot;
+  const configuredRelative = path.relative(sourceRoot, configuredSource);
+  const currentSourceRoot = relativePathEscapes(configuredRelative) ? sourceRoot : configuredSource;
+  let texFiles = []; try { texFiles = await collectTexFiles(currentSourceRoot); } catch { /* A generated single-file export remains available. */ }
   if (texFiles.length <= 1) { const fileName = `arxivpecker-${edition}-edition.tex`; const file = path.join(exportDirectory, fileName); await writeFile(file, content, 'utf8'); return { fileName, relativePath: path.relative(vault.root, file), format: 'tex', bytes: Buffer.byteLength(content, 'utf8') }; }
   const fileName = `arxivpecker-${edition}-edition-source.zip`; const file = path.join(exportDirectory, fileName); const staging = await mkdtemp(path.join(exportDirectory, '.latex-export-'));
   try {
-    await cp(sourceRoot, path.join(staging, 'original-source'), { recursive: true });
+    const versionCache = path.join(sourceRoot, 'versions');
+    await cp(currentSourceRoot, path.join(staging, 'original-source'), { recursive: true, filter: (candidate) => candidate !== versionCache && !candidate.startsWith(`${versionCache}${path.sep}`) });
     await writeFile(path.join(staging, `arxivpecker-${edition}-edition.tex`), content, 'utf8');
     // `ditto` is macOS-only. `zip` is available on both supported developer
     // platforms and in CI, so multi-file LaTeX exports remain portable.
@@ -282,24 +330,15 @@ async function saveAiLatexSource(paper, converted) {
 async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 0) {
   if (depth > 12 || seen.has(entryFile)) return '';
   const relative = path.relative(sourceRoot, entryFile);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) return '';
+  if (relativePathEscapes(relative)) return '';
   seen.add(entryFile);
   let source = decodeSourceBuffer(await readFile(entryFile));
   const include = /\\(?:input|include)\s*\{([^}]+)\}/g;
   const literalRanges = literalSourceRanges(source);
-  const isCommentedInput = (index) => {
-    for (let cursor = index - 1; cursor >= 0 && source[cursor] !== '\n' && source[cursor] !== '\r'; cursor -= 1) {
-      if (source[cursor] !== '%') continue;
-      let slashes = 0;
-      for (let previous = cursor - 1; previous >= 0 && source[previous] === '\\'; previous -= 1) slashes += 1;
-      return slashes % 2 === 0;
-    }
-    return false;
-  };
   let expanded = ''; let cursor = 0;
   for (const match of source.matchAll(include)) {
     const start = match.index ?? 0;
-    if (insideSourceRanges(start, literalRanges) || isCommentedInput(start)) continue;
+    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(source, start)) continue;
     expanded += source.slice(cursor, match.index);
     const requested = match[1].trim();
     const candidate = path.resolve(path.dirname(entryFile), /\.[A-Za-z0-9]+$/.test(requested) ? requested : `${requested}.tex`);
@@ -311,6 +350,37 @@ async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 
   return expanded;
 }
 
+async function sameExpandedTexSource(left, right) {
+  const readableKind = (source) => ['tex', 'ai-tex'].includes(source?.kind) && source?.entryFile && source?.sourceDirectory;
+  if (!readableKind(left) || !readableKind(right)) return false;
+  try {
+    const [leftText, rightText] = await Promise.all([
+      readExpandedTex(left.entryFile, left.sourceDirectory),
+      readExpandedTex(right.entryFile, right.sourceDirectory),
+    ]);
+    return leftText.replace(/\r\n?/g, '\n') === rightText.replace(/\r\n?/g, '\n');
+  } catch { return false; }
+}
+
+function stripLegacyFontMarkup(source) {
+  let text = String(source || '');
+  const groupStart = /\{\\(?:bf|it|rm|tt|sf|sl|sc)\b\s*/g;
+  for (let pass = 0; pass < 4; pass += 1) {
+    let output = ''; let cursor = 0; let changed = false;
+    for (const match of text.matchAll(groupStart)) {
+      if ((match.index ?? 0) < cursor) continue;
+      const group = balancedGroup(text, match.index ?? 0);
+      if (!group) continue;
+      const content = group.content.replace(/^\s*\\(?:bf|it|rm|tt|sf|sl|sc)\b\s*/, '');
+      output += text.slice(cursor, match.index ?? 0) + content;
+      cursor = group.end; changed = true;
+    }
+    if (!changed) break;
+    text = output + text.slice(cursor);
+  }
+  return text.replace(/\\(?:bf|it|rm|tt|sf|sl|sc)\b\s*/g, '');
+}
+
 function normalizeMathTextCommands(source) {
   let text = String(source || '');
   const command = /\\(mbox|text)\s*\{/g;
@@ -320,7 +390,7 @@ function normalizeMathTextCommands(source) {
       if ((match.index ?? 0) < cursor) continue;
       const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
       if (!group) continue;
-      let content = group.content.trim().replace(/^\{\\(?:normalfont|rm)\s*/, '').replace(/\}\s*$/, '').replace(/\\(?:normalfont|rm)\b\s*/g, '');
+      let content = stripLegacyFontMarkup(group.content.trim()).replace(/^\{\\(?:normalfont|rm)\s*/, '').replace(/\}\s*$/, '').replace(/\\(?:normalfont|rm)\b\s*/g, '');
       if (match[1] === 'text' && !content.includes('$')) continue;
       const pieces = content.split(/\$([^$]*)\$/g).map((piece, index) => index % 2 ? piece.trim() : piece.replace(/\s+/g, ' '));
       const replacement = pieces.map((piece, index) => {
@@ -446,7 +516,11 @@ function normalizeTextLineBreaks(source) {
 
 function stripLatexComments(source) {
   const value = String(source || ''); let output = '';
+  // Percent signs are data inside literal source environments. Preserve them
+  // while still treating the dedicated `comment` environment as invisible.
+  const literalRanges = literalSourceRanges(value).filter(([start]) => !/^\\begin\{comment\}/.test(value.slice(start)));
   for (let index = 0; index < value.length; index += 1) {
+    if (insideSourceRanges(index, literalRanges)) { output += value[index]; continue; }
     if (value[index] !== '%') { output += value[index]; continue; }
     let slashes = 0;
     for (let previous = index - 1; previous >= 0 && value[previous] === '\\'; previous -= 1) slashes += 1;
@@ -456,8 +530,20 @@ function stripLatexComments(source) {
   return output;
 }
 
+function isLatexCommentedAt(source, index) {
+  const value = String(source || '');
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] !== '\n' && value[cursor] !== '\r'; cursor -= 1) {
+    if (value[cursor] !== '%') continue;
+    let slashes = 0;
+    for (let previous = cursor - 1; previous >= 0 && value[previous] === '\\'; previous -= 1) slashes += 1;
+    return slashes % 2 === 0;
+  }
+  return false;
+}
+
 function readableLatex(source) {
-  const prepared = stripLatexComments(normalizeXyMatrices(normalizePrescriptCommands(String(source || ''))));
+  const withoutCommentEnvironments = String(source || '').replace(/\\begin\{comment\}[\s\S]*?\\end\{comment\}/g, '');
+  const prepared = stripDocumentDeclarations(stripLatexComments(normalizeXyMatrices(normalizePrescriptCommands(withoutCommentEnvironments))));
   const readable = unwrapLatexTwoArgumentCommands(unwrapLatexTextCommands(normalizeMathTextCommands(prepared)))
     .replace(/\\selectlanguage\s*\{[^}]*\}/g, '')
     .replace(/\\begin\{(?:otherlanguage\*?|thebibliography)\}(?:\{[^}]*\})?/g, '')
@@ -471,7 +557,10 @@ function readableLatex(source) {
     .replace(/\\ar(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/g, '')
     .replace(/\\footnotemark\b/g, '')
     .replace(/\\includegraphics(?:\[[^\]]*\])?\s*\{[^}]+\}/g, '')
-    .replace(/\\hfil\b/g, '')
+    .replace(/\\(?:url|nolinkurl|path)\s*\{([^}]*)\}/g, '$1')
+    // Horizontal fill is page-layout glue. It has no readable equivalent and
+    // KaTeX does not support it consistently, so never expose it as prose.
+    .replace(/\\hfil(?:l)?\b/g, '')
     .replace(/\\displaylimits(?![A-Za-z@])/g, '\\limits')
     .replace(/\\'\{?e\}?/g, 'é')
     .replace(/\\'\{?E\}?/g, 'É')
@@ -508,7 +597,7 @@ function readableLatex(source) {
     .replace(/\\(?:emph|textbf|textit|texttt|textsc|textrm|textsf|underline|centerline|mbox)\s*\{([^{}]*)\}/g, '$1')
     .replace(/\\(?:vspace|hspace)\*?\s*\{[^}]*\}/g, ' ')
     .replace(/\\(?:medskip|smallskip|bigskip|noindent|par)\b/g, '\n')
-    .replace(/~+/g, ' ')
+    .replace(/~+/g, '\u00a0')
     .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -528,8 +617,11 @@ function citationKeys(source) {
 }
 
 function citationMentions(source) {
+  const value = String(source || '');
+  const literalRanges = literalSourceRanges(value);
   const mentions = [];
-  for (const match of String(source || '').matchAll(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)) {
+  for (const match of value.matchAll(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
     for (const key of match[3].split(',').map((item) => item.trim()).filter(Boolean)) {
       const locator = [match[1], match[2]].map((item) => String(item || '').trim()).filter(Boolean).join('; ');
       if (!mentions.some((item) => item.key === key && item.locator === locator)) mentions.push({ key, locator });
@@ -542,7 +634,7 @@ function cleanBibliographyFragment(value) {
   return readableLatex(String(value || '')
     .replace(/\\newblock\b/g, '\n')
     .replace(/\{\\(?:em|it|bf)\s+([^{}]*)\}/g, '$1')
-    .replace(/\\(?:url|path)\s*\{([^}]*)\}/g, '$1')
+    .replace(/\\(?:url|nolinkurl|path)\s*\{([^}]*)\}/g, '$1')
     .replace(/\\href\s*\{[^}]*\}\s*\{([^}]*)\}/g, '$1'))
     .replace(/\s+/g, ' ')
     .trim();
@@ -550,7 +642,8 @@ function cleanBibliographyFragment(value) {
 
 function extractBibliography(source) {
   const text = String(source || '');
-  const matches = [...text.matchAll(/\\bibitem(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)];
+  const literalRanges = literalSourceRanges(text);
+  const matches = [...text.matchAll(/\\bibitem(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].filter((match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(text, match.index ?? 0));
   const references = new Map();
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index];
@@ -560,7 +653,7 @@ function extractBibliography(source) {
     const title = blocks[1] || blocks[0] || match[1];
     const authors = blocks.length > 1 ? blocks[0] : '';
     const href = /\\href\s*\{([^}]+)\}/.exec(raw)?.[1];
-    const explicitUrl = /\\url\s*\{([^}]+)\}/.exec(raw)?.[1] || /https?:\/\/[^\s}]+/.exec(raw)?.[0];
+    const explicitUrl = /\\(?:url|nolinkurl|path)\s*\{([^}]+)\}/.exec(raw)?.[1] || /https?:\/\/[^\s}]+/.exec(raw)?.[0];
     const doi = /\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/i.exec(raw)?.[0]?.replace(/[.,;]+$/, '') || '';
     const arxivId = /(?:arXiv\s*:\s*|arXiv\s+)([a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i.exec(citationText)?.[1] || '';
     const searchQuery = [title, authors].filter(Boolean).join(' ');
@@ -621,15 +714,18 @@ function extractBibtex(source) {
 
 async function extractBibliographyTree(source, sourceRoot) {
   const references = extractBibliography(source);
+  const value = String(source || '');
+  const literalRanges = literalSourceRanges(value);
   const requested = [];
-  for (const match of String(source || '').matchAll(/\\(?:bibliography|addbibresource)(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)) {
+  for (const match of value.matchAll(/\\(?:bibliography|addbibresource)(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
     for (const name of match[1].split(',').map((value) => value.trim()).filter(Boolean)) requested.push(name);
   }
   for (const name of requested) {
     const filename = /\.bib$/i.test(name) ? name : `${name}.bib`;
     const candidate = path.resolve(sourceRoot, filename);
     const relative = path.relative(sourceRoot, candidate);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    if (relativePathEscapes(relative)) continue;
     try { for (const [key, reference] of extractBibtex(decodeSourceBuffer(await readFile(candidate)))) references.set(key, reference); }
     catch { /* A missing bibliography remains a non-fatal, explicit lookup. */ }
   }
@@ -651,13 +747,16 @@ function balancedGroup(text, start, openToken = '{', closeToken = '}') {
 
 function authorMacroTable(source) {
   const text = String(source || '');
+  const literalRanges = literalSourceRanges(text);
   const macros = new Map();
   const declarations = /\\(?:newcommand|renewcommand)\s*\{\\([A-Za-z@]+)\}\s*(?:\[(\d+)\])?\s*(?:\[([^\]]*)\])?\s*\{/g;
   for (const match of text.matchAll(declarations)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
     if (group) macros.set(match[1], { replacement: group.content, arity: Number(match[2] || 0), defaultArg: match[3] });
   }
   for (const match of text.matchAll(/\\def\s*\\([A-Za-z@]+)\s*((?:#\d\s*)*)\{/g)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
     let arity = Math.max(0, ...[...String(match[2] || '').matchAll(/#(\d)/g)].map((item) => Number(item[1])));
     let replacement = group?.content || '';
@@ -665,10 +764,12 @@ function authorMacroTable(source) {
     if (group) macros.set(match[1], { replacement, arity });
   }
   for (const match of text.matchAll(/\\DeclareMathOperator\*?\s*\{\\([A-Za-z@]+)\}\s*\{/g)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
     if (group) macros.set(match[1], { replacement: `\\operatorname{${group.content}}`, arity: 0 });
   }
   for (const match of text.matchAll(/\\let\s*\\([A-Za-z@]+)\s*(?:=\s*)?\\([A-Za-z@]+)/g)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
     const takesArgument = /^(?:widehat|widetilde|overline|underline)$/.test(match[2]);
     macros.set(match[1], { replacement: takesArgument ? `\\${match[2]}{#1}` : `\\${match[2]}`, arity: takesArgument ? 1 : 0 });
   }
@@ -677,8 +778,10 @@ function authorMacroTable(source) {
 
 function expandMacroUse(text, name, macro) {
   const pattern = new RegExp(`\\\\${name}(?![A-Za-z@])`, 'g');
+  const literalRanges = literalSourceRanges(text);
   let output = ''; let cursor = 0;
   for (const match of text.matchAll(pattern)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
     let position = (match.index ?? 0) + match[0].length;
     const args = [];
     // TeX uses whitespace to terminate a zero-argument control word. Preserve
@@ -700,7 +803,15 @@ function expandMacroUse(text, name, macro) {
     }
     if (!complete) continue;
     let replacement = macro.replacement;
-    args.forEach((argument, index) => { replacement = replacement.replace(new RegExp(`#${index + 1}`, 'g'), () => argument); });
+    args.forEach((argument, index) => {
+      replacement = replacement.replace(new RegExp(`#${index + 1}`, 'g'), (_placeholder, offset, whole) => {
+        // TeX tokenizes a control word before substituting macro parameters.
+        // Preserve that boundary or `\\lVert#1` with `#1=A` becomes the
+        // undefined reader command `\\lVertA`.
+        const needsBoundary = /\\[A-Za-z@]+$/.test(whole.slice(0, offset)) && /^[A-Za-z@]/.test(argument);
+        return needsBoundary ? ` ${argument}` : argument;
+      });
+    });
     output += text.slice(cursor, match.index ?? 0) + replacement;
     cursor = position;
   }
@@ -709,8 +820,10 @@ function expandMacroUse(text, name, macro) {
 
 function expandSimpleEnvironments(source) {
   const text = String(source || '');
+  const literalRanges = literalSourceRanges(text);
   const definitions = [];
   for (const match of text.matchAll(/\\(?:newenvironment|renewenvironment)\s*\{([^}]+)\}(?!\s*\[)\s*\{/g)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
     const begin = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
     if (!begin) continue;
     let position = begin.end; while (/\s/.test(text[position] || '')) position += 1;
@@ -727,7 +840,10 @@ function expandSimpleEnvironments(source) {
 
 function expandAuthorMacros(source) {
   const macros = authorMacroTable(source);
-  let expanded = expandSimpleEnvironments(source);
+  // Collect definitions before removing them, then expand only author-facing
+  // uses. Expanding the command name inside its own `\newcommand` declaration
+  // corrupts the declaration and can make it appear as proof text.
+  let expanded = stripDocumentDeclarations(expandSimpleEnvironments(source));
   const entries = [...macros.entries()].sort((a, b) => b[0].length - a[0].length);
   for (let pass = 0; pass < 4; pass += 1) for (const [name, macro] of entries) expanded = expandMacroUse(expanded, name, macro);
   return expanded;
@@ -762,17 +878,22 @@ function environmentDisplayLabel(label, displayName, printedNumber = '') {
 }
 
 function graphicPaths(source) {
-  const activeSource = stripLatexComments(source);
-  return [...activeSource.matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].map((match) => match[1].trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+  const value = String(source || '');
+  const literalRanges = literalSourceRanges(value);
+  return [...value.matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)]
+    .filter((match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(value, match.index ?? 0))
+    .map((match) => match[1].trim().replace(/^["']|["']$/g, '')).filter(Boolean);
 }
 
 function literalSourceRanges(source) {
   const value = String(source || ''); const ranges = [];
   for (const match of value.matchAll(/\\begin\{(verbatim\*?|Verbatim|lstlisting|minted|comment|alltt)\}(?:\[[^\]]*\])?(?:\{[^}]*\})?[\s\S]*?\\end\{\1\}/g)) {
-    const start = match.index ?? 0; ranges.push([start, start + match[0].length]);
+    const start = match.index ?? 0;
+    if (!isLatexCommentedAt(value, start)) ranges.push([start, start + match[0].length]);
   }
   for (const match of value.matchAll(/\\verb\*?([^A-Za-z0-9\s])[\s\S]*?\1/g)) {
-    const start = match.index ?? 0; ranges.push([start, start + match[0].length]);
+    const start = match.index ?? 0;
+    if (!isLatexCommentedAt(value, start)) ranges.push([start, start + match[0].length]);
   }
   return ranges;
 }
@@ -781,11 +902,14 @@ function insideSourceRanges(index, ranges) {
   return ranges.some(([start, end]) => start <= index && index < end);
 }
 
-function sourceProofEvents(source, units = []) {
+function sourceProofEvents(source, units = [], declarationSource = source) {
   const value = String(source || '');
   const literalRanges = literalSourceRanges(value);
   const proofEnvironments = new Set(['proof']);
-  for (const match of value.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) {
+  const definitions = String(declarationSource || '');
+  const definitionLiteralRanges = literalSourceRanges(definitions);
+  for (const match of definitions.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) {
+    if (insideSourceRanges(match.index ?? 0, definitionLiteralRanges) || isLatexCommentedAt(definitions, match.index ?? 0)) continue;
     if (/^proof/i.test(match[1]) || /proof|preuve|démonstration/i.test(match[3] || '')) proofEnvironments.add(match[1]);
   }
   const proofNames = [...proofEnvironments].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
@@ -794,7 +918,7 @@ function sourceProofEvents(source, units = []) {
   const events = [];
   for (const match of value.matchAll(pattern)) {
     const start = match.index ?? 0;
-    if (insideSourceRanges(start, literalRanges)) continue;
+    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(value, start)) continue;
     const end = start + match[0].length;
     const linkedUnit = units.find((candidate) => candidate.proofStart === start) || units.find((candidate) => candidate.start < start && start < candidate.end);
     const unit = linkedUnit || { proofText: readableLatex(match[3]), proofAssetPaths: graphicPaths(match[3]), citationMentions: citationMentions(match[3]), citations: [], nodeId: '', kind: 'theorem' };
@@ -806,6 +930,7 @@ function sourceProofEvents(source, units = []) {
 function extractSourceUnits(source) {
   const originalSource = String(source || '');
   const normalizedSource = expandAuthorMacros(originalSource);
+  const originalLiteralRanges = literalSourceRanges(originalSource);
   const literalRanges = literalSourceRanges(normalizedSource);
   const environments = new Map([
     ['theorem', 'theorem'], ['thm', 'theorem'], ['lemma', 'lemma'], ['lem', 'lemma'],
@@ -822,6 +947,7 @@ function extractSourceUnits(source) {
   const theoremCounters = new Map();
   const declarations = /\\newtheorem(\*)?\s*\{([^}]+)\}(?:\[([^\]]+)\])?\s*\{([^}]+)\}(?:\[([^\]]+)\])?/g;
   for (const match of originalSource.matchAll(declarations)) {
+    if (insideSourceRanges(match.index ?? 0, originalLiteralRanges) || isLatexCommentedAt(originalSource, match.index ?? 0)) continue;
     const environment = match[2]; const sharedCounter = String(match[3] || '').trim(); const displayName = readableLatex(match[4]); const within = String(match[5] || '').trim();
     const kind = theoremKind(displayName, environment);
     environments.set(environment, kind);
@@ -830,6 +956,7 @@ function extractSourceUnits(source) {
   }
   const proofEnvironments = new Set(['proof']);
   for (const match of originalSource.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) {
+    if (insideSourceRanges(match.index ?? 0, originalLiteralRanges) || isLatexCommentedAt(originalSource, match.index ?? 0)) continue;
     if (/^proof/i.test(match[1]) || /proof|preuve|démonstration/i.test(match[3] || '')) proofEnvironments.add(match[1]);
   }
   const names = [...environments.keys()].sort((a, b) => b.length - a.length).map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
@@ -843,7 +970,7 @@ function extractSourceUnits(source) {
   const headingPattern = /\\(part|chapter|section|subsection|subsubsection)(?!\*)\s*(?:\[[^\]]*\])?\s*\{/g;
   for (const match of normalizedSource.matchAll(headingPattern)) {
     const start = match.index ?? 0;
-    if (insideSourceRanges(start, literalRanges)) continue;
+    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(normalizedSource, start)) continue;
     const level = headingLevels[match[1]];
     headingCounters[level] += 1;
     for (let index = level + 1; index < headingCounters.length; index += 1) headingCounters[index] = 0;
@@ -862,7 +989,7 @@ function extractSourceUnits(source) {
   const units = [];
   for (const match of normalizedSource.matchAll(unitPattern)) {
     const start = match.index ?? 0; const end = start + match[0].length;
-    if (insideSourceRanges(start, literalRanges)) continue;
+    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(normalizedSource, start)) continue;
     const label = /\\label\s*\{([^}]+)\}/.exec(match[3])?.[1] || '';
     const embeddedProofs = [...match[3].matchAll(embeddedProofPattern)];
     const statementSource = match[3].replace(embeddedProofPattern, '');
@@ -873,7 +1000,7 @@ function extractSourceUnits(source) {
   const proofPattern = new RegExp(`\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
   for (const proof of normalizedSource.matchAll(proofPattern)) {
     const proofStart = proof.index ?? 0;
-    if (insideSourceRanges(proofStart, literalRanges)) continue;
+    if (insideSourceRanges(proofStart, literalRanges) || isLatexCommentedAt(normalizedSource, proofStart)) continue;
     if (units.some((unit) => unit.start < proofStart && proofStart < unit.end)) continue;
     const nearest = units.filter((unit) => unit.end <= proofStart).at(-1) || null;
     const prelude = normalizedSource.slice(Math.max(nearest?.end ?? 0, proofStart - 2200), proofStart);
@@ -899,20 +1026,25 @@ function resolveLatexReferences(source, sourceUnits = []) {
   const labels = new Map(sourceUnits.filter((unit) => unit.texLabel && unit.printedNumber).map((unit) => [unit.texLabel, unit.printedNumber]));
   const literalRanges = literalSourceRanges(value);
   const proofNames = new Set(['proof']);
-  for (const match of value.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) if (/^proof/i.test(match[1]) || /proof|preuve|démonstration/i.test(match[3] || '')) proofNames.add(match[1]);
+  for (const match of value.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
+    if (/^proof/i.test(match[1]) || /proof|preuve|démonstration/i.test(match[3] || '')) proofNames.add(match[1]);
+  }
   const proofNamePattern = [...proofNames].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const proofHeaderRanges = [];
   for (const match of value.matchAll(new RegExp(`\\\\begin\\{(?:${proofNamePattern})\\}\\s*\\[`, 'g'))) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
     const group = balancedGroup(value, (match.index ?? 0) + match[0].length - 1, '[', ']');
     if (group) proofHeaderRanges.push([match.index ?? 0, group.end]);
   }
   const sectionAt = [];
-  const sectionCounters = [0, 0, 0, 0];
-  const sectionPattern = /\\(part|section|subsection|subsubsection)(\*)?(?:\[[^\]]*\])?\s*\{/g;
-  const sectionLevels = { part: 0, section: 1, subsection: 2, subsubsection: 3 };
+  const sectionCounters = [0, 0, 0, 0, 0];
+  const sectionPattern = /\\(part|chapter|section|subsection|subsubsection)(\*)?(?:\[[^\]]*\])?\s*\{/g;
+  const hasChapters = [...value.matchAll(/\\chapter\*?(?:\[[^\]]*\])?\s*\{/g)].some((match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(value, match.index ?? 0));
+  const sectionLevels = { part: 0, chapter: 1, section: hasChapters ? 2 : 1, subsection: hasChapters ? 3 : 2, subsubsection: hasChapters ? 4 : 3 };
   for (const match of value.matchAll(sectionPattern)) {
     const start = match.index ?? 0;
-    if (match[2] || insideSourceRanges(start, literalRanges)) continue;
+    if (match[2] || insideSourceRanges(start, literalRanges) || isLatexCommentedAt(value, start)) continue;
     const level = sectionLevels[match[1]] ?? 1;
     sectionCounters[level] += 1;
     for (let index = level + 1; index < sectionCounters.length; index += 1) sectionCounters[index] = 0;
@@ -920,14 +1052,14 @@ function resolveLatexReferences(source, sourceUnits = []) {
     const title = balancedGroup(value, start + match[0].length - 1);
     const immediateLabel = title ? /^\s*\\label\s*\{([^}]+)\}/.exec(value.slice(title.end, title.end + 240)) : null;
     if (immediateLabel?.[1] && number) labels.set(immediateLabel[1], number);
-    if (match[1] === 'section') sectionAt.push({ start, number: sectionCounters[1] });
+    if (match[1] === 'section') sectionAt.push({ start, number });
   }
 
   for (const environment of ['figure', 'table']) {
     let counter = 0;
     const pattern = environment === 'table' ? /\\begin\{(table\*?|longtable)\}([\s\S]*?)\\end\{\1\}/g : /\\begin\{(figure\*?)\}([\s\S]*?)\\end\{\1\}/g;
     for (const match of value.matchAll(pattern)) {
-      if (insideSourceRanges(match.index ?? 0, literalRanges)) continue;
+      if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
       counter += 1;
       for (const label of match[2].matchAll(/\\label\s*\{([^}]+)\}/g)) labels.set(label[1], String(counter));
     }
@@ -937,7 +1069,7 @@ function resolveLatexReferences(source, sourceUnits = []) {
   let equationCounter = 0; let equationSection = 0;
   const equationPattern = /\\begin\{(equation|align|gather|multline|eqnarray)(\*)?\}([\s\S]*?)\\end\{\1\2\}/g;
   for (const match of value.matchAll(equationPattern)) {
-    if (match[2] || insideSourceRanges(match.index ?? 0, literalRanges)) continue;
+    if (match[2] || insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
     const currentSection = sectionAt.filter((section) => section.start < (match.index ?? 0)).at(-1)?.number || 0;
     if (sectionalEquations && currentSection !== equationSection) { equationSection = currentSection; equationCounter = 0; }
     const equationLabels = [...match[3].matchAll(/\\label\s*\{([^}]+)\}/g)].map((item) => item[1]);
@@ -966,10 +1098,11 @@ function citationReference(mention, bibliography, aiCitations = []) {
 
 function sectionEvents(source) {
   const events = []; const literalRanges = literalSourceRanges(source);
-  const pattern = /\\(part|section|subsection|subsubsection)\*?(?:\[[^\]]*\])?\s*\{/g;
-  const levels = { part: 0, section: 1, subsection: 2, subsubsection: 3 };
+  const pattern = /\\(part|chapter|section|subsection|subsubsection)\*?(?:\[[^\]]*\])?\s*\{/g;
+  const hasChapters = [...String(source || '').matchAll(/\\chapter\*?(?:\[[^\]]*\])?\s*\{/g)].some((match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(source, match.index ?? 0));
+  const levels = { part: 0, chapter: 1, section: hasChapters ? 2 : 1, subsection: hasChapters ? 3 : 2, subsubsection: hasChapters ? 4 : 3 };
   for (const match of String(source || '').matchAll(pattern)) {
-    if (insideSourceRanges(match.index ?? 0, literalRanges)) continue;
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(source, match.index ?? 0)) continue;
     const title = balancedGroup(source, (match.index ?? 0) + match[0].length - 1);
     if (!title) continue;
     events.push({ type: 'section', start: match.index ?? 0, end: title.end, level: levels[match[1]] ?? 1, title: readableLatex(title.content) });
@@ -979,10 +1112,92 @@ function sectionEvents(source) {
 
 function stripDocumentDeclarations(source) {
   // Some author sources place theorem and macro declarations immediately after
-  // \begin{document}. They configure TeX but render no paper content, so never
-  // expose those declaration lines as reader paragraphs.
-  const declaration = /^[ \t]*\\(?:mathchardef|chardef|newtheorem|renewtheorem|newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator|newenvironment|renewenvironment|def|gdef|edef|xdef|let|theoremstyle|numberwithin|counterwithin|counterwithout)(?:\*)?(?=\s|\\|\{|\[|$)[^\r\n]*(?:\r?\n|$)/gm;
-  return String(source || '').replace(declaration, '\n');
+  // \begin{document}, and local macro declarations may also occur inside a
+  // proof. They configure TeX but render no paper content. Parse balanced
+  // declarations first so a multi-line replacement body cannot leak into the
+  // reader, then remove the remaining one-line counter/style declarations.
+  const text = String(source || '');
+  const literalRanges = literalSourceRanges(text);
+  const ranges = [];
+  const commandPattern = /\\(newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator|newenvironment|renewenvironment|newtheorem|renewtheorem|def|gdef|edef|xdef|mathchardef|chardef|let|theoremstyle|numberwithin|counterwithin|counterwithout)\*?/g;
+  const skipSpace = (position) => { while (/\s/.test(text[position] || '')) position += 1; return position; };
+  const takeGroup = (position, open = '{', close = '}') => {
+    const start = skipSpace(position);
+    const group = balancedGroup(text, start, open, close);
+    return group ? { ...group, start } : null;
+  };
+  const takeOptional = (position) => takeGroup(position, '[', ']');
+  const takeMacroName = (position) => {
+    const start = skipSpace(position);
+    const grouped = balancedGroup(text, start);
+    if (grouped) return grouped.end;
+    const token = /^\\(?:[A-Za-z@]+|.)/.exec(text.slice(start))?.[0];
+    return token ? start + token.length : -1;
+  };
+  for (const match of text.matchAll(commandPattern)) {
+    const start = match.index ?? 0;
+    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(text, start)) continue;
+    const command = match[1];
+    let position = start + match[0].length;
+    if (/^(?:newcommand|renewcommand|providecommand|DeclareRobustCommand)$/.test(command)) {
+      position = takeMacroName(position);
+      if (position < 0) continue;
+      const arity = takeOptional(position); if (arity) position = arity.end;
+      const fallback = takeOptional(position); if (fallback) position = fallback.end;
+      const replacement = takeGroup(position); if (!replacement) continue;
+      position = replacement.end;
+    } else if (command === 'DeclareMathOperator') {
+      const name = takeGroup(position); if (!name) continue;
+      const replacement = takeGroup(name.end); if (!replacement) continue;
+      position = replacement.end;
+    } else if (/^(?:newenvironment|renewenvironment)$/.test(command)) {
+      const name = takeGroup(position); if (!name) continue; position = name.end;
+      const arity = takeOptional(position); if (arity) position = arity.end;
+      const fallback = takeOptional(position); if (fallback) position = fallback.end;
+      const begin = takeGroup(position); if (!begin) continue;
+      const end = takeGroup(begin.end); if (!end) continue;
+      position = end.end;
+    } else if (/^(?:newtheorem|renewtheorem)$/.test(command)) {
+      const name = takeGroup(position); if (!name) continue; position = name.end;
+      const shared = takeOptional(position); if (shared) position = shared.end;
+      const title = takeGroup(position); if (!title) continue; position = title.end;
+      const within = takeOptional(position); if (within) position = within.end;
+    } else if (/^(?:def|gdef|edef|xdef)$/.test(command)) {
+      position = takeMacroName(position);
+      if (position < 0) continue;
+      const replacementStart = text.indexOf('{', position);
+      const lineEnd = text.indexOf('\n', position);
+      if (replacementStart < 0 || (lineEnd >= 0 && replacementStart > lineEnd)) continue;
+      const replacement = balancedGroup(text, replacementStart); if (!replacement) continue;
+      position = replacement.end;
+    } else if (/^(?:mathchardef|chardef)$/.test(command)) {
+      position = takeMacroName(position);
+      if (position < 0) continue;
+      const value = /^\s*=?\s*(?:"[0-9A-Fa-f]+|[0-9]+)/.exec(text.slice(position));
+      if (!value) continue;
+      position += value[0].length;
+    } else if (command === 'let') {
+      position = takeMacroName(position);
+      if (position < 0) continue;
+      position = skipSpace(position);
+      if (text[position] === '=') position = skipSpace(position + 1);
+      position = takeMacroName(position);
+      if (position < 0) continue;
+    } else if (command === 'theoremstyle') {
+      const style = takeGroup(position); if (!style) continue;
+      position = style.end;
+    } else {
+      const counter = takeGroup(position); if (!counter) continue;
+      const owner = takeGroup(counter.end); if (!owner) continue;
+      position = owner.end;
+    }
+    ranges.push([start, position]);
+  }
+  let balancedCleaned = text;
+  for (const [start, end] of ranges.sort((left, right) => right[0] - left[0])) {
+    balancedCleaned = balancedCleaned.slice(0, start) + balancedCleaned.slice(start, end).replace(/[^\r\n]/g, ' ') + balancedCleaned.slice(end);
+  }
+  return balancedCleaned;
 }
 
 function readableBodyFragment(source) {
@@ -1016,7 +1231,7 @@ function tableEvents(source) {
   const tabular = (fragment) => /\\begin\{(?:tabular\*?|tabularx)\}[\s\S]*?\\end\{(?:tabular\*?|tabularx)\}/.exec(fragment)?.[0] || '';
   for (const match of String(source || '').matchAll(/\\begin\{(table\*?|longtable)\}([\s\S]*?)\\end\{\1\}/g)) {
     const start = match.index ?? 0;
-    if (insideSourceRanges(start, literalRanges)) continue;
+    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(source, start)) continue;
     const content = match[1] === 'longtable' ? match[0] : tabular(match[0]);
     if (!content) continue;
     const end = start + match[0].length; covered.push([start, end]);
@@ -1024,7 +1239,7 @@ function tableEvents(source) {
   }
   for (const match of String(source || '').matchAll(/\\begin\{(?:tabular\*?|tabularx|longtable)\}[\s\S]*?\\end\{(?:tabular\*?|tabularx|longtable)\}/g)) {
     const start = match.index ?? 0;
-    if (insideSourceRanges(start, literalRanges) || covered.some(([left, right]) => left <= start && start < right)) continue;
+    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(source, start) || covered.some(([left, right]) => left <= start && start < right)) continue;
     events.push({ type: 'table', start, end: start + match[0].length, content: match[0], caption: '', citations: citationMentions(match[0]) });
   }
   return events;
@@ -1037,7 +1252,7 @@ function bibliographyEvents(source, bibliography) {
   const inlinePattern = /\\begin\{thebibliography\}(?:\{[^}]*\})?([\s\S]*?)\\end\{thebibliography\}/g;
   for (const match of value.matchAll(inlinePattern)) {
     const start = match.index ?? 0;
-    if (insideSourceRanges(start, literalRanges)) continue;
+    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(value, start)) continue;
     const body = match[1] || '';
     const items = [...body.matchAll(/\\bibitem(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)];
     const entries = items.map((item, index) => {
@@ -1048,7 +1263,7 @@ function bibliographyEvents(source, bibliography) {
   }
   if (events.length || !bibliography?.size) return events;
   const external = /\\(?:printbibliography|bibliography)\b(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/.exec(value);
-  if (!external || insideSourceRanges(external.index ?? 0, literalRanges)) return events;
+  if (!external || insideSourceRanges(external.index ?? 0, literalRanges) || isLatexCommentedAt(value, external.index ?? 0)) return events;
   const entries = [...bibliography.values()].map((reference) => ({ key: String(reference.key || ''), content: String(reference.text || [reference.authors, reference.title].filter(Boolean).join('. ') || reference.key || '') })).filter((entry) => entry.key && entry.content);
   if (entries.length) events.push({ type: 'bibliography', start: external.index ?? 0, end: (external.index ?? 0) + external[0].length, entries });
   return events;
@@ -1095,34 +1310,36 @@ function sourceParagraphBlocks(source, bibliography, state) {
 }
 
 function buildSourceBlocks(source, units, bibliography) {
-  const normalized = expandAuthorMacros(String(source || ''));
-  const beginMatch = /^[ \t]*\\begin\{document\}[ \t]*(?:%[^\r\n]*)?/m.exec(normalized);
+  const original = String(source || '');
+  const normalized = expandAuthorMacros(original);
+  const literalRanges = literalSourceRanges(normalized);
+  const activeMatches = (pattern) => [...normalized.matchAll(pattern)].filter((match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(normalized, match.index ?? 0));
+  const beginMatch = activeMatches(/\\begin\{document\}/g)[0];
   const documentBegin = beginMatch?.index ?? -1;
   let bodyStart = documentBegin >= 0 ? documentBegin + (beginMatch?.[0].length ?? '\\begin{document}'.length) : 0;
-  const firstSection = /\\(?:part|section|chapter)\*?(?:\[[^\]]*\])?\s*\{/.exec(normalized.slice(bodyStart));
-  const firstSectionStart = firstSection ? bodyStart + (firstSection.index ?? 0) : -1;
-  const abstractStart = normalized.indexOf('\\begin{abstract}', bodyStart);
+  const sections = sectionEvents(normalized);
+  const firstSectionStart = sections.find((event) => event.start >= bodyStart)?.start ?? -1;
+  const abstractStart = activeMatches(/\\begin\{abstract\}/g).find((match) => (match.index ?? 0) >= bodyStart)?.index ?? -1;
   if (firstSectionStart >= bodyStart) {
     // The reader header already renders paper metadata. Starting the source flow
     // at the first section avoids a second title, author, and abstract when an
     // author formats that front matter manually instead of using \maketitle.
     bodyStart = firstSectionStart;
   } else if (abstractStart >= bodyStart) {
-    const abstractEnd = normalized.indexOf('\\end{abstract}', abstractStart);
+    const abstractEnd = activeMatches(/\\end\{abstract\}/g).find((match) => (match.index ?? 0) > abstractStart)?.index ?? -1;
     if (abstractEnd >= abstractStart) bodyStart = abstractEnd + '\\end{abstract}'.length;
   }
-  const endMatches = [...normalized.matchAll(/^[ \t]*\\end\{document\}[ \t]*(?:%[^\r\n]*)?/gm)];
-  const documentEnd = endMatches.at(-1)?.index ?? -1;
+  const documentEnd = activeMatches(/\\end\{document\}/g).find((match) => (match.index ?? 0) > bodyStart)?.index ?? -1;
   const bodyEnd = documentEnd > bodyStart ? documentEnd : normalized.length;
   const events = [
-    ...sectionEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
+    ...sections.filter((event) => event.start >= bodyStart && event.start < bodyEnd),
     ...figureEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
     ...tableEvents(normalized).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
     ...bibliographyEvents(normalized, bibliography).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
     ...units.filter((unit) => unit.start >= bodyStart && unit.start < bodyEnd).map((unit) => ({ type: 'result', start: unit.start, end: unit.end, unit })),
     // Preserve every proof in source order. A semantic link to a theorem
     // enriches the reader, but never decides whether the proof is rendered.
-    ...sourceProofEvents(normalized, units).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
+    ...sourceProofEvents(normalized, units, original).filter((event) => event.start >= bodyStart && event.start < bodyEnd),
   ].sort((left, right) => left.start - right.start || (left.type === 'section' ? -1 : 1));
   const blocks = []; const state = { paragraph: 0, section: 0, result: 0, proof: 0, table: 0, bibliography: 0 };
   let cursor = bodyStart;
@@ -1174,13 +1391,13 @@ function figureEvents(source) {
     return readableLatex(balancedGroup(fragment, (match.index ?? 0) + match[0].length - 1)?.content || '');
   };
   for (const match of String(source || '').matchAll(/\\begin\{figure\*?\}([\s\S]*?)\\end\{figure\*?\}/g)) {
-    if (insideSourceRanges(match.index ?? 0, literalRanges)) continue;
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(source, match.index ?? 0)) continue;
     const assetPaths = images(match[0]); if (!assetPaths.length) continue;
     const start = match.index ?? 0; const end = start + match[0].length; covered.push([start, end]);
     events.push({ type: 'figure', start, end, assetPaths, caption: caption(match[0]), citations: citationMentions(match[0]) });
   }
   for (const match of String(source || '').matchAll(/\\includegraphics(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)) {
-    const start = match.index ?? 0; if (insideSourceRanges(start, literalRanges) || covered.some(([left, right]) => left <= start && start < right)) continue;
+    const start = match.index ?? 0; if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(source, start) || covered.some(([left, right]) => left <= start && start < right)) continue;
     events.push({ type: 'figure', start, end: start + match[0].length, assetPaths: [match[1].trim().replace(/^["']|["']$/g, '')], caption: '', citations: [] });
   }
   return events;
@@ -2012,12 +2229,18 @@ async function collectFigureFiles(directory, root = directory, depth = 0) {
   return files;
 }
 
+async function realPathIsInside(root, candidate) {
+  const [realRoot, realCandidate] = await Promise.all([realpath(root), realpath(candidate)]);
+  const relative = path.relative(realRoot, realCandidate);
+  return !relativePathEscapes(relative);
+}
+
 async function figureAsset(paperId, requestedPath) {
   const sourceRoot = await vault.sourceDirectory(paperId);
   const record = await vault.recordFor(paperId); const savedPaper = JSON.parse(await readFile(path.join(vault.paperDirectory(record), 'paper.json'), 'utf8'));
   const paperRoot = vault.paperDirectory(record);
   const configuredSource = typeof savedPaper?.source?.sourceDirectory === 'string' ? path.resolve(paperRoot, savedPaper.source.sourceDirectory) : sourceRoot;
-  const configuredRelative = path.relative(sourceRoot, configuredSource); const currentSourceRoot = configuredRelative.startsWith('..') || path.isAbsolute(configuredRelative) ? sourceRoot : configuredSource;
+  const configuredRelative = path.relative(sourceRoot, configuredSource); const currentSourceRoot = relativePathEscapes(configuredRelative) ? sourceRoot : configuredSource;
   const requested = String(requestedPath || '').replaceAll('\\', '/').replace(/^\.\//, '').trim();
   if (!requested || requested.includes('\0')) throw new Error('A valid figure path is required.');
   const extension = path.extname(requested).toLowerCase();
@@ -2026,7 +2249,7 @@ async function figureAsset(paperId, requestedPath) {
   for (const root of [...new Set([currentSourceRoot, sourceRoot])]) {
     for (const alternative of alternatives) {
       const absolute = path.resolve(root, alternative); const relative = path.relative(root, absolute);
-      if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+      if (relativePathEscapes(relative)) continue;
       try { if ((await stat(absolute)).isFile()) { candidate = absolute; break; } } catch { /* Search by suffix below. */ }
     }
     if (candidate) break;
@@ -2045,6 +2268,7 @@ async function figureAsset(paperId, requestedPath) {
     catch { await fetchAr5ivFigurePreview(savedPaper.arxivId, requested, remotePreview); }
     return { payload: await readFile(remotePreview), mime: 'image/png' };
   }
+  if (!await realPathIsInside(sourceRoot, candidate)) throw new Error('The requested figure resolves outside this paper source folder.');
   const sourceExtension = path.extname(candidate).toLowerCase();
   if (['.pdf', '.eps', '.ps', '.tif', '.tiff', '.bmp'].includes(sourceExtension)) {
     await mkdir(previewDirectory, { recursive: true });
@@ -2069,6 +2293,24 @@ async function figureAsset(paperId, requestedPath) {
   return { payload: await readFile(candidate), mime };
 }
 
+async function originalPaperAsset(paperId) {
+  const record = await vault.recordFor(String(paperId || ''));
+  const paperRoot = vault.paperDirectory(record);
+  const savedPaper = JSON.parse(await readFile(path.join(paperRoot, 'paper.json'), 'utf8'));
+  const configured = typeof savedPaper?.source?.localPdf === 'string' ? savedPaper.source.localPdf.trim() : '';
+  if (!configured) throw new Error('This local paper does not have an uploaded PDF.');
+  const sourceRoot = await vault.sourceDirectory(record.id);
+  const candidate = path.resolve(paperRoot, configured);
+  const relative = path.relative(sourceRoot, candidate);
+  if (relativePathEscapes(relative) || path.extname(candidate).toLowerCase() !== '.pdf') throw new Error('The saved PDF path is outside this paper source folder.');
+  if (!await realPathIsInside(sourceRoot, candidate)) throw new Error('The saved PDF resolves outside this paper source folder.');
+  const details = await stat(candidate);
+  if (!details.isFile() || details.size < 5 || details.size > MAX_SOURCE_BYTES) throw new Error('The saved PDF is missing or outside the upload size limit.');
+  const payload = await readFile(candidate);
+  if (payload.subarray(0, 1024).indexOf(Buffer.from('%PDF-')) < 0) throw new Error('The saved file is not a valid PDF.');
+  return payload;
+}
+
 const server = createServer(async (request, response) => {
   const origin = request.headers.origin;
   if (!isAllowedOrigin(origin)) return sendJson(response, 403, { error: 'This local bridge accepts only localhost origins.' }, origin);
@@ -2088,6 +2330,12 @@ const server = createServer(async (request, response) => {
       const asset = await figureAsset(paperId, file);
       response.writeHead(200, { 'Content-Type': asset.mime, 'Cache-Control': 'private, max-age=3600', ...(origin && isAllowedOrigin(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) });
       return response.end(asset.payload);
+    }
+    if (request.method === 'GET' && pathname === '/paper-pdf') {
+      const url = new URL(request.url || '/', `http://${HOST}:${PORT}`);
+      const payload = await originalPaperAsset(url.searchParams.get('paperId') || '');
+      response.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': payload.length, 'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=3600', ...(origin && isAllowedOrigin(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) });
+      return response.end(payload);
     }
     if (request.method === 'GET' && pathname === '/vault') return sendJson(response, 200, await vaultSnapshotWithAuditStatus(), origin);
     if (request.method === 'GET' && pathname === '/cloud/status') return sendJson(response, 200, await cloudStatus(vault), origin);
@@ -2156,7 +2404,8 @@ const server = createServer(async (request, response) => {
         if (fromVersion.replace(/v\d+$/i, '') !== toVersion.replace(/v\d+$/i, '')) throw new Error('Version comparison requires two versions of the same arXiv paper.');
         const load = async (version) => { try { return await acquireArxivSource(paper, version, true); } catch (error) { return { kind: 'pdf', error: error instanceof Error ? error.message : 'TeX source unavailable' }; } };
         const [fromSource, toSource] = await Promise.all([load(fromVersion), load(toVersion)]);
-        const compared = await codex.compareVersions({ paper, profile, fromVersion, toVersion, fromSource, toSource, readerContext: body.readerContext ?? null });
+        const identical = await sameExpandedTexSource(fromSource, toSource);
+        const compared = identical ? { threadId: '', text: JSON.stringify({ summary: `${fromVersion} and ${toVersion} resolve to identical complete TeX source.`, changedUnits: [], proofChanges: [], notationChanges: [], editorialChanges: [], dependencyImpact: [], readingRecommendation: 'No source changes require rereading.', warnings: [] }) } : await codex.compareVersions({ paper, profile, fromVersion, toVersion, fromSource, toSource, readerContext: body.readerContext ?? null });
         return { ...compared, fromVersion, toVersion, sources: { from: fromSource.kind, to: toSource.kind } };
       }
       if (pathname === '/analyze') {
@@ -2239,4 +2488,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
 }
 
-export { CodexAppServer, ar5ivFigureUrl, bodyLimitFor, buildSourceBlocks, enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readBody, readExpandedTex, readableLatex, resolveLatexReferences };
+export { CodexAppServer, ar5ivFigureUrl, bodyLimitFor, buildSourceBlocks, enrichAuditFromTex, expandAuthorMacros, extractBibliography, extractBibliographyTree, extractLatexDocument, extractSourceUnits, readBody, readExpandedTex, readableLatex, resolveLatexReferences, sameExpandedTexSource };

@@ -27,6 +27,17 @@ Open the local URL shown in the terminal. A fresh clone opens the first-time rea
 
 `npm run app` builds and starts the optimized web reader together with the local Codex bridge. Contributors who need hot reload can use `npm run app:dev`; for separate terminals, run `npm run codex-bridge` and `npm run dev`.
 
+### After restarting the computer
+
+Open Terminal, return to this checkout, and start the app again:
+
+```bash
+cd /path/to/arXivpecker
+npm run app
+```
+
+Then open <http://localhost:3000>. Papers, audit checkpoints, notes, edits, and reader conversations are stored in the local library and are restored automatically.
+
 ## Local data
 
 The repository's reusable examples live in `examples/starter-library/`. On first launch they are copied into the writable `proofroom-library/`, where imported papers, notes, edits, audit results, uploads, exports, and preferences remain local and are ignored by Git.
@@ -50,11 +61,13 @@ npm run lint
 npm run build
 npm run test:starter
 npm run test:reader
+npm run test:reader-fuzz
 npm run test:audit-checkpoints
 npm run test:body-limits
 npm run test:vault
 npm run test:sessions
 npm run audit-formulas
+npm audit --omit=dev
 ```
 
 ## License

@@ -28,4 +28,4 @@ Source paths saved in versioned starter data are relative. They are hydrated ins
 
 ## Trust boundary
 
-The bridge listens only on `127.0.0.1`, accepts only localhost browser origins, and treats uploaded archives as untrusted. Source extraction rejects absolute paths and parent-directory traversal. AI reads run through the user's local Codex sign-in with read-only file access.
+The bridge listens only on `127.0.0.1`, accepts only localhost browser origins, and treats uploaded archives as untrusted. Before any vault record is written, source extraction rejects absolute or parent-directory paths (including portable backslash forms), symbolic links and special files, corrupt archives, projects without TeX, more than 2,000 entries, and more than 256 MB of expanded data. Asset and local-PDF reads also verify their resolved filesystem path remains inside the paper source directory. AI reads run through the user's local Codex sign-in with read-only file access.

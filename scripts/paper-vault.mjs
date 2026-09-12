@@ -4,6 +4,10 @@ import { randomUUID } from 'node:crypto';
 
 const VAULT_VERSION = 1;
 
+function relativePathEscapes(relative) {
+  return path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`);
+}
+
 function slug(value, limit = 64) {
   return String(value || 'untitled-paper')
     .normalize('NFKD')
@@ -186,7 +190,8 @@ export class PaperVault {
     const directory = this.paperDirectory(record);
     await this.createDirectories(directory);
     const oldPaper = await readJson(path.join(directory, 'paper.json'), {});
-    await writeJson(path.join(directory, 'paper.json'), { ...oldPaper, ...paper, folder: record.folder, updatedAt: record.updatedAt, createdAt: oldPaper.createdAt ?? record.createdAt, source: { ...(oldPaper.source ?? {}), abstractUrl: `https://arxiv.org/abs/${paper.arxivId}`, pdfUrl: `https://arxiv.org/pdf/${paper.arxivId}`, texUrl: `https://export.arxiv.org/e-print/${paper.arxivId}` } });
+    const savedPaper = { ...oldPaper, ...paper, folder: record.folder, updatedAt: record.updatedAt, createdAt: oldPaper.createdAt ?? record.createdAt, source: { ...(oldPaper.source ?? {}), abstractUrl: `https://arxiv.org/abs/${paper.arxivId}`, pdfUrl: `https://arxiv.org/pdf/${paper.arxivId}`, texUrl: `https://export.arxiv.org/e-print/${paper.arxivId}` } };
+    await writeJson(path.join(directory, 'paper.json'), savedPaper);
     await writeFile(path.join(directory, 'README.md'), readmeFor(paper), 'utf8');
     const patchesFile = path.join(directory, 'editions', 'working', 'patches.json');
     const patches = await readJson(patchesFile, null);
@@ -195,7 +200,7 @@ export class PaperVault {
     if (existingIndex >= 0) index.papers = index.papers.map((item, position) => position === existingIndex ? record : item).filter((item, position, all) => all.findIndex((candidate) => candidate.id === item.id || candidate.arxivId === item.arxivId) === position);
     else index.papers = [record, ...index.papers];
     await this.writeIndex(index);
-    return { ...paper, folder: record.folder };
+    return savedPaper;
   }
 
   async recordFor(paperId) {
@@ -218,10 +223,11 @@ export class PaperVault {
     for (const key of ['sourceDirectory', 'mainTex', 'localPdf']) {
       if (!portable[key] || !path.isAbsolute(portable[key])) continue;
       const relative = path.relative(directory, portable[key]);
-      if (!relative.startsWith('..') && !path.isAbsolute(relative)) portable[key] = relative;
+      if (!relativePathEscapes(relative)) portable[key] = relative;
     }
-    await writeJson(file, { ...paper, source: { ...(paper.source ?? {}), ...portable }, updatedAt: new Date().toISOString() });
-    return sourceRecord;
+    const source = { ...(paper.source ?? {}), ...portable };
+    await writeJson(file, { ...paper, source, updatedAt: new Date().toISOString() });
+    return source;
   }
 
   async removePaper(paperId) {
