@@ -977,8 +977,16 @@ function sectionEvents(source) {
   return events;
 }
 
+function stripDocumentDeclarations(source) {
+  // Some author sources place theorem and macro declarations immediately after
+  // \begin{document}. They configure TeX but render no paper content, so never
+  // expose those declaration lines as reader paragraphs.
+  const declaration = /^[ \t]*\\(?:mathchardef|chardef|newtheorem|renewtheorem|newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator|newenvironment|renewenvironment|def|gdef|edef|xdef|let|theoremstyle|numberwithin|counterwithin|counterwithout)(?:\*)?(?=\s|\\|\{|\[|$)[^\r\n]*(?:\r?\n|$)/gm;
+  return String(source || '').replace(declaration, '\n');
+}
+
 function readableBodyFragment(source) {
-  const cleaned = String(source || '')
+  const cleaned = stripDocumentDeclarations(source)
     .replace(/\\begin\{abstract\}[\s\S]*?\\end\{abstract\}/g, '')
     .replace(/\\(?:title|author|address|email|subjclass|date|dedicatory|keywords|thanks)(?:\[[^\]]*\])?\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, '')
     .replace(/\\(?:maketitle|tableofcontents|clearpage|newpage|printbibliography|centering)\b/g, '')
@@ -1092,8 +1100,14 @@ function buildSourceBlocks(source, units, bibliography) {
   const documentBegin = beginMatch?.index ?? -1;
   let bodyStart = documentBegin >= 0 ? documentBegin + (beginMatch?.[0].length ?? '\\begin{document}'.length) : 0;
   const firstSection = /\\(?:part|section|chapter)\*?(?:\[[^\]]*\])?\s*\{/.exec(normalized.slice(bodyStart));
+  const firstSectionStart = firstSection ? bodyStart + (firstSection.index ?? 0) : -1;
   const abstractStart = normalized.indexOf('\\begin{abstract}', bodyStart);
-  if (abstractStart >= bodyStart && (!firstSection || abstractStart < bodyStart + (firstSection.index ?? 0))) {
+  if (firstSectionStart >= bodyStart) {
+    // The reader header already renders paper metadata. Starting the source flow
+    // at the first section avoids a second title, author, and abstract when an
+    // author formats that front matter manually instead of using \maketitle.
+    bodyStart = firstSectionStart;
+  } else if (abstractStart >= bodyStart) {
     const abstractEnd = normalized.indexOf('\\end{abstract}', abstractStart);
     if (abstractEnd >= abstractStart) bodyStart = abstractEnd + '\\end{abstract}'.length;
   }

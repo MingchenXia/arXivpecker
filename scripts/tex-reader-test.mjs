@@ -103,6 +103,31 @@ assert.equal(delayedProofBlocks.filter((block) => block.kind === 'proof' && /Com
 const standaloneProofBlocks = buildSourceBlocks(String.raw`\begin{document}\section{A standalone proof}\begin{proof}This proof is not linked to a theorem node.\end{proof}\end{document}`, [], new Map());
 assert.ok(standaloneProofBlocks.some((block) => block.kind === 'proof' && /not linked to a theorem node/.test(block.proofText)), 'An unlinked proof environment must remain visible in the source reader.');
 
+const bodyDeclarationBlocks = buildSourceBlocks(String.raw`\begin{document}
+\mathchardef\mhyphen="2D
+\newtheorem{The}{Theorem}[section]
+\newcommand{\C}{\mathbb{C}}
+\newcommand\rank{\operatorname{rank}}
+Readable opening text.
+\section{Content}
+The body remains visible.
+\end{document}`, [], new Map());
+const bodyDeclarationText = bodyDeclarationBlocks.map((block) => `${block.title} ${block.content}`).join('\n');
+assert.doesNotMatch(bodyDeclarationText, /mathchardef|newtheorem|newcommand/, 'Document declarations placed after \\begin{document} must not appear as reader prose.');
+assert.match(bodyDeclarationText, /Readable opening text[.]|The body remains visible[.]/, 'Filtering document declarations must preserve adjacent paper prose.');
+
+const manualFrontMatterBlocks = buildSourceBlocks(String.raw`\begin{document}
+\begin{center}{\Large Duplicate title}\end{center}
+\begin{center}Duplicate author\end{center}
+\noindent{\bf Abstract.} Duplicate abstract.
+\section{Introduction}
+Actual introduction.
+\end{document}`, [], new Map());
+const manualFrontMatterText = manualFrontMatterBlocks.map((block) => `${block.title} ${block.content}`).join('\n');
+assert.equal(manualFrontMatterBlocks[0]?.kind, 'section', 'The source flow must begin at the first section after the separately rendered reader header.');
+assert.doesNotMatch(manualFrontMatterText, /Duplicate title|Duplicate author|Duplicate abstract/, 'Manual title, author, and abstract front matter must not be rendered twice.');
+assert.match(manualFrontMatterText, /Introduction|Actual introduction[.]/);
+
 const bibliographyBlocks = buildSourceBlocks(String.raw`\begin{document}\begin{thebibliography}{9}\bibitem{alpha} A. Author. \newblock \emph{First reference.}\bibitem[Beta]{beta} B. Author. \newblock \textit{Second reference.}\end{thebibliography}\end{document}`, [], new Map());
 const bibliographyEntries = bibliographyBlocks.filter((block) => block.kind === 'bibliography');
 assert.deepEqual(bibliographyEntries.map((block) => block.title), ['alpha', 'beta'], 'Bibliography entries must be preserved as separate source blocks.');
