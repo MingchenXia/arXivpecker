@@ -1433,8 +1433,11 @@ Cross-paper links are optional but useful. Return one only when this paper expli
 Return JSON only, matching the supplied schema. The source summary must state exactly what was read and any limitations.`;
 }
 
-function nodeQuestionPrompt({ paper, node, question }) {
-  return `The full-paper audit from the previous turn is the controlling context. The reader selected this audited document unit:
+function nodeQuestionPrompt({ paper, node, question, continuation = true }) {
+  const conversationContext = continuation
+    ? 'The full-paper audit from the previous turn is the controlling context.'
+    : `This is a new reader conversation created from a portable audit that has no reusable Codex thread. Treat the selected audited unit below as the controlling structured context. Re-open the local paper source when broader definitions, proof dependencies, or exact wording are needed.`;
+  return `${conversationContext} The reader selected this audited document unit:
 ${JSON.stringify(node)}
 
 Paper: ${paper.title} (arXiv:${paper.arxivId})
@@ -1446,9 +1449,12 @@ Answer only about this selected unit and its declared dependency chain. Refer to
 If the reader asks to retrieve or expand a cited result, follow the citation URL or exact-title lookup in the selected unit, locate the named theorem/lemma/proposition in the cited primary paper, and return: (1) the complete cited statement, (2) the complete original proof when accessible, and (3) a clearly separated reader-level explanation. Never invent a missing proof. Say exactly which primary source and result locator you verified.`;
 }
 
-function paperQuestionPrompt({ paper, currentNode, question }) {
+function paperQuestionPrompt({ paper, currentNode, question, continuation = true }) {
   const sourceHint = paper.folder ? `The local paper folder is proofroom-library/${paper.folder}; prefer its attachments/source TeX tree over the PDF whenever it is present, and inspect attachments/references for reader-supplied cited sources.` : `Use the primary source already inspected in the full-paper audit.`;
-  return `The complete paper and the durable full-paper audit from the first turn are the controlling context for this conversation.
+  const conversationContext = continuation
+    ? 'The complete paper and the durable full-paper audit from the first turn are the controlling context for this conversation.'
+    : 'This is a new reader conversation created from a portable audit that has no reusable Codex thread. Inspect the local primary source and use the paper metadata below as the controlling context.';
+  return `${conversationContext}
 
 Paper: ${paper.title} (arXiv:${paper.arxivId})
 ${sourceHint}
@@ -1797,29 +1803,60 @@ class CodexAppServer {
 
   async answerNode({ paper, profile, node, question, threadId }) {
     await this.start();
-    await this.resumeThread(threadId);
     const model = profile.model || undefined;
-    return this.runTurn({
-      threadId,
-      input: [{ type: 'text', text: nodeQuestionPrompt({ paper, node, question }), text_elements: [] }],
+    const continuation = Boolean(threadId);
+    let readerThreadId = String(threadId || '');
+    if (readerThreadId) await this.resumeThread(readerThreadId);
+    else {
+      const created = await this.call('thread/start', {
+        model,
+        cwd: WORKDIR,
+        approvalPolicy: 'never',
+        sandbox: 'read-only',
+        developerInstructions: 'You are a source-critical mathematical reading assistant. Do not modify files. Re-open the local primary source whenever the saved audit context is insufficient.',
+      });
+      readerThreadId = created.thread?.id;
+      if (!readerThreadId) throw new Error('Codex did not create a reader conversation.');
+      this.loadedThreads.add(readerThreadId);
+    }
+    const output = await this.runTurn({
+      threadId: readerThreadId,
+      input: [{ type: 'text', text: nodeQuestionPrompt({ paper, node, question, continuation }), text_elements: [] }],
       model,
       effort: profile.reasoning,
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'readOnly', networkAccess: true },
     });
+    return { threadId: readerThreadId, ...output };
   }
 
   async answerPaper({ paper, profile, currentNode, question, threadId }) {
     await this.start();
-    await this.resumeThread(threadId);
-    return this.runTurn({
-      threadId,
-      input: [{ type: 'text', text: paperQuestionPrompt({ paper, currentNode, question }), text_elements: [] }],
-      model: profile.model || undefined,
+    const model = profile.model || undefined;
+    const continuation = Boolean(threadId);
+    let readerThreadId = String(threadId || '');
+    if (readerThreadId) await this.resumeThread(readerThreadId);
+    else {
+      const created = await this.call('thread/start', {
+        model,
+        cwd: WORKDIR,
+        approvalPolicy: 'never',
+        sandbox: 'read-only',
+        developerInstructions: 'You are a source-critical mathematical reading assistant. Do not modify files. Re-open the local primary source whenever the saved audit context is insufficient.',
+      });
+      readerThreadId = created.thread?.id;
+      if (!readerThreadId) throw new Error('Codex did not create a reader conversation.');
+      this.loadedThreads.add(readerThreadId);
+    }
+    const output = await this.runTurn({
+      threadId: readerThreadId,
+      input: [{ type: 'text', text: paperQuestionPrompt({ paper, currentNode, question, continuation }), text_elements: [] }],
+      model,
       effort: profile.reasoning,
       approvalPolicy: 'never',
       sandboxPolicy: { type: 'readOnly', networkAccess: true },
     });
+    return { threadId: readerThreadId, ...output };
   }
 
   async suggestEditorialPatch({ paper, profile, node, threadId }) {
@@ -2147,19 +2184,26 @@ const server = createServer(async (request, response) => {
         }
       }
       if (pathname === '/paper-question') {
-        if (!body.threadId || typeof body.question !== 'string') throw new Error('threadId and a question are required.');
-        return codex.answerPaper({ paper: body.paper, profile, currentNode: body.node, question: body.question, threadId: body.threadId });
+        if (typeof body.question !== 'string') throw new Error('A question is required.');
+        const answered = await codex.answerPaper({ paper: body.paper, profile, currentNode: body.node, question: body.question, threadId: body.threadId });
+        if (!body.threadId) await enqueueVaultMutation(() => vault.saveAuditThread(body.paper.id, answered.threadId));
+        return answered;
       }
-      if (!body.threadId || !body.node) throw new Error('threadId and node are required.');
-      if (pathname === '/node-edit/suggest') return codex.suggestEditorialPatch({ paper: body.paper, profile, node: body.node, threadId: body.threadId });
+      if (!body.node) throw new Error('A node is required.');
+      if (pathname === '/node-edit/suggest') {
+        if (!body.threadId) throw new Error('Run the full-paper audit before requesting an editorial suggestion.');
+        return codex.suggestEditorialPatch({ paper: body.paper, profile, node: body.node, threadId: body.threadId });
+      }
       if (typeof body.question !== 'string') throw new Error('A question is required.');
-      return codex.answerNode({ paper: body.paper, profile, node: body.node, question: body.question, threadId: body.threadId });
+      const answered = await codex.answerNode({ paper: body.paper, profile, node: body.node, question: body.question, threadId: body.threadId });
+      if (!body.threadId) await enqueueVaultMutation(() => vault.saveAuditThread(body.paper.id, answered.threadId));
+      return answered;
     };
     // Independent audits and version comparisons each create their own Codex
     // thread and may run concurrently. Continuations on one existing paper
     // thread stay ordered so two questions cannot corrupt that thread's context.
-    const continuingThread = ['/paper-question', '/node-question', '/node-edit/suggest'].includes(pathname);
-    const output = continuingThread ? await enqueueThread(String(body.threadId || ''), runAiWork) : await runAiWork();
+    const continuingThread = Boolean(body.threadId) && ['/paper-question', '/node-question', '/node-edit/suggest'].includes(pathname);
+    const output = continuingThread ? await enqueueThread(String(body.threadId), runAiWork) : await runAiWork();
     return sendJson(response, 200, output, origin);
   } catch (error) {
     return sendJson(response, 500, { error: error instanceof Error ? error.message : 'Local Codex bridge failed.' }, origin);

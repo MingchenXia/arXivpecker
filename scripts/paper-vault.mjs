@@ -263,6 +263,17 @@ export class PaperVault {
     return storedPaper;
   }
 
+  async saveAuditThread(paperId, threadId) {
+    const record = await this.recordFor(paperId);
+    const auditFile = path.join(this.paperDirectory(record), 'audit.json');
+    const audit = await readJson(auditFile, null);
+    if (!audit || !Array.isArray(audit.nodes)) throw new Error('Run the full-paper audit before asking a question.');
+    const updated = { ...audit, threadId: String(threadId || '') };
+    if (!updated.threadId) throw new Error('Codex did not create a reader conversation.');
+    await writeJson(auditFile, updated);
+    return updated;
+  }
+
   async auditJob(paperId) {
     const record = await this.recordFor(paperId);
     const job = await readJson(path.join(this.paperDirectory(record), 'audit-progress.json'), null);

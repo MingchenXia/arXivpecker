@@ -9,6 +9,10 @@ const target = await mkdtemp(path.join(os.tmpdir(), 'arxivpecker-audit-checkpoin
 try {
   const vault = new PaperVault(target);
   const paper = await vault.upsertPaper({ id: 'temporary-client-id', title: 'Checkpointed audit', authors: 'Reader', category: 'math.AG', arxivId: '2601.12345', abstract: 'A test paper.', state: 'Reading', tags: [] });
+  await vault.saveAudit(paper, { threadId: '', nodes: [] });
+  const readerAudit = await vault.saveAuditThread(paper.id, 'saved-reader-thread');
+  assert.equal(readerAudit.threadId, 'saved-reader-thread');
+  assert.equal((await vault.snapshot()).audits[paper.id].threadId, 'saved-reader-thread', 'The first reader question must persist its new Codex thread.');
   const options = { convertPdfToLatex: true, correctnessAudit: true, detailedAudit: false };
   const first = await vault.startAuditJob(paper.id, options);
   assert.equal(first.state, 'preparing');
@@ -29,7 +33,7 @@ try {
   assert.equal((await vault.snapshot()).auditJobs[paper.id].state, 'paused');
   await vault.completeAuditJob(paper.id);
   assert.equal((await vault.snapshot()).auditJobs[paper.id], undefined, 'Completed audit checkpoints should not appear as resumable work.');
-  console.log('Audit checkpoint: saved thread, options, pause/resume state, and completion filtering verified.');
+  console.log('Audit checkpoint: reader thread persistence, options, pause/resume state, and completion filtering verified.');
 } finally {
   await rm(target, { recursive: true, force: true });
 }

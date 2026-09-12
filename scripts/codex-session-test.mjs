@@ -89,6 +89,26 @@ test('a checkpointed audit reuses its saved thread and asks for one complete rep
   assert.doesNotMatch(calls.map((call) => call.method).join(','), /thread\/start/);
 });
 
+test('a portable audit creates a reader thread for its first question', async () => {
+  const readerThreadId = 'portable-reader-thread';
+  const { server, calls } = mockServer((method, request, instance) => {
+    if (method === 'thread/start') return { thread: { id: readerThreadId } };
+    if (method === 'turn/start') return complete(instance);
+    return {};
+  });
+  const result = await server.answerNode({
+    threadId: '',
+    paper: { title: 'Portable paper', arxivId: '2608.24719', folder: 'portable-paper' },
+    node: { statement: 'Claim' },
+    question: 'Why?',
+    profile: { reasoning: 'xhigh' },
+  });
+  assert.equal(result.threadId, readerThreadId);
+  assert.deepEqual(calls.map((call) => call.method), ['thread/start', 'turn/start']);
+  assert.match(calls[1].request.input[0].text, /portable audit that has no reusable Codex thread/);
+  assert.equal(calls[1].request.threadId, readerThreadId);
+});
+
 test('a cached thread archived by another client recovers at turn/start', async () => {
   let starts = 0;
   const { server, calls } = mockServer((method, request, instance) => {
