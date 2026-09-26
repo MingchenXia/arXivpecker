@@ -873,7 +873,7 @@ const referencesLayout =
 const handWrittenEntry =
   /^[ \t]*(?:\\(?:noindent|par)(?![A-Za-z@])[ \t]*)*\[([^[\]{}\\$%,\n]{1,40})\]|\\item\s*\[([^[\]{}\\$%,\n]{1,40})\]/gm;
 const handWrittenEntryEnd =
-  /\n[ \t]*\r?\n|\\end\{(?:description|itemize|enumerate|document)\}|\\(?:chapter|section|appendix)(?![A-Za-z@])/g;
+  /\n[ \t]*\r?\n|\\end\{(?:description|itemize|enumerate|document)\}|\\(?:chapter|section|appendix)(?![A-Za-z@])/;
 
 // Some authors typeset the reference list by hand, with no \bibitem. Returns
 // the list's extent and its entries' keys and raw TeX, or null. The extent
@@ -884,29 +884,33 @@ function handWrittenBibliography(source) {
   const literalRanges = literalSourceRanges(text);
   const active = (index) => !insideSourceRanges(index, literalRanges) && !isLatexCommentedAt(text, index);
   if ([...text.matchAll(/\\bibitem(?![A-Za-z@])/g)].some((match) => active(match.index ?? 0))) return null;
-  const entryAfter = (position) => {
-    handWrittenEntry.lastIndex = position;
-    for (let match = handWrittenEntry.exec(text); match; match = handWrittenEntry.exec(text)) {
-      const key = (match[1] ?? match[2]).trim();
-      if (/[\p{L}\p{N}]/u.test(key) && active(match.index))
-        return { key, start: match.index, end: handWrittenEntry.lastIndex };
-    }
-    return null;
-  };
-  const layoutOnly = (fragment) => !stripLatexComments(fragment).replace(referencesLayout, '').trim();
   const headings = [...text.matchAll(referencesHeading)].filter((match) => active(match.index ?? 0));
-  // The reference list closes the paper, so the last heading followed by entries is it.
-  for (const heading of headings.reverse()) {
+  if (!headings.length) return null;
+  const candidates = [];
+  for (const match of text.matchAll(handWrittenEntry)) {
+    const key = (match[1] ?? match[2]).trim();
+    const start = match.index ?? 0;
+    if (/[\p{L}\p{N}]/u.test(key) && active(start)) candidates.push({ key, start, end: start + match[0].length });
+  }
+  const starts = candidates.map((candidate) => candidate.start);
+  const entryAfter = (position) => candidates[lastIndexBelow(starts, position) + 1];
+  const layoutOnly = (fragment) => !stripLatexComments(fragment).replace(referencesLayout, '').trim();
+  // The reference list closes the paper, so the last heading followed by entries
+  // is it. A list never runs past the next heading, which keeps the scan linear.
+  for (let index = headings.length - 1; index >= 0; index -= 1) {
+    const heading = headings[index];
     const headingEnd = (heading.index ?? 0) + heading[0].length;
+    const limit = headings[index + 1]?.index ?? text.length;
     const entries = [];
     let cursor = headingEnd;
-    for (let entry = entryAfter(cursor); entry && layoutOnly(text.slice(cursor, entry.start));) {
+    for (let entry = entryAfter(cursor); entry && entry.start < limit && layoutOnly(text.slice(cursor, entry.start));) {
       const next = entryAfter(entry.end);
-      handWrittenEntryEnd.lastIndex = entry.end;
-      const end = Math.min(next?.start ?? text.length, handWrittenEntryEnd.exec(text)?.index ?? text.length);
+      const rest = text.slice(entry.end, next?.start ?? text.length);
+      const boundary = rest.search(handWrittenEntryEnd);
+      const raw = boundary < 0 ? rest : rest.slice(0, boundary);
       // Drop the spacing that separates the key from the entry, as in `[Kob82]\, S. Kobayashi`.
-      entries.push({ key: entry.key, raw: text.slice(entry.end, end).replace(/^(?:\s|~|\\[,;: ])+/, '') });
-      cursor = end;
+      entries.push({ key: entry.key, raw: raw.replace(/^(?:\s|~|\\[,;: ])+/, '') });
+      cursor = entry.end + raw.length;
       entry = next;
     }
     if (entries.length)
