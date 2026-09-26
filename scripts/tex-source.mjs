@@ -1,4 +1,4 @@
-import { readFile, realpath } from 'node:fs/promises';
+import { readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { relativePathEscapes } from './paper-vault.mjs';
 
@@ -402,7 +402,7 @@ function extractBibtex(source) {
   return references;
 }
 
-async function extractBibliographyTree(source, sourceRoot) {
+async function extractBibliographyTree(source, sourceRoot, entryFile = '') {
   const references = extractBibliography(source);
   const value = String(source || '');
   const literalRanges = literalSourceRanges(value);
@@ -418,6 +418,22 @@ async function extractBibliographyTree(source, sourceRoot) {
     if (relativePathEscapes(relative)) continue;
     try { for (const [key, reference] of extractBibtex(decodeSourceBuffer(await readFile(candidate)))) references.set(key, reference); }
     catch { /* A missing bibliography remains a non-fatal, explicit lookup. */ }
+  }
+  // arXiv does not run BibTeX, so most submissions ship the compiled <jobname>.bbl
+  // and often no .bib at all. Use it for every key the .bib files did not supply.
+  if (requested.length && entryFile) {
+    const directory = path.dirname(entryFile);
+    const candidates = [path.join(directory, `${path.basename(entryFile, path.extname(entryFile))}.bbl`)];
+    try { candidates.push(...(await readdir(directory)).filter((name) => /\.bbl$/i.test(name)).sort().map((name) => path.join(directory, name))); }
+    catch { /* An unreadable directory leaves only the .bib records. */ }
+    for (const candidate of new Set(candidates)) {
+      if (relativePathEscapes(path.relative(sourceRoot, candidate))) continue;
+      let compiled;
+      try { compiled = extractBibliography(decodeSourceBuffer(await readFile(candidate))); }
+      catch { continue; }
+      for (const [key, reference] of compiled) if (!references.has(key)) references.set(key, reference);
+      if (compiled.size) break;
+    }
   }
   return references;
 }
@@ -1111,7 +1127,7 @@ async function enrichAuditFromTex(rawText, primarySource) {
   const unresolved = await readExpandedTex(primarySource.entryFile, primarySource.sourceDirectory);
   const expanded = resolveLatexReferences(unresolved, extractSourceUnits(unresolved));
   const sourceUnits = extractSourceUnits(expanded);
-  const bibliography = await extractBibliographyTree(expanded, primarySource.sourceDirectory);
+  const bibliography = await extractBibliographyTree(expanded, primarySource.sourceDirectory, primarySource.entryFile);
   const cursors = new Map();
   for (const node of audit.nodes) {
     if (!node || typeof node !== 'object') continue;

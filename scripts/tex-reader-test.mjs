@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import katex from 'katex';
 import { ar5ivFigureUrl } from './codex-bridge.mjs';
-import { buildSourceBlocks, expandAuthorMacros, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences, sameExpandedTexSource } from './tex-source.mjs';
+import { buildSourceBlocks, expandAuthorMacros, extractBibliographyTree, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences, sameExpandedTexSource } from './tex-source.mjs';
 
 const source = String.raw`\documentclass{article}
 \usepackage{amsmath}
@@ -116,6 +116,16 @@ try {
     { kind: 'tex', entryFile: path.join(sourceRoot, 'main.tex'), sourceDirectory: sourceRoot },
     { kind: 'tex', entryFile: path.join(aliasDirectory, 'main.tex'), sourceDirectory: aliasDirectory },
   ), false, 'A real included-file change must still reach structural AI comparison.');
+
+  // arXiv sources usually ship only the compiled .bbl for \bibliography{...}.
+  const bblRoot = path.join(sourceRoot, 'bbl');
+  await mkdir(bblRoot);
+  await writeFile(path.join(bblRoot, 'paper.tex'), String.raw`\begin{document}See \cite{shimura}.\bibliographystyle{plain}\bibliography{refs}\end{document}`);
+  await writeFile(path.join(bblRoot, 'paper.bbl'), String.raw`\begin{thebibliography}{1}
+\bibitem{shimura} G.~Shimura. \newblock On Eisenstein series. \newblock {\em Duke Math. J.}, 50:417--476, 1983.
+\end{thebibliography}`);
+  const compiledBibliography = await extractBibliographyTree(await readFile(path.join(bblRoot, 'paper.tex'), 'utf8'), bblRoot, path.join(bblRoot, 'paper.tex'));
+  assert.match(compiledBibliography.get('shimura')?.title ?? '', /On Eisenstein series/, 'A compiled .bbl must supply references when no .bib file is present.');
 
   // A symbolic link inside the source tree must not pull in a file outside it.
   const outsideRoot = await mkdtemp(path.join(tmpdir(), 'arxivpecker-outside-'));
