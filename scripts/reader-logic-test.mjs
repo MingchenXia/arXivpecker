@@ -297,3 +297,39 @@ assert.match(
   /^<b>thm<\/b> — thm title<br><small>Paper \(arXiv:2401\.00001\)<\/small>\tFor all \\\(x\\\), \\\(f\(x\) &lt; 1\\\)\.\tarxivpecker theorem arXiv:2401\.00001$/,
 );
 console.log('Reader logic: review scheduling and Anki export verified.');
+
+// The update and citation watch: a baseline first, then only what is new.
+const { mergeWatch, newerVersion, parseWatch } = await import('../app/lib/watch.ts');
+const work = (id) => ({ id, title: id, date: '', authors: '', arxivId: '', url: '' });
+const baseline = mergeWatch(
+  null,
+  { latestVersion: '2401.00001v2', citations: { citedByCount: 1, citing: [work('W1')] } },
+  't1',
+);
+assert.deepEqual(baseline.newIds, [], 'The first check is a baseline.');
+const later = mergeWatch(
+  baseline,
+  { latestVersion: '2401.00001v3', citations: { citedByCount: 3, citing: [work('W3'), work('W2'), work('W1')] } },
+  't2',
+);
+assert.deepEqual(later.newIds, ['W3', 'W2']);
+const failed = mergeWatch(later, { latestVersion: '', citations: null }, 't3');
+assert.deepEqual(
+  [failed.latestVersion, failed.citedByCount, failed.newIds],
+  ['2401.00001v3', 3, ['W3', 'W2']],
+  'A failed lookup keeps what was known.',
+);
+assert.deepEqual(
+  mergeWatch(
+    { ...later, newIds: [] },
+    { latestVersion: '', citations: { citedByCount: 3, citing: later.citing } },
+    't4',
+  ).newIds,
+  [],
+);
+assert.equal(newerVersion('2401.00001v2', later), '2401.00001v3');
+assert.equal(newerVersion('2401.00001v3', later), '');
+assert.equal(newerVersion('2401.00001', baseline), '2401.00001v2', 'An unversioned library copy counts as v1.');
+assert.equal(parseWatch('{broken'), null);
+assert.deepEqual(parseWatch(JSON.stringify(later)).newIds, ['W3', 'W2']);
+console.log('Reader logic: update and citation watch verified.');

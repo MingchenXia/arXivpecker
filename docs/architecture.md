@@ -2,7 +2,7 @@
 
 arXivpecker is a local-first reader with two cooperating processes:
 
-- `app/` contains the browser interface and the arXiv metadata route:
+- `app/` contains the browser interface and two server routes: arXiv metadata (`app/api/arxiv`, throttled and cached, with a batched `ids=` lookup for the library's update watch) and papers citing a library paper (`app/api/citations`, from OpenAlex, cached for six hours):
   - `app/page.tsx` holds the top-level `Home` state (library, reader state, AI jobs) and per-paper reader-state saving;
   - `app/lib/` holds framework-free logic: shared types (`types.ts`), bridge client, storage and defaults (`app.ts`), KaTeX rendering with its cache and TeX prose cleanup (`tex-text.ts`), audit parsing, working-edition patches, version migration, and exports (`audit.ts`), study aids such as reading paths and practice records (`study.ts`), and the notation glossary read off defining sentences (`glossary.ts`);
   - `app/components/` holds the React views: the reader shell and its panels (`reader.tsx`), the interactive paper and proof line numbering (`document.tsx`), the unit inspector and version panels (`inspector.tsx`), the study tools inside it (`study-tools.tsx`), library, discovery, settings and dialogs (`views.tsx`), math rendering (`math.tsx`), and icons.

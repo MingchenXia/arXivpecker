@@ -250,6 +250,34 @@ try {
   result = await get('id=not-an-id');
   assert.equal(result.status, 400);
   assert.equal(calls.length, 0);
+
+  // The update watch asks for the current version of several papers in one request.
+  stubUpstream((url) =>
+    isExportApi(url)
+      ? reply(
+          feed(
+            url.searchParams
+              .get('id_list')
+              .split(',')
+              .map((id) => entry(`${id}v3`)),
+          ),
+        )
+      : reply('unexpected', 500),
+  );
+  result = await get('ids=2608.24719v1,2607.17203,not-an-id,2608.24719');
+  assert.equal(result.status, 200);
+  assert.equal(apiCalls().length, 1);
+  assert.equal(
+    apiCalls()[0].url.searchParams.get('id_list'),
+    '2608.24719,2607.17203',
+    'Versions are dropped and ids deduplicated.',
+  );
+  assert.deepEqual(
+    result.body.papers.map((paper) => paper.arxivId),
+    ['2608.24719v3', '2607.17203v3'],
+  );
+  result = await get('ids=');
+  assert.equal(result.status, 400);
 } finally {
   globalThis.fetch = originalFetch;
   configureArxivUpstream();

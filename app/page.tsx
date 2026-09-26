@@ -43,6 +43,7 @@ import { parseReviewState, reviewCards, reviewKey, schedule } from './lib/review
 import type { Grade, ReviewCard } from './lib/review';
 import { ReviewView } from './components/review';
 import { arxivKey } from './lib/cited-papers';
+import { mergeWatch, newerVersion, parseWatch, watchDailyKey, watchKey } from './lib/watch';
 import {
   applyWorkingPatches,
   arxivBaseId,
@@ -98,6 +99,9 @@ export default function Home() {
   const [selectedNodeId, setSelectedNodeId] = useState('');
   const [vaultSidebarOpen, setVaultSidebarOpen] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [watching, setWatching] = useState(false);
+  const [dailyWatch, setDailyWatch] = useState(true);
+  const watchingRef = useRef(false);
   const [paperJobs, setPaperJobs] = useState<Record<string, PaperJobKind>>({});
   const [askingId, setAskingId] = useState<string | null>(null);
   const [readerNavigationRequest, setReaderNavigationRequest] = useState<ReaderNavigationRequest | null>(null);
@@ -259,6 +263,7 @@ export default function Home() {
     }
   }
   async function loadVault() {
+    setDailyWatch(readStorage(watchDailyKey) !== 'off');
     const locallySaved = readStorage(preferenceKey);
     const setupCompleted = readStorage(onboardingCompleteKey) === 'complete';
     function restoreLocalProfile() {
@@ -310,6 +315,21 @@ export default function Home() {
   useEffect(() => {
     if (vaultReady && selectedPaperId) writeStorage(selectedPaperKey, selectedPaperId);
   }, [selectedPaperId, vaultReady]);
+  // Once a day, check the library for new arXiv versions and citing papers. Needs
+  // browser storage (for the setting), so a blocked profile never checks on its own.
+  useEffect(() => {
+    if (!vaultReady || onboardingOpen) return;
+    if (readStorage(onboardingCompleteKey) !== 'complete' || readStorage(watchDailyKey) === 'off') return;
+    const lastCheck = Math.max(
+      0,
+      ...Object.values(nodeAnswers).map((answers) => Date.parse(parseWatch(answers[watchKey])?.checkedAt ?? '') || 0),
+    );
+    if (Date.now() - lastCheck < 20 * 60 * 60_000) return;
+    const timer = window.setTimeout(() => void watchLibrary(false), 4000);
+    return () => window.clearTimeout(timer);
+    // Decided once the library has loaded; later reader-state changes must not re-arm it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vaultReady, onboardingOpen]);
   // Reader state is saved per paper. Every paper whose slice changed is saved
   // after a short pause, so an AI answer that lands after switching papers, or an
   // edit made just before a switch, reaches the vault. Papers with a running
@@ -832,6 +852,99 @@ export default function Home() {
     });
     notify(`${summary}${added ? ' Audit them to link citations to their results in the graph.' : ''}`);
   }
+  /**
+   * Checks every arXiv paper in the library for a newer version (one batched arXiv
+   * request) and for papers citing it (OpenAlex). An automatic check stays quiet
+   * unless it finds something; a manual one always reports.
+   */
+  async function watchLibrary(manual: boolean) {
+    const targets = papers.filter((item) => !item.arxivId.startsWith('local-'));
+    if (!targets.length || watchingRef.current) return;
+    watchingRef.current = true;
+    setWatching(true);
+    const processId = 'library-watch';
+    if (manual)
+      reportReaderProcess({
+        id: processId,
+        label: 'Checking for updates',
+        detail: 'arXiv versions and new citations',
+        status: 'running',
+      });
+    try {
+      const latest = new Map<string, string>();
+      try {
+        const data = await readerApiGet(
+          `/api/arxiv?ids=${targets.map((item) => arxivBaseId(item.arxivId)).join(',')}`,
+          'arXiv could not be reached.',
+        );
+        for (const item of data.papers ?? []) latest.set(arxivKey(item.arxivId), item.arxivId);
+      } catch {
+        // Keep going: citations may still be reachable.
+      }
+      const checkedAt = new Date().toISOString();
+      const records: Record<string, string> = {};
+      let newVersions = 0;
+      let newCitations = 0;
+      let unreachable = 0;
+      for (const target of targets) {
+        let citations: { citedByCount: number; citing: NonNullable<ServiceResponse['citing']> } | null = null;
+        try {
+          const data = await readerApiGet(
+            `/api/citations?arxivId=${encodeURIComponent(arxivBaseId(target.arxivId))}`,
+            'OpenAlex could not be reached.',
+          );
+          citations = { citedByCount: data.citedByCount ?? 0, citing: data.citing ?? [] };
+        } catch {
+          unreachable += 1;
+        }
+        const latestVersion = latest.get(arxivKey(target.arxivId)) ?? '';
+        if (!citations && !latestVersion) continue;
+        const previous = parseWatch(nodeAnswers[target.id]?.[watchKey]);
+        const merged = mergeWatch(previous, { latestVersion, citations }, checkedAt);
+        newCitations += merged.newIds.length - (previous?.newIds.length ?? 0);
+        if (merged.latestVersion !== (previous?.latestVersion ?? '') && newerVersion(target.arxivId, merged))
+          newVersions += 1;
+        records[target.id] = JSON.stringify(merged);
+      }
+      setNodeAnswers((current) => {
+        const next = { ...current };
+        for (const [paperId, record] of Object.entries(records))
+          next[paperId] = { ...(next[paperId] ?? {}), [watchKey]: record };
+        return next;
+      });
+      const found = [
+        newVersions ? `${newVersions} paper${newVersions === 1 ? ' has a' : 's have'} a new arXiv version` : '',
+        newCitations > 0 ? `${newCitations} new citing paper${newCitations === 1 ? '' : 's'}` : '',
+      ].filter(Boolean);
+      const summary = found.length
+        ? `${found.join('; ')}. See the Library.`
+        : unreachable === targets.length && !latest.size
+          ? 'Could not reach arXiv or OpenAlex.'
+          : 'No new versions or citations.';
+      if (manual || found.length) {
+        reportReaderProcess({
+          id: processId,
+          label: 'Update check finished',
+          detail: summary,
+          status: unreachable === targets.length && !latest.size ? 'error' : 'complete',
+        });
+        notify(summary);
+      }
+    } finally {
+      watchingRef.current = false;
+      setWatching(false);
+    }
+  }
+  function markCitationsSeen(paperId: string) {
+    setNodeAnswers((current) => {
+      const record = parseWatch(current[paperId]?.[watchKey]);
+      if (!record?.newIds.length) return current;
+      return {
+        ...current,
+        [paperId]: { ...current[paperId], [watchKey]: JSON.stringify({ ...record, newIds: [] }) },
+      };
+    });
+  }
   async function importLocalSource(
     file: File,
     suppliedTitle: string,
@@ -1320,6 +1433,21 @@ export default function Home() {
             reorderPapers={reorderLibrary}
             openUnit={openUnit}
             openImport={() => setImporting(true)}
+            watch={{
+              records: Object.fromEntries(
+                papers.map((item) => [item.id, parseWatch(nodeAnswers[item.id]?.[watchKey])]),
+              ),
+              running: watching,
+              check: () => void watchLibrary(true),
+              daily: dailyWatch,
+              setDaily: (value) => {
+                setDailyWatch(value);
+                writeStorage(watchDailyKey, value ? 'on' : 'off');
+              },
+              markSeen: markCitationsSeen,
+              libraryByArxivId,
+              addCitedPapers,
+            }}
           />
         )}
         {view === 'graph' && <GraphView graph={graph} papers={papers} openUnit={openUnit} />}

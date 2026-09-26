@@ -1,3 +1,5 @@
+import type { CitingWork } from '../api/citations/openalex';
+
 export type View = 'reader' | 'library' | 'review' | 'graph' | 'discover' | 'settings';
 export type ReaderMode = 'source' | 'interactive';
 export type EditionMode = 'original' | 'working';
@@ -306,4 +308,7 @@ export type ServiceResponse = {
   sources?: { from: string; to: string };
   share?: CloudShareRecord;
   job?: AuditJob;
+  found?: boolean;
+  citedByCount?: number;
+  citing?: CitingWork[];
 };

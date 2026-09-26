@@ -600,6 +600,29 @@ export async function handleArxivRequest(request: Request): Promise<Response> {
       ? `(${categories.map((category) => `cat:${category}`).join(' OR ')})`
       : `cat:${categories[0] || 'math'}`;
 
+  // `ids=a,b,…`: the current version of several papers at once, for the library's update watch.
+  const rawIds = params.get('ids');
+  if (rawIds !== null) {
+    const ids = [
+      ...new Set(
+        rawIds
+          .split(',')
+          .map((value) => normalizeArxivId(value.trim()))
+          .filter(Boolean)
+          .map(baseId),
+      ),
+    ];
+    if (!ids.length || ids.length > 500) return json({ papers: [], error: 'Give between 1 and 500 arXiv IDs.' }, 400);
+    try {
+      const deadline = Date.now() + LOOKUP_BUDGET_MS;
+      const papers: ArxivPaper[] = [];
+      for (let start = 0; start < ids.length; start += ID_CHUNK_SIZE)
+        papers.push(...(await fetchFeedChunk(ids.slice(start, start + ID_CHUNK_SIZE), deadline)));
+      return json({ papers }, 200, true);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : 'arXiv is unavailable.', papers: [] }, 502);
+    }
+  }
   try {
     if (arxivId) {
       const paper = await lookupPaper(arxivId);

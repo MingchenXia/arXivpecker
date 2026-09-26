@@ -1,6 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { ProcessMascot } from './icons';
 import { MathText } from './math';
+import { CitingPapers, LibraryWatchBar } from './library-watch';
+import type { LibraryWatch } from './library-watch';
+import { newerVersion } from '../lib/watch';
 import {
   assistantSizeKey,
   defaultProfile,
@@ -358,6 +361,7 @@ export function Library({
   reorderPapers,
   openUnit,
   openImport,
+  watch,
 }: {
   papers: Paper[];
   audits: Record<string, PaperAudit>;
@@ -374,6 +378,7 @@ export function Library({
   reorderPapers: (papers: Paper[]) => Promise<void>;
   openUnit: (paperId: string, nodeId: string) => void;
   openImport: () => void;
+  watch: LibraryWatch;
 }) {
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<Paper | null>(null);
@@ -441,6 +446,7 @@ export function Library({
         </button>
       </div>
       <CloudSharing papers={papers} />
+      <LibraryWatchBar watch={watch} />
       <div className="library-search">
         <span>⌕</span>
         <input
@@ -505,6 +511,17 @@ export function Library({
                       {patches[paper.id].length} working change{patches[paper.id].length === 1 ? '' : 's'}
                     </span>
                   )}
+                  {newerVersion(paper.arxivId, watch.records[paper.id]) && (
+                    <button
+                      className="library-version-chip library-version-available"
+                      onClick={() => void refreshPaper(paper)}
+                      disabled={busy}
+                      title="Update the library copy to the new arXiv version"
+                    >
+                      {newerVersion(paper.arxivId, watch.records[paper.id]).replace(arxivBaseId(paper.arxivId), '')} on
+                      arXiv
+                    </button>
+                  )}
                   {latestUpdate && (
                     <button className="library-version-chip" onClick={() => showUpdate(latestUpdate)} disabled={busy}>
                       {latestUpdate.fromVersion.replace(arxivBaseId(latestUpdate.fromVersion), '') ||
@@ -552,6 +569,7 @@ export function Library({
                   <span key={tag}>{tag}</span>
                 ))}
               </div>
+              <CitingPapers paper={paper} watch={watch} />
               <div className="library-paper-actions">
                 <div className="library-primary-actions">
                   <button

@@ -24,6 +24,8 @@ export async function openReader(page: Page, paperId = eisensteinPaperId) {
       }),
     );
     localStorage.setItem('arxivpecker-selected-paper-v1', selected);
+    // No automatic calls to arXiv or OpenAlex during a test; e2e/watch.spec.ts checks by hand.
+    localStorage.setItem('arxivpecker-watch-daily-v1', 'off');
   }, paperId);
   await page.goto('/');
   await expect(page.locator('.katex').first()).toBeVisible();

@@ -8410,3 +8410,111 @@ body.assistant-resizing {
 .review-grades button:hover {
   background: #f7f1eb;
 }
+
+/* Library watch: new arXiv versions and papers citing the library. */
+.library-watch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 14px 0 4px;
+  color: #6f7a70;
+  font-size: 12px;
+}
+.library-watch > button {
+  border: 1px solid #cfd8cf;
+  border-radius: 5px;
+  background: #fff;
+  padding: 5px 10px;
+  color: #2d654f;
+  font-weight: 750;
+}
+.library-watch > button:disabled {
+  opacity: 0.55;
+}
+.library-watch label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  accent-color: #2d654f;
+}
+.library-version-available {
+  border-color: #2d654f !important;
+  background: #2d654f !important;
+  color: #fff !important;
+}
+.library-citations {
+  margin-top: 8px;
+  color: #5b5550;
+  font-size: 12px;
+}
+.library-citations summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #53605a;
+  font-weight: 750;
+  cursor: pointer;
+}
+.library-citations summary b {
+  border-radius: 999px;
+  background: #2d654f;
+  padding: 0 7px;
+  color: #fff;
+  font-size: 11px;
+}
+.library-citations ul {
+  display: grid;
+  max-height: 260px;
+  gap: 6px;
+  overflow-y: auto;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.library-citations li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1px 8px;
+  border-left: 2px solid transparent;
+  padding-left: 6px;
+}
+.library-citations li.new {
+  border-left-color: #2d654f;
+}
+.library-citations li a {
+  color: #34302c;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 13px;
+  text-decoration: none;
+}
+.library-citations li a:hover {
+  text-decoration: underline;
+}
+.library-citations li small {
+  grid-column: 1;
+  color: #8b8580;
+  font-size: 11px;
+}
+.library-citations li > button,
+.library-citations li > span {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  font-size: 11px;
+}
+.library-citations li > button {
+  border: 1px solid #cfd8cf;
+  border-radius: 4px;
+  padding: 2px 7px;
+  color: #2d654f;
+  font-weight: 750;
+}
+.library-citations li > span {
+  color: #8b8580;
+}
+.library-citations p {
+  margin-top: 4px;
+  color: #8b8580;
+  font-size: 11px;
+}
