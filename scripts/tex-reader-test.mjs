@@ -194,6 +194,70 @@ try {
   assert.match(nested, /Macro file text\./, 'A brace-less \\input must be expanded.');
   assert.match(nested, /Section A\. Section B\./, 'A nested include must resolve against the main document folder.');
 
+  // The import and subfiles packages read files relative to the importing
+  // file, and an imported file's own \input resolves beside it.
+  const importRoot = path.join(sourceRoot, 'import');
+  await mkdir(path.join(importRoot, 'parts/deeper/more'), { recursive: true });
+  await mkdir(path.join(importRoot, 'sections'));
+  await writeFile(
+    path.join(importRoot, 'main.tex'),
+    String.raw`\documentclass{article}
+\usepackage{import,subfiles}
+\begin{document}
+\import{parts/}{intro}
+\subfile{sections/sub}
+\inputfrom{parts/}{from} \includefrom{parts}{includedfrom}
+% \import{parts/}{ignored}
+\import{parts/}{missing} \import{../}{outside} \import*{parts/}{cycle}
+\end{document}`,
+  );
+  await writeFile(path.join(importRoot, 'detail.tex'), 'WRONG detail beside the main file.');
+  await writeFile(
+    path.join(importRoot, 'parts/intro.tex'),
+    String.raw`Imported intro. \input{detail} \subimport{deeper/}{leaf}`,
+  );
+  await writeFile(path.join(importRoot, 'parts/detail.tex'), 'Detail beside the imported file.');
+  await writeFile(
+    path.join(importRoot, 'parts/deeper/leaf.tex'),
+    String.raw`Leaf. \subinputfrom{more/}{a} \subincludefrom{more/}{b}`,
+  );
+  await writeFile(path.join(importRoot, 'parts/deeper/more/a.tex'), 'Sub input from.');
+  await writeFile(path.join(importRoot, 'parts/deeper/more/b.tex'), 'Sub include from.');
+  await writeFile(path.join(importRoot, 'parts/from.tex'), 'Input from.');
+  await writeFile(path.join(importRoot, 'parts/includedfrom.tex'), 'Include from.');
+  await writeFile(path.join(importRoot, 'parts/ignored.tex'), 'This commented import must stay excluded.');
+  await writeFile(path.join(importRoot, 'parts/cycle.tex'), String.raw`Cycle once. \subimport{./}{cycle}`);
+  await writeFile(path.join(sourceRoot, 'outside.tex'), 'OUTSIDE THE PAPER SOURCE');
+  await writeFile(
+    path.join(importRoot, 'sections/sub.tex'),
+    String.raw`\documentclass[../main.tex]{subfiles}
+\newcommand{\onlyhere}{SUBFILE PREAMBLE}
+\begin{document}
+Subfile body. \input{piece}
+\end{document}
+After the subfile document.`,
+  );
+  await writeFile(path.join(importRoot, 'sections/piece.tex'), 'Subfile piece.');
+  const imported = await readExpandedTex(path.join(importRoot, 'main.tex'), importRoot);
+  assert.match(
+    imported,
+    /Imported intro\. Detail beside the imported file\. Leaf\. Sub input from\. Sub include from\./,
+    'An imported file and its nested inputs and subimports must be read relative to their own folders.',
+  );
+  assert.match(imported, /Subfile body\. Subfile piece\./, 'A subfile must contribute its document body.');
+  assert.match(imported, /Input from\. Include from\./);
+  assert.equal(imported.match(/Cycle once\./g)?.length, 1, 'A self-importing file must be read once.');
+  assert.doesNotMatch(
+    imported,
+    /WRONG detail|SUBFILE PREAMBLE|main\.tex\]|After the subfile document|commented import must stay excluded|OUTSIDE THE PAPER SOURCE/,
+    'Only the subfile body, active imports, and files inside the source may be read.',
+  );
+  assert.doesNotMatch(
+    imported,
+    /^[^%\n]*\\(?:sub)?(?:import|inputfrom|includefrom|file)\b/m,
+    'No active import command may remain unexpanded.',
+  );
+
   // arXiv sources usually ship only the compiled .bbl for \bibliography{...}.
   const bblRoot = path.join(sourceRoot, 'bbl');
   await mkdir(bblRoot);
@@ -286,7 +350,10 @@ try {
     const linkedRoot = path.join(sourceRoot, 'linked');
     await mkdir(linkedRoot);
     await symlink(path.join(outsideRoot, 'secret.tex'), path.join(linkedRoot, 'secret.tex'));
-    await writeFile(path.join(linkedRoot, 'main.tex'), String.raw`Before. \input{secret} After.`);
+    await writeFile(
+      path.join(linkedRoot, 'main.tex'),
+      String.raw`Before. \input{secret} \subimport{./}{secret} After.`,
+    );
     const linked = await readExpandedTex(path.join(linkedRoot, 'main.tex'), linkedRoot);
     assert.doesNotMatch(linked, /PRIVATE KEY MATERIAL/, 'A symlinked include must not escape the paper source folder.');
     assert.match(linked, /Before\. .*After\./s);

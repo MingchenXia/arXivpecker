@@ -19,6 +19,8 @@ async function readExpandedTex(
   seen = new Set(),
   depth = 0,
   mainDirectory = path.dirname(entryFile),
+  documentDirectory = mainDirectory,
+  subfile = false,
 ) {
   if (depth > 12 || seen.has(entryFile)) return '';
   const relative = path.relative(sourceRoot, entryFile);
@@ -27,8 +29,12 @@ async function readExpandedTex(
   if (relativePathEscapes(path.relative(await realpath(sourceRoot), await realpath(entryFile)))) return '';
   seen.add(entryFile);
   let source = decodeSourceBuffer(await readFile(entryFile));
+  if (subfile) source = documentBody(source);
   // `\\include` needs braces; `\\input` also accepts a bare file name (`\\input macros`).
-  const include = /\\(?:input|include)\s*\{([^}]+)\}|\\input\s+([A-Za-z0-9_./-]+)/g;
+  // The import package adds \import{dir/}{file}, its \inputfrom and \includefrom
+  // aliases, and their \sub... forms; the subfiles package adds \subfile{file}.
+  const include =
+    /\\(?:input|include)\s*\{([^}]+)\}|\\input\s+([A-Za-z0-9_./-]+)|\\(sub)?(?:import|inputfrom|includefrom)\*?\s*\{([^}]*)\}\s*\{([^}]+)\}|\\subfile(?:include)?\s*\{([^}]+)\}/g;
   const literalRanges = literalSourceRanges(source);
   let expanded = '';
   let cursor = 0;
@@ -36,17 +42,32 @@ async function readExpandedTex(
     const start = match.index ?? 0;
     if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(source, start)) continue;
     expanded += source.slice(cursor, match.index);
-    const requested = (match[1] ?? match[2]).trim();
+    const [, inputName, bareName, sub, folder = '', importName, subfileName] = match;
+    const requested = (inputName ?? bareName ?? importName ?? subfileName).trim();
     const filename = /\.[A-Za-z0-9]+$/.test(requested) ? requested : `${requested}.tex`;
     // TeX resolves every include against the main document's folder, even from
     // a nested file; also accept paths written relative to the including file.
+    // \import is relative to the main document too, \subimport to the including
+    // file. An imported file or subfile then resolves its own includes against
+    // its folder, as the import package makes TeX do.
+    const imports = importName !== undefined || subfileName !== undefined;
+    const bases = sub
+      ? [path.dirname(entryFile), mainDirectory]
+      : importName !== undefined
+        ? [documentDirectory, path.dirname(entryFile)]
+        : [mainDirectory, path.dirname(entryFile), documentDirectory];
     let included = null;
-    for (const candidate of new Set([
-      path.resolve(mainDirectory, filename),
-      path.resolve(path.dirname(entryFile), filename),
-    ])) {
+    for (const candidate of new Set(bases.map((base) => path.resolve(base, folder.trim(), filename)))) {
       try {
-        included = await readExpandedTex(candidate, sourceRoot, seen, depth + 1, mainDirectory);
+        included = await readExpandedTex(
+          candidate,
+          sourceRoot,
+          seen,
+          depth + 1,
+          imports ? path.dirname(candidate) : mainDirectory,
+          documentDirectory,
+          subfileName !== undefined,
+        );
         break;
       } catch {
         /* Try the next location. */
@@ -57,6 +78,20 @@ async function readExpandedTex(
   }
   expanded += source.slice(cursor);
   return expanded;
+}
+
+// A subfile is a complete document that compiles on its own; the main document
+// takes only its body.
+function documentBody(source) {
+  const literalRanges = literalSourceRanges(source);
+  const markers = [...source.matchAll(/\\(begin|end)\{document\}/g)].filter(
+    (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(source, match.index ?? 0),
+  );
+  const begin = markers.find((match) => match[1] === 'begin');
+  if (!begin) return source;
+  const bodyStart = (begin.index ?? 0) + begin[0].length;
+  const end = markers.find((match) => match[1] === 'end' && (match.index ?? 0) >= bodyStart);
+  return source.slice(bodyStart, end?.index ?? source.length);
 }
 
 async function sameExpandedTexSource(left, right) {
