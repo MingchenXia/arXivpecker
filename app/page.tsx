@@ -6,37 +6,10 @@ import { PaperUpdatePanel } from './components/inspector';
 import { MathText } from './components/math';
 import { Reader } from './components/reader';
 import { Discover, GraphView, ImportDialog, Library, ModelControls, OnboardingDialog, ProcessTray, Settings } from './components/views';
-import { bridgeUrl, defaultProfile, emptyGraph, emptyPatches, emptyRecord, fallbackDiscoveries, fileAsBase64, makeId, normalizeReaderProfile, onboardingCompleteKey, paperChatAnswerKey, parseJsonObject, preferenceKey, readServiceResponse, readStorage, readString, reasoningDefaultMigrationKey, reportReaderProcess, selectedPaperKey, writeStorage } from './lib/app';
+import { bridgeUrl, changedReaderPapers, defaultProfile, emptyGraph, emptyPatches, emptyRecord, fallbackDiscoveries, fileAsBase64, makeId, normalizeReaderProfile, onboardingCompleteKey, paperChatAnswerKey, parseJsonObject, preferenceKey, readServiceResponse, readStorage, readString, reasoningDefaultMigrationKey, reportReaderProcess, saveReaderState, selectedPaperKey, writeStorage } from './lib/app';
+import type { ReaderStateSlices } from './lib/app';
 import { arxivBaseId, arxivVersionNumber, automaticEditorialPatches, displayUnitLabel, migrateReaderWork, normalizeAuditCitations, normalizeNotes, parseAudit, parseVersionComparison } from './lib/audit';
 import type { AuditJob, AuditNode, Bridge, CrossLink, EditorialSuggestion, Graph, Note, Paper, PaperAudit, PaperJobKind, PaperUpdateRecord, Profile, ReaderNavigationRequest, ReaderProcessTarget, ReadingMark, VaultSnapshot, View, WorkingPatch } from './lib/types';
-
-type ReaderStateSlices = { notes: Note[]; nodeNotes: Record<string, Record<string, string>>; nodeAnswers: Record<string, Record<string, string>>; expanded: Record<string, Record<string, boolean>>; marks: Record<string, Record<string, Exclude<ReadingMark, ''>>> };
-
-// State updates replace only the slice of the paper they touch, so comparing
-// slices by identity finds every paper whose reader state needs saving.
-function changedReaderPapers(previous: ReaderStateSlices, next: ReaderStateSlices) {
-  const changed = new Set<string>();
-  for (const key of ['nodeNotes', 'nodeAnswers', 'expanded', 'marks'] as const) {
-    const before: Record<string, unknown> = previous[key]; const after: Record<string, unknown> = next[key];
-    if (before === after) continue;
-    for (const paperId of new Set([...Object.keys(before), ...Object.keys(after)])) if (before[paperId] !== after[paperId]) changed.add(paperId);
-  }
-  if (previous.notes !== next.notes) {
-    const byPaper = (notes: Note[]) => { const groups = new Map<string, Note[]>(); for (const note of notes) { const group = groups.get(note.paperId); if (group) group.push(note); else groups.set(note.paperId, [note]); } return groups; };
-    const before = byPaper(previous.notes); const after = byPaper(next.notes);
-    for (const paperId of new Set([...before.keys(), ...after.keys()])) {
-      const left = before.get(paperId) ?? []; const right = after.get(paperId) ?? [];
-      if (left.length !== right.length || left.some((note, index) => note !== right[index])) changed.add(paperId);
-    }
-  }
-  return changed;
-}
-
-function saveReaderState(paperId: string, state: ReaderStateSlices) {
-  const body = JSON.stringify({ paperId, reader: { notes: state.notes.filter((item) => item.paperId === paperId), nodeNotes: state.nodeNotes[paperId] ?? {}, nodeAnswers: state.nodeAnswers[paperId] ?? {}, expanded: state.expanded[paperId] ?? {}, marks: state.marks[paperId] ?? {} } });
-  // keepalive lets a save started as the tab closes complete; browsers cap it at 64 KB.
-  return fetch(`${bridgeUrl}/vault/reader`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: body.length < 20_000 });
-}
 
 export default function Home() {
   const [view, setView] = useState<View>('reader');
