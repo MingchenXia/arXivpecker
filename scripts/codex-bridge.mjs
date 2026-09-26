@@ -437,14 +437,223 @@ function validatePaper(value) {
   );
 }
 
+/**
+ * Reads the paper's primary source (TeX, uploaded file, or an AI transcription of
+ * the PDF), runs the Codex audit, and enriches it from the TeX tree.
+ */
+async function analyzePaperSource(
+  paper,
+  profile,
+  body,
+  { resumeThreadId = '', onThreadReady = null, onProgress = null, isCancelled = () => false } = {},
+) {
+  const localInventory = await vault.compactInventory();
+  let primarySource;
+  try {
+    primarySource = await acquireArxivSource(paper, paper.arxivId, Boolean(body.updateMode));
+    if (!body.updateMode)
+      await vault.saveSourceRecord(paper.id, {
+        analysisFormat: 'tex',
+        sourceDirectory: primarySource.sourceDirectory,
+        mainTex: primarySource.entryFile,
+        sourceFetchedAt: primarySource.fetchedAt,
+      });
+    if (primarySource.kind === 'uploaded-pdf' && body.convertPdfToLatex) {
+      const converted = await codex.convertPdfToLatex({ paper, profile, pdfPath: primarySource.entryFile });
+      primarySource = await saveAiLatexSource(paper, converted);
+      const sourceRoot = await vault.sourceDirectory(paper.id);
+      await writeSourceManifest(path.join(sourceRoot, 'proofroom-uploaded-source.json'), primarySource);
+      await vault.saveSourceRecord(paper.id, {
+        analysisFormat: 'ai-tex',
+        sourceDirectory: primarySource.sourceDirectory,
+        mainTex: primarySource.entryFile,
+        sourceFetchedAt: primarySource.convertedAt,
+        sourceError: 'Reader-supplied PDF converted to an editable LaTeX working source.',
+      });
+    }
+  } catch (error) {
+    primarySource = { kind: 'pdf', error: error instanceof Error ? error.message : 'TeX source unavailable' };
+    if (body.convertPdfToLatex) {
+      if (isCancelled()) throw new Error(stoppedByReader);
+      const converted = await codex.convertPdfToLatex({ paper, profile });
+      primarySource = await saveAiLatexSource(paper, converted);
+      await vault.saveSourceRecord(paper.id, {
+        analysisFormat: 'ai-tex',
+        sourceDirectory: primarySource.sourceDirectory,
+        mainTex: primarySource.entryFile,
+        sourceFetchedAt: primarySource.convertedAt,
+        sourceError: 'Author TeX unavailable; saved AI transcription from the primary PDF.',
+      });
+    } else if (!body.updateMode)
+      await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
+  }
+  if (isCancelled()) throw new Error(stoppedByReader);
+  const analyzed = await codex.analyze({
+    paper,
+    profile,
+    primarySource,
+    correctnessAudit: body.correctnessAudit !== false,
+    detailedAudit: body.detailedAudit !== false,
+    localInventory: localInventory.filter((item) => item.paperId !== paper.id),
+    updateContext: body.updateContext ?? null,
+    resumeThreadId,
+    onThreadReady,
+    onProgress,
+    isCancelled,
+  });
+  const text =
+    primarySource.kind === 'tex' || primarySource.kind === 'ai-tex'
+      ? await enrichAuditFromTex(analyzed.text, primarySource)
+      : analyzed.text;
+  return {
+    ...analyzed,
+    text,
+    paper,
+    primarySource: {
+      kind: primarySource.kind,
+      fileCount: primarySource.fileCount ?? 0,
+      cached: Boolean(primarySource.cached),
+      error: primarySource.error ?? null,
+    },
+    ...(body.updateMode
+      ? {
+          sourceRecord: {
+            analysisFormat: primarySource.kind === 'tex' ? 'tex' : primarySource.kind,
+            sourceDirectory: primarySource.sourceDirectory ?? '',
+            mainTex: primarySource.entryFile ?? '',
+            sourceFetchedAt: primarySource.fetchedAt ?? primarySource.convertedAt ?? new Date().toISOString(),
+            sourceError: primarySource.error ?? '',
+          },
+        }
+      : {}),
+  };
+}
+
+const stoppedByReader = 'Stopped by the reader. The saved Codex thread can be continued.';
+const auditRuns = new Map();
+const eventClients = new Set();
+const auditJobWrites = new Map();
+
+// A job file says 'preparing' or 'running' until its run ends. Only this process
+// knows whether that run is still alive, so a record left by a restart reads as paused.
+function publicJob(job) {
+  if (!job || !['preparing', 'running'].includes(job.state)) return job;
+  return { ...job, state: activeAuditPaperIds.has(job.paperId) ? 'running' : 'paused' };
+}
+
+function broadcast(event, data) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of eventClients) client.write(payload);
+}
+
+/** Writes one paper's job record in order and tells every open reader about it. */
+function updateAuditJob(paperId, write) {
+  const scheduled = (auditJobWrites.get(paperId) ?? Promise.resolve()).then(write, write).then((job) => {
+    if (job) broadcast('job', { paperId, job: publicJob(job) });
+    return job;
+  });
+  const tail = scheduled.catch(() => {});
+  auditJobWrites.set(paperId, tail);
+  void tail.finally(() => {
+    if (auditJobWrites.get(paperId) === tail) auditJobWrites.delete(paperId);
+  });
+  return scheduled;
+}
+
+const codexActivities = {
+  reasoning: 'Reasoning about the paper',
+  commandExecution: 'Reading the source files',
+  agentMessage: 'Writing the audit',
+  webSearch: 'Checking references online',
+  mcpToolCall: 'Consulting a tool',
+  fileChange: 'Preparing working files',
+};
+
+function recordAuditProgress(paperId, run, message) {
+  if (message.method !== 'item/started' && message.method !== 'item/completed') return;
+  if (message.method === 'item/completed') run.steps += 1;
+  run.activity = codexActivities[message.params?.item?.type] ?? run.activity ?? 'Working';
+  const now = Date.now();
+  if (now - run.lastReported < 2000) return;
+  run.lastReported = now;
+  const progress = { steps: run.steps, activity: run.activity, lastActivityAt: new Date(now).toISOString() };
+  // A late progress write must never replace the job's final state.
+  updateAuditJob(paperId, async () => (run.finished ? null : vault.saveAuditJob(paperId, { progress }))).catch(
+    () => {},
+  );
+}
+
+/**
+ * Starts an audit that outlives the request: the result is stored in the paper
+ * folder before any reader is told, so closing or reloading the reader loses nothing.
+ */
+async function startBackgroundAudit(body, profile) {
+  const paper = { ...body.paper, id: String(body.paper.id) };
+  if (activeAuditPaperIds.has(paper.id)) throw httpError(409, 'An AI audit for this paper is already running.');
+  // Claim the slot before any await: a double click must not start two audits.
+  activeAuditPaperIds.add(paper.id);
+  let job;
+  try {
+    await vault.recordFor(paper.id);
+    const options = {
+      convertPdfToLatex: Boolean(body.convertPdfToLatex),
+      correctnessAudit: body.correctnessAudit !== false,
+      detailedAudit: body.detailedAudit !== false,
+    };
+    job = await updateAuditJob(paper.id, () =>
+      vault.startAuditJob(paper.id, options, { resume: Boolean(body.resumeAudit) }),
+    );
+  } catch (error) {
+    activeAuditPaperIds.delete(paper.id);
+    throw error;
+  }
+  const run = { threadId: job.threadId, cancelled: false, finished: false, steps: 0, activity: '', lastReported: 0 };
+  auditRuns.set(paper.id, run);
+  void (async () => {
+    try {
+      const result = await analyzePaperSource(
+        paper,
+        profile,
+        { ...body, ...job.options },
+        {
+          resumeThreadId: job.threadId,
+          isCancelled: () => run.cancelled,
+          onProgress: (message) => recordAuditProgress(paper.id, run, message),
+          onThreadReady: async (threadId) => {
+            run.threadId = threadId;
+            if (run.cancelled) throw new Error(stoppedByReader);
+            await updateAuditJob(paper.id, () =>
+              vault.saveAuditJob(paper.id, {
+                state: 'running',
+                threadId,
+                message: 'AI audit in progress. This thread can be resumed after a restart.',
+              }),
+            );
+          },
+        },
+      );
+      run.finished = true;
+      await updateAuditJob(paper.id, () => vault.saveAuditResult(paper.id, result));
+    } catch (error) {
+      run.finished = true;
+      const message = run.cancelled
+        ? stoppedByReader
+        : error instanceof Error
+          ? error.message
+          : 'The audit was interrupted.';
+      await updateAuditJob(paper.id, () => vault.pauseAuditJob(paper.id, message)).catch(() => {});
+    } finally {
+      auditRuns.delete(paper.id);
+      activeAuditPaperIds.delete(paper.id);
+    }
+  })();
+  return publicJob(job);
+}
+
 async function vaultSnapshotWithAuditStatus() {
   const snapshot = await vault.snapshot();
   const auditJobs = Object.fromEntries(
-    Object.entries(snapshot.auditJobs ?? {}).map(([paperId, job]) => {
-      const active = activeAuditPaperIds.has(paperId);
-      const state = active ? 'running' : ['preparing', 'running'].includes(job.state) ? 'paused' : job.state;
-      return [paperId, { ...job, state }];
-    }),
+    Object.entries(snapshot.auditJobs ?? {}).map(([paperId, job]) => [paperId, publicJob(job)]),
   );
   return { ...snapshot, auditJobs };
 }
@@ -783,6 +992,31 @@ const server = createServer(async (request, response) => {
       });
       return response.end(payload);
     }
+    if (request.method === 'GET' && pathname === '/events') {
+      response.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-store',
+        Connection: 'keep-alive',
+        ...(origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}),
+      });
+      const jobs = Object.fromEntries(
+        Object.entries(await vault.auditJobs()).map(([paperId, job]) => [paperId, publicJob(job)]),
+      );
+      response.write(`retry: 3000\nevent: jobs\ndata: ${JSON.stringify(jobs)}\n\n`);
+      eventClients.add(response);
+      const heartbeat = setInterval(() => response.write(': keep-alive\n\n'), 20_000);
+      request.on('close', () => {
+        clearInterval(heartbeat);
+        eventClients.delete(response);
+      });
+      return;
+    }
+    if (request.method === 'GET' && pathname === '/analyze/result') {
+      const paperId = new URL(request.url || '/', `http://${HOST}:${PORT}`).searchParams.get('paperId') || '';
+      const result = await vault.auditResult(paperId);
+      if (!result) return sendJson(response, 404, { error: 'No finished audit is waiting for this paper.' }, origin);
+      return sendJson(response, 200, result, origin);
+    }
     if (request.method === 'GET' && pathname === '/vault')
       return sendJson(response, 200, await vaultSnapshotWithAuditStatus(), origin);
     if (request.method === 'GET' && pathname === '/cloud/status')
@@ -803,6 +1037,7 @@ const server = createServer(async (request, response) => {
       request.method !== 'POST' ||
       ![
         '/analyze',
+        '/analyze/cancel',
         '/compare-versions',
         '/paper-question',
         '/node-question',
@@ -828,6 +1063,13 @@ const server = createServer(async (request, response) => {
       return sendJson(response, 404, { error: 'Not found.' }, origin);
     }
     const body = await readBody(request, bodyLimitFor(pathname));
+    if (pathname === '/analyze/cancel') {
+      const run = auditRuns.get(String(body.paperId || ''));
+      if (!run) return sendJson(response, 409, { error: 'No AI audit is running for this paper.' }, origin);
+      run.cancelled = true;
+      if (run.threadId) codex.interruptThread(run.threadId, stoppedByReader);
+      return sendJson(response, 202, { stopping: true }, origin);
+    }
     if (pathname === '/cloud/share')
       return sendJson(response, 200, { share: await createCloudShare(vault, body) }, origin);
     if (pathname === '/vault/profile')
@@ -943,13 +1185,16 @@ const server = createServer(async (request, response) => {
         return sendJson(response, 400, { error: 'A structured audit is required.' }, origin);
       const saved = await enqueueVaultMutation(async () => {
         const paper = await vault.saveAudit(body.paper, body.audit);
-        await vault.completeAuditJob(paper.id);
+        await updateAuditJob(paper.id, () => vault.completeAuditJob(paper.id));
+        await vault.clearAuditResult(paper.id);
         const snapshot = await vault.snapshot();
         return { paper, graph: snapshot.graph, links: snapshot.links };
       });
       return sendJson(response, 200, saved, origin);
     }
     const profile = normalizeProfile(body.profile);
+    if (pathname === '/analyze' && !body.updateMode)
+      return sendJson(response, 202, { job: await startBackgroundAudit(body, profile) }, origin);
     const runAiWork = async () => {
       if (pathname === '/compare-versions') {
         const paper = { ...body.paper, id: String(body.paper.id) };
@@ -994,121 +1239,11 @@ const server = createServer(async (request, response) => {
         return { ...compared, fromVersion, toVersion, sources: { from: fromSource.kind, to: toSource.kind } };
       }
       if (pathname === '/analyze') {
+        // Update mode is one step of the reader's version-update pipeline and
+        // answers in the request; ordinary audits run as background jobs.
         const paper = { ...body.paper, id: String(body.paper.id) };
-        const checkpointing = !body.updateMode;
-        if (checkpointing && activeAuditPaperIds.has(paper.id))
-          throw httpError(
-            409,
-            'An AI audit for this paper is already running. Wait for it to finish or reload the page to see its saved status.',
-          );
-        // Claim the slot before any await: a double click must not start two audits.
-        if (checkpointing) activeAuditPaperIds.add(paper.id);
-        let auditJob = null;
-        try {
-          await vault.recordFor(paper.id);
-          const requestedOptions = {
-            convertPdfToLatex: Boolean(body.convertPdfToLatex),
-            correctnessAudit: body.correctnessAudit !== false,
-            detailedAudit: body.detailedAudit !== false,
-          };
-          auditJob = checkpointing
-            ? await vault.startAuditJob(paper.id, requestedOptions, { resume: Boolean(body.resumeAudit) })
-            : null;
-        } catch (error) {
-          if (checkpointing) activeAuditPaperIds.delete(paper.id);
-          throw error;
-        }
-        try {
-          const localInventory = await vault.compactInventory();
-          let primarySource;
-          try {
-            primarySource = await acquireArxivSource(paper, paper.arxivId, Boolean(body.updateMode));
-            if (!body.updateMode)
-              await vault.saveSourceRecord(paper.id, {
-                analysisFormat: 'tex',
-                sourceDirectory: primarySource.sourceDirectory,
-                mainTex: primarySource.entryFile,
-                sourceFetchedAt: primarySource.fetchedAt,
-              });
-            if (primarySource.kind === 'uploaded-pdf' && body.convertPdfToLatex) {
-              const converted = await codex.convertPdfToLatex({ paper, profile, pdfPath: primarySource.entryFile });
-              primarySource = await saveAiLatexSource(paper, converted);
-              const sourceRoot = await vault.sourceDirectory(paper.id);
-              await writeSourceManifest(path.join(sourceRoot, 'proofroom-uploaded-source.json'), primarySource);
-              await vault.saveSourceRecord(paper.id, {
-                analysisFormat: 'ai-tex',
-                sourceDirectory: primarySource.sourceDirectory,
-                mainTex: primarySource.entryFile,
-                sourceFetchedAt: primarySource.convertedAt,
-                sourceError: 'Reader-supplied PDF converted to an editable LaTeX working source.',
-              });
-            }
-          } catch (error) {
-            primarySource = { kind: 'pdf', error: error instanceof Error ? error.message : 'TeX source unavailable' };
-            if (body.convertPdfToLatex) {
-              const converted = await codex.convertPdfToLatex({ paper, profile });
-              primarySource = await saveAiLatexSource(paper, converted);
-              await vault.saveSourceRecord(paper.id, {
-                analysisFormat: 'ai-tex',
-                sourceDirectory: primarySource.sourceDirectory,
-                mainTex: primarySource.entryFile,
-                sourceFetchedAt: primarySource.convertedAt,
-                sourceError: 'Author TeX unavailable; saved AI transcription from the primary PDF.',
-              });
-            } else if (!body.updateMode)
-              await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
-          }
-          const analyzed = await codex.analyze({
-            paper,
-            profile,
-            primarySource,
-            correctnessAudit: body.correctnessAudit !== false,
-            detailedAudit: body.detailedAudit !== false,
-            localInventory: localInventory.filter((item) => item.paperId !== paper.id),
-            updateContext: body.updateContext ?? null,
-            resumeThreadId: auditJob?.threadId ?? '',
-            onThreadReady: checkpointing
-              ? async (threadId) =>
-                  vault.saveAuditJob(paper.id, {
-                    state: 'running',
-                    threadId,
-                    message: 'AI audit in progress. This thread can be resumed after a restart.',
-                  })
-              : null,
-          });
-          const text =
-            primarySource.kind === 'tex' || primarySource.kind === 'ai-tex'
-              ? await enrichAuditFromTex(analyzed.text, primarySource)
-              : analyzed.text;
-          return {
-            ...analyzed,
-            text,
-            paper,
-            primarySource: {
-              kind: primarySource.kind,
-              fileCount: primarySource.fileCount ?? 0,
-              cached: Boolean(primarySource.cached),
-              error: primarySource.error ?? null,
-            },
-            ...(body.updateMode
-              ? {
-                  sourceRecord: {
-                    analysisFormat: primarySource.kind === 'tex' ? 'tex' : primarySource.kind,
-                    sourceDirectory: primarySource.sourceDirectory ?? '',
-                    mainTex: primarySource.entryFile ?? '',
-                    sourceFetchedAt: primarySource.fetchedAt ?? primarySource.convertedAt ?? new Date().toISOString(),
-                    sourceError: primarySource.error ?? '',
-                  },
-                }
-              : {}),
-          };
-        } catch (error) {
-          if (checkpointing)
-            await vault.pauseAuditJob(paper.id, error instanceof Error ? error.message : 'The audit was interrupted.');
-          throw error;
-        } finally {
-          if (checkpointing) activeAuditPaperIds.delete(paper.id);
-        }
+        await vault.recordFor(paper.id);
+        return analyzePaperSource(paper, profile, body);
       }
       if (pathname === '/paper-question') {
         if (typeof body.question !== 'string') throw new Error('A question is required.');

@@ -17,12 +17,17 @@ arXivpecker is a local-first reader with two cooperating processes:
 
 When the bridge opens an empty library, it copies the three bundled examples into `proofroom-library/`. The starter data contains no reader profile, browser preference, credential, or resumable Codex thread ID. The interface therefore opens its setup dialog on a genuinely new browser profile, then stores that reader's choices locally.
 
+## Audits
+
+An AI audit runs as a background job owned by the bridge, not by the page that started it. `POST /analyze` answers `202` at once; the bridge records the job in `audit-progress.json`, streams its state and Codex progress to every open reader over `GET /events` (server-sent events), and stores the finished result in `audit-result.json` before announcing it as `ready`. A reader that is open, reloaded, or started later fetches `GET /analyze/result`, builds the interactive reader from it, and saves it through `/vault/audit`, which completes the job and removes the stored result. `POST /analyze/cancel` interrupts the Codex turn; the job pauses with its thread kept, so Continue audit resumes it. Tests use a scripted stand-in for the Codex CLI in `e2e/fixtures/bin/codex`.
+
 ## Paper folder
 
 Each paper folder may contain:
 
 - `paper.json` — bibliographic and source metadata;
 - `audit.json` — structured full-paper reading audit;
+- `audit-progress.json` and `audit-result.json` — the running or last audit job, and a finished result not yet built into the reader;
 - `reader.json` — notes, reading marks, and expansion state;
 - `editions/working/patches.json` — reversible author/AI edits;
 - `attachments/source/` — TeX, figures, and source manifests;

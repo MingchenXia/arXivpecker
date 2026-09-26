@@ -35,7 +35,7 @@ import {
   selectedPaperKey,
   writeStorage,
 } from './lib/app';
-import { bridgeGet, bridgePost, readerApiGet, saveReaderState } from './lib/bridge-client';
+import { bridgeGet, bridgePost, bridgeUrl, readerApiGet, saveReaderState } from './lib/bridge-client';
 import { changedReaderPapers } from './lib/reader-state';
 import type { ReaderStateSlices } from './lib/reader-state';
 import {
@@ -65,6 +65,7 @@ import type {
   ReaderNavigationRequest,
   ReaderProcessTarget,
   ReadingMark,
+  ServiceResponse,
   VaultSnapshot,
   View,
   WorkingPatch,
@@ -100,6 +101,11 @@ export default function Home() {
   const [loadingDiscoveries, setLoadingDiscoveries] = useState(false);
   const [notice, setNotice] = useState('');
   const noticeTimerRef = useRef<number | undefined>(undefined);
+  // The tray entry that started each paper's audit, so progress lands on that entry.
+  const auditProcessIdsRef = useRef(new Map<string, string>());
+  const adoptingAuditsRef = useRef(new Set<string>());
+  const patchesRef = useRef(patches);
+  const auditEventHandlerRef = useRef<(event: string, data: unknown) => void>(() => {});
   const discoveriesRequestRef = useRef<AbortController | null>(null);
 
   const paper = papers.find((item) => item.id === selectedPaperId) ?? papers[0];
@@ -280,6 +286,26 @@ export default function Home() {
     window.addEventListener('pagehide', flush);
     return () => window.removeEventListener('pagehide', flush);
   }, []);
+  useEffect(() => {
+    patchesRef.current = patches;
+  }, [patches]);
+  // Follow background audits. Subscribing only once the library is loaded means a
+  // finished audit is adopted on top of the reader's saved edits, never before them.
+  // EventSource reconnects by itself, and the bridge resends every job on connect.
+  useEffect(() => {
+    if (!vaultReady) return;
+    const source = new EventSource(`${bridgeUrl}/events`);
+    const forward = (event: Event) => {
+      try {
+        auditEventHandlerRef.current(event.type, JSON.parse((event as MessageEvent<string>).data));
+      } catch {
+        /* A malformed event is ignored; the next one carries the full job. */
+      }
+    };
+    source.addEventListener('jobs', forward);
+    source.addEventListener('job', forward);
+    return () => source.close();
+  }, [vaultReady]);
 
   async function savePaper(incoming: Paper) {
     const data = await bridgePost('/vault/paper', { paper: incoming }, 'Could not create the paper folder.', {
@@ -333,41 +359,54 @@ export default function Home() {
       return;
     }
     const checkpoint = auditJobs[target.id];
-    if (checkpoint?.state === 'running') {
-      notify(`The saved audit for “${target.title}” is still running. Reload to see its latest status.`);
+    if (checkpoint?.state === 'running' || checkpoint?.state === 'ready') {
+      notify(`The AI audit for “${target.title}” is still running; follow it in the AI activity tray.`);
       return;
     }
     const resumeAudit = Boolean(checkpoint);
     const options = checkpoint?.options ?? { convertPdfToLatex, correctnessAudit, detailedAudit };
     const processId = requestedProcessId || `paper-analysis:${target.id}`;
-    beginPaperJob(target.id, 'audit');
-    setAuditJobs((current) => ({
-      ...current,
-      [target.id]: {
-        version: 1,
-        paperId: target.id,
-        state: 'running',
-        threadId: checkpoint?.threadId ?? '',
-        options,
-        attempts: (checkpoint?.attempts ?? 0) + 1,
-        startedAt: checkpoint?.startedAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        message: resumeAudit ? 'Resuming the saved AI audit.' : 'Preparing the AI audit.',
-      },
-    }));
+    auditProcessIdsRef.current.set(target.id, processId);
     reportReaderProcess({
       id: processId,
       label: resumeAudit ? 'Resuming saved AI audit' : 'AI audit in progress',
       detail: target.title,
       status: 'running',
+      cancelPaperId: target.id,
     });
     try {
+      // The bridge runs the audit in the background and stores its result, so the
+      // audit survives closing or reloading the reader; progress arrives as events.
       const data = await bridgePost(
         '/analyze',
         { paper: target, profile, ...options, resumeAudit },
-        'Local Codex analysis failed.',
-        { require: ['paper'] },
+        'The AI audit could not be started.',
+        { require: ['job'] },
       );
+      setAuditJobs((current) => ({ ...current, [target.id]: data.job }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The AI audit could not be started.';
+      reportReaderProcess({
+        id: processId,
+        label: 'AI audit not started',
+        detail: message,
+        status: 'error',
+        retryPaperId: target.id,
+      });
+      notify(message);
+    }
+  }
+  /** Turns a finished background audit into the interactive reader. */
+  async function adoptAuditResult(paperId: string) {
+    if (adoptingAuditsRef.current.has(paperId)) return;
+    adoptingAuditsRef.current.add(paperId);
+    const processId = auditProcessIdsRef.current.get(paperId) ?? `paper-analysis:${paperId}`;
+    try {
+      const data = await bridgeGet<ServiceResponse>(
+        `/analyze/result?paperId=${encodeURIComponent(paperId)}`,
+        'The finished AI audit could not be read.',
+      );
+      if (!data.paper) throw new Error(data.error || 'The finished AI audit could not be read.');
       const stored = data.paper;
       const next = parseAudit(readString(data.text), readString(data.threadId));
       reportReaderProcess({
@@ -382,8 +421,10 @@ export default function Home() {
         'Could not save the local audit.',
         { require: ['paper'] },
       );
-      const automatic = automaticEditorialPatches(next, patches[stored.id] ?? []);
-      const prior = (patches[stored.id] ?? []).filter((patch) => !(patch.kind === 'replace' && patch.source === 'ai'));
+      // Build on the reader's latest edits, not the ones present when the audit started.
+      const currentPatches = patchesRef.current[stored.id] ?? [];
+      const automatic = automaticEditorialPatches(next, currentPatches);
+      const prior = currentPatches.filter((patch) => !(patch.kind === 'replace' && patch.source === 'ai'));
       const correctedPatches = [...prior, ...automatic];
       if (automatic.length) {
         const correctionData = await bridgePost(
@@ -416,33 +457,76 @@ export default function Home() {
       notify(
         `“${stored.title}” is ready · ${next.nodes.length} audited units · ${sourceLabel}${automatic.length ? ` · ${automatic.length} verified typo correction${automatic.length === 1 ? '' : 's'} highlighted` : ''}.`,
       );
-      void refreshBridge();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Analysis failed.';
-      setAuditJobs((current) =>
-        current[target.id]
-          ? {
-              ...current,
-              [target.id]: { ...current[target.id], state: 'paused', updatedAt: new Date().toISOString(), message },
-            }
-          : current,
-      );
+      const message = error instanceof Error ? error.message : 'The finished AI audit could not be saved.';
       reportReaderProcess({
         id: processId,
-        label: 'AI audit paused',
+        label: 'AI audit not saved',
         detail: message,
         status: 'error',
-        retryPaperId: target.id,
+        retryPaperId: paperId,
       });
-      notify(
-        `${message} The paper, source, and saved audit thread are preserved; choose Continue audit from the library.`,
-      );
-      void loadVault();
-      void refreshBridge();
+      notify(`${message} The finished audit is kept; use Retry in the AI activity tray.`);
     } finally {
-      finishPaperJob(target.id, 'audit');
+      adoptingAuditsRef.current.delete(paperId);
     }
   }
+  async function cancelAudit(paperId: string) {
+    try {
+      await bridgePost('/analyze/cancel', { paperId }, 'The AI audit could not be stopped.');
+      notify('Stopping the AI audit. Its Codex thread is kept, so it can be continued later.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'The AI audit could not be stopped.');
+    }
+  }
+  /** Applies a job update from the bridge's event stream; `live` is false for the list sent on connect. */
+  function receiveAuditJob(paperId: string, job: AuditJob, live: boolean) {
+    setAuditJobs((current) => {
+      const next = { ...current };
+      if (job.state === 'completed') delete next[paperId];
+      else next[paperId] = job;
+      return next;
+    });
+    const processId = auditProcessIdsRef.current.get(paperId) ?? `paper-analysis:${paperId}`;
+    const title = papers.find((item) => item.id === paperId)?.title ?? 'AI audit';
+    if (job.state === 'running')
+      reportReaderProcess({
+        id: processId,
+        label: 'AI audit in progress',
+        detail: job.progress?.steps
+          ? `${title} · ${job.progress.activity || 'Working'} · ${job.progress.steps} step${job.progress.steps === 1 ? '' : 's'}`
+          : title,
+        status: 'running',
+        cancelPaperId: paperId,
+      });
+    else if (job.state === 'ready') void adoptAuditResult(paperId);
+    else if (job.state === 'paused' && live) {
+      const stopped = /^Stopped by the reader/.test(job.message);
+      reportReaderProcess({
+        id: processId,
+        label: stopped ? 'AI audit stopped' : 'AI audit paused',
+        detail: job.message,
+        status: 'error',
+        retryPaperId: paperId,
+      });
+      notify(
+        stopped
+          ? `The AI audit of “${title}” was stopped. Continue it from the library at any time.`
+          : `${job.message} The paper, source, and saved audit thread are preserved; choose Continue audit from the library.`,
+      );
+    }
+  }
+  useEffect(() => {
+    auditEventHandlerRef.current = (event, data) => {
+      if (event === 'jobs')
+        for (const [paperId, job] of Object.entries(data as Record<string, AuditJob>))
+          receiveAuditJob(paperId, job, false);
+      else {
+        const { paperId, job } = data as { paperId: string; job: AuditJob };
+        receiveAuditJob(paperId, job, true);
+      }
+    };
+  });
   async function refreshArxivPaper(target: Paper) {
     const previousAudit = audits[target.id];
     if (!previousAudit) {
@@ -1065,7 +1149,9 @@ export default function Home() {
             savePatches={(next) => (paper ? saveWorkingPatches(paper.id, next) : Promise.resolve())}
             suggestEdit={suggestEditorialFix}
             graph={graph}
-            analysing={Boolean(paper && (paperJobs[paper.id] || auditJob?.state === 'running'))}
+            analysing={Boolean(
+              paper && (paperJobs[paper.id] || auditJob?.state === 'running' || auditJob?.state === 'ready'),
+            )}
             auditActionLabel={
               auditJob?.state === 'paused' || auditJob?.state === 'preparing' ? 'Continue audit' : undefined
             }
@@ -1092,6 +1178,7 @@ export default function Home() {
             jobs={paperJobs}
             auditJobs={auditJobs}
             analyze={analyzePaper}
+            cancelAudit={cancelAudit}
             refreshPaper={refreshArxivPaper}
             showUpdate={setUpdatePanel}
             updatePaper={updatePaperInfo}
@@ -1139,9 +1226,11 @@ export default function Home() {
       <ProcessTray
         openResult={openProcessResult}
         retryAudit={(paperId) => {
+          if (auditJobs[paperId]?.state === 'ready') return void adoptAuditResult(paperId);
           const target = papers.find((item) => item.id === paperId);
           if (target && !paperJobs[target.id]) void analyzePaper(target);
         }}
+        cancelAudit={(paperId) => void cancelAudit(paperId)}
       />
     </main>
   );

@@ -100,6 +100,18 @@ function writeJson(file, value) {
   return scheduled;
 }
 
+// 'ready' means Codex finished and the result waits in audit-result.json.
+const auditJobStates = ['preparing', 'running', 'paused', 'ready', 'completed'];
+
+function normalizeProgress(value) {
+  if (!isObject(value)) return null;
+  return {
+    steps: Number.isFinite(value.steps) ? Math.max(0, Math.floor(value.steps)) : 0,
+    activity: typeof value.activity === 'string' ? value.activity.slice(0, 200) : '',
+    lastActivityAt: typeof value.lastActivityAt === 'string' ? value.lastActivityAt : '',
+  };
+}
+
 function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -411,7 +423,7 @@ export class PaperVault {
     const record = knownRecord ?? (await this.recordFor(paperId));
     const job = await readJson(path.join(this.paperDirectory(record), 'audit-progress.json'), null);
     if (!job || typeof job !== 'object') return null;
-    const states = new Set(['preparing', 'running', 'paused', 'completed']);
+    const states = new Set(auditJobStates);
     return {
       version: 1,
       paperId: String(paperId),
@@ -426,14 +438,26 @@ export class PaperVault {
       startedAt: typeof job.startedAt === 'string' ? job.startedAt : '',
       updatedAt: typeof job.updatedAt === 'string' ? job.updatedAt : '',
       message: typeof job.message === 'string' ? job.message : '',
+      progress: normalizeProgress(job.progress),
     };
+  }
+
+  /** Every paper's unfinished audit job, keyed by paper id. */
+  async auditJobs() {
+    const index = await this.index();
+    const jobs = {};
+    for (const record of index.papers) {
+      const job = await this.auditJob(record.id, record);
+      if (job && job.state !== 'completed') jobs[record.id] = job;
+    }
+    return jobs;
   }
 
   async saveAuditJob(paperId, update) {
     const record = await this.recordFor(paperId);
     const previous = await this.auditJob(paperId);
     const now = new Date().toISOString();
-    const states = new Set(['preparing', 'running', 'paused', 'completed']);
+    const states = new Set(auditJobStates);
     const options = update?.options && typeof update.options === 'object' ? update.options : (previous?.options ?? {});
     const job = {
       version: 1,
@@ -452,6 +476,13 @@ export class PaperVault {
         typeof update?.startedAt === 'string' && update.startedAt ? update.startedAt : previous?.startedAt || now,
       updatedAt: now,
       message: typeof update?.message === 'string' ? update.message.slice(0, 4000) : (previous?.message ?? ''),
+      // Progress describes the current attempt only; a new state without it clears it.
+      progress:
+        update?.progress !== undefined
+          ? normalizeProgress(update.progress)
+          : update?.state
+            ? null
+            : (previous?.progress ?? null),
     };
     await writeJson(path.join(this.paperDirectory(record), 'audit-progress.json'), job);
     return job;
@@ -470,6 +501,34 @@ export class PaperVault {
         ? 'Resuming the saved Codex audit thread.'
         : 'Preparing the primary source for an AI audit.',
     });
+  }
+
+  /**
+   * Stores a finished audit before anyone has turned it into the interactive
+   * reader, so a reload or restart cannot lose hours of Codex work.
+   */
+  async saveAuditResult(paperId, result) {
+    const record = await this.recordFor(paperId);
+    await writeJson(path.join(this.paperDirectory(record), 'audit-result.json'), {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      result,
+    });
+    return this.saveAuditJob(paperId, {
+      state: 'ready',
+      message: 'The AI audit finished; building the interactive reader.',
+    });
+  }
+
+  async auditResult(paperId) {
+    const record = await this.recordFor(paperId);
+    const saved = await readJson(path.join(this.paperDirectory(record), 'audit-result.json'), null);
+    return isObject(saved?.result) ? saved.result : null;
+  }
+
+  async clearAuditResult(paperId) {
+    const record = await this.recordFor(paperId);
+    await rm(path.join(this.paperDirectory(record), 'audit-result.json'), { force: true });
   }
 
   async pauseAuditJob(paperId, message) {

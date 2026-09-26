@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+// A scripted stand-in for `codex app-server`, used by the integration and browser
+// tests. It speaks the same newline-delimited JSON-RPC as the real app-server:
+// every turn streams progress items for FAKE_CODEX_TURN_MS (default 1500 ms) and
+// then completes with an answer shaped by the requested output schema.
+import { appendFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+
+if (process.argv[2] !== 'app-server') {
+  console.error('This test double only implements `codex app-server`.');
+  process.exit(2);
+}
+
+const turnMs = Number(process.env.FAKE_CODEX_TURN_MS || 1500);
+let nextThread = 1;
+let nextTurn = 1;
+const activeTurns = new Map();
+
+function send(message) {
+  process.stdout.write(`${JSON.stringify(message)}\n`);
+}
+
+function log(entry) {
+  if (process.env.FAKE_CODEX_LOG) appendFileSync(process.env.FAKE_CODEX_LOG, `${JSON.stringify(entry)}\n`);
+}
+
+function answerFor(params) {
+  const required = params.outputSchema?.required ?? [];
+  const prompt = params.input?.map((item) => item.text ?? '').join('\n') ?? '';
+  if (required.includes('audit'))
+    return JSON.stringify({
+      audit: {
+        sourceStatus: 'full-text-read',
+        sourceSummary: 'Scripted audit from the test Codex.',
+        centralQuestion: 'What does the paper prove?',
+        mainContribution: 'A scripted main result.',
+        verificationWarnings: [],
+      },
+      nodes: [
+        {
+          id: 'fake-main',
+          kind: 'theorem',
+          label: 'Theorem 1',
+          title: 'Scripted main result',
+          statement: 'Every scripted statement is verified.',
+          proofText: '',
+          citations: [],
+          status: 'verified',
+          anchor: { label: 'Section 1', page: 1, confidence: 'approximate' },
+          role: 'Main result',
+          dependencies: [],
+          proofSketch: ['Run the scripted argument.'],
+          whyItMatters: 'It exercises the audit pipeline.',
+          expandable: true,
+        },
+      ],
+      readingPaths: [],
+      crossPaperLinks: [],
+      openQuestions: [],
+      editorialCorrections: [],
+    });
+  if (required.includes('hasIssue'))
+    return JSON.stringify({ hasIssue: false, replacement: '', rationale: 'No issue found.', confidence: 'high' });
+  if (required.includes('changedUnits'))
+    return JSON.stringify({
+      summary: 'Scripted comparison.',
+      changedUnits: [],
+      proofChanges: [],
+      notationChanges: [],
+      editorialChanges: [],
+      dependencyImpact: [],
+      readingRecommendation: 'Nothing to reread.',
+      warnings: [],
+    });
+  return `Scripted answer: ${prompt.slice(0, 120)}`;
+}
+
+function startTurn(threadId, params) {
+  const turnId = `turn-${nextTurn++}`;
+  let step = 0;
+  const timer = setInterval(() => {
+    step += 1;
+    send({
+      method: 'item/completed',
+      params: {
+        threadId,
+        turnId,
+        item: { id: `item-${turnId}-${step}`, type: step % 3 ? 'reasoning' : 'commandExecution' },
+      },
+    });
+  }, 200);
+  const finish = setTimeout(() => {
+    clearInterval(timer);
+    activeTurns.delete(turnId);
+    send({
+      method: 'item/completed',
+      params: { threadId, turnId, item: { id: `answer-${turnId}`, type: 'agentMessage', text: answerFor(params) } },
+    });
+    send({ method: 'turn/completed', params: { threadId, turn: { id: turnId, status: 'completed', items: [] } } });
+  }, turnMs);
+  activeTurns.set(turnId, { threadId, timer, finish });
+  return turnId;
+}
+
+createInterface({ input: process.stdin }).on('line', (line) => {
+  let message;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return;
+  }
+  log({ method: message.method, params: message.params });
+  if (message.id === undefined) return;
+  const reply = (result) => send({ id: message.id, result });
+  switch (message.method) {
+    case 'initialize':
+      return reply({ userAgent: 'fake-codex' });
+    case 'account/read':
+      return reply({ account: { type: 'chatgpt', planType: 'test' } });
+    case 'model/list':
+      return reply({ data: [{ id: 'fake-model', model: 'fake-model', displayName: 'Test model', isDefault: true }] });
+    case 'thread/start':
+      return reply({ thread: { id: `thread-${nextThread++}` } });
+    case 'thread/resume':
+    case 'thread/unarchive':
+      return reply({ thread: { id: message.params?.threadId } });
+    case 'turn/start':
+      return reply({ turn: { id: startTurn(message.params.threadId, message.params) } });
+    case 'turn/interrupt': {
+      const turn = activeTurns.get(message.params?.turnId);
+      if (turn) {
+        clearInterval(turn.timer);
+        clearTimeout(turn.finish);
+        activeTurns.delete(message.params.turnId);
+        send({
+          method: 'turn/completed',
+          params: { threadId: turn.threadId, turn: { id: message.params.turnId, status: 'interrupted', items: [] } },
+        });
+      }
+      return reply({});
+    }
+    default:
+      return send({ id: message.id, error: { code: -32601, message: `Unsupported method ${message.method}` } });
+  }
+});

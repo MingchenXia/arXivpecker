@@ -350,6 +350,7 @@ export function Library({
   jobs,
   auditJobs,
   analyze,
+  cancelAudit,
   refreshPaper,
   showUpdate,
   updatePaper,
@@ -365,6 +366,7 @@ export function Library({
   jobs: Record<string, PaperJobKind>;
   auditJobs: Record<string, AuditJob>;
   analyze: (paper: Paper) => Promise<void>;
+  cancelAudit: (paperId: string) => Promise<void>;
   refreshPaper: (paper: Paper) => Promise<void>;
   showUpdate: (update: PaperUpdateRecord) => void;
   updatePaper: (paper: Paper) => Promise<void>;
@@ -457,7 +459,8 @@ export function Library({
           const latestUpdate = updates[paper.id]?.[0];
           const job = jobs[paper.id];
           const checkpoint = auditJobs[paper.id];
-          const remoteRunning = checkpoint?.state === 'running';
+          // 'ready' means the audit finished and is being saved; neither may be restarted.
+          const remoteRunning = checkpoint?.state === 'running' || checkpoint?.state === 'ready';
           const resumable = Boolean(checkpoint && !remoteRunning);
           const busy = Boolean(job) || remoteRunning;
           const updating = job === 'update';
@@ -568,6 +571,15 @@ export function Library({
                       title="Check for a newer arXiv version"
                     >
                       {updating ? 'Update…' : 'Update'}
+                    </button>
+                  )}
+                  {checkpoint?.state === 'running' && (
+                    <button
+                      onClick={() => void cancelAudit(paper.id)}
+                      aria-label={`Stop the AI audit of ${paper.title}`}
+                      title="Stop the audit; it can be continued later"
+                    >
+                      Stop
                     </button>
                   )}
                   <button
@@ -1192,9 +1204,11 @@ type ReaderProcessEntry = ReaderProcessUpdate & { startedAt: number; updatedAt: 
 export function ProcessTray({
   openResult,
   retryAudit,
+  cancelAudit,
 }: {
   openResult: (target: ReaderProcessTarget) => void;
   retryAudit: (paperId: string) => void;
+  cancelAudit: (paperId: string) => void;
 }) {
   // Activity is deliberately session-only. A fresh app launch begins with an
   // empty tray instead of resurfacing stale completed or interrupted work.
@@ -1312,6 +1326,18 @@ export function ProcessTray({
                     <span className="process-entry-open" aria-hidden="true">
                       →
                     </span>
+                  )}
+                  {item.status === 'running' && item.cancelPaperId && (
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        cancelAudit(item.cancelPaperId as string);
+                      }}
+                      aria-label="Stop AI audit"
+                      title="Stop audit (it can be continued later)"
+                    >
+                      ■
+                    </button>
                   )}
                   {item.status === 'error' && item.retryPaperId && (
                     <button

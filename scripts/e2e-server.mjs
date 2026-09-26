@@ -25,6 +25,8 @@ const env = {
   ...process.env,
   PROOFROOM_LIBRARY_DIR: library,
   PATH: `${path.join(root, 'e2e', 'fixtures', 'bin')}${path.delimiter}${process.env.PATH}`,
+  // Long enough for a test to reload or stop the page while an audit runs.
+  FAKE_CODEX_TURN_MS: process.env.FAKE_CODEX_TURN_MS ?? '6000',
 };
 const children = [spawn(process.execPath, ['scripts/codex-bridge.mjs'], { cwd: root, env, stdio: 'inherit' })];
 // Start the reader only once the bridge answers, so the first page load finds it.

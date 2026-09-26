@@ -205,13 +205,15 @@ export type PaperAudit = {
 export type AuditJob = {
   version: number;
   paperId: string;
-  state: 'preparing' | 'running' | 'paused' | 'completed';
+  /** 'ready': Codex finished and the result is stored, waiting to become the interactive reader. */
+  state: 'preparing' | 'running' | 'paused' | 'ready' | 'completed';
   threadId: string;
   options: { convertPdfToLatex: boolean; correctnessAudit: boolean; detailedAudit: boolean };
   attempts: number;
   startedAt: string;
   updatedAt: string;
   message: string;
+  progress?: { steps: number; activity: string; lastActivityAt: string } | null;
 };
 export type GraphNode = {
   id: string;
@@ -248,6 +250,8 @@ export type ReaderProcessUpdate = {
   detail: string;
   status: ReaderProcessStatus;
   retryPaperId?: string;
+  /** Offers to stop this paper's running audit. */
+  cancelPaperId?: string;
   resultTarget?: ReaderProcessTarget;
 };
 export type ReaderNavigationRequest = ReaderProcessTarget & { nonce: number };
@@ -301,4 +305,5 @@ export type ServiceResponse = {
   batchLabel?: string;
   sources?: { from: string; to: string };
   share?: CloudShareRecord;
+  job?: AuditJob;
 };

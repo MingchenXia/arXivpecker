@@ -306,3 +306,62 @@ test('the hard safety limit still stops a continuously active turn', async () =>
   }
   assert.equal(calls.filter((call) => call.method === 'turn/interrupt').length, 1);
 });
+
+test('turn events that arrive before turn/start resolves are replayed, not dropped', async () => {
+  const progress = [];
+  const { server } = mockServer((method, _request, current) => {
+    if (method !== 'turn/start') return {};
+    // The app-server can write the response and the whole turn in one stdout chunk.
+    current.handleNotification({
+      method: 'item/completed',
+      params: { threadId, turnId: 'fast', item: { type: 'reasoning' } },
+    });
+    current.handleNotification({
+      method: 'item/completed',
+      params: { threadId, turnId: 'fast', item: { type: 'agentMessage', text: 'Immediate answer.' } },
+    });
+    current.handleNotification({
+      method: 'turn/completed',
+      params: { threadId, turn: { id: 'fast', status: 'completed' } },
+    });
+    return { turn: { id: 'fast' } };
+  });
+  const output = await server.runTurn(params, { onProgress: (message) => progress.push(message.method) });
+  assert.equal(output.text, 'Immediate answer.');
+  assert.deepEqual(progress, ['item/completed', 'item/completed']);
+  assert.equal(server.earlyTurnEvents.size, 0);
+});
+
+test('a request from the app-server is refused instead of being taken for a response', () => {
+  const server = new CodexAppServer();
+  const written = [];
+  server.process = { killed: false, stdin: { writable: true, write: (line) => written.push(JSON.parse(line)) } };
+  let settled = false;
+  server.pending.set(7, { resolve: () => (settled = true), reject: () => (settled = true), timer: null });
+  server.handleLine(JSON.stringify({ id: 7, method: 'item/commandExecution/requestApproval', params: {} }));
+  assert.equal(settled, false, 'A server request with the same id must not settle our pending call.');
+  assert.equal(written[0].id, 7);
+  assert.equal(written[0].error.code, -32601);
+});
+
+test('interruptThread stops a running turn and interrupts it in Codex', async () => {
+  const { server, calls } = mockServer((method) => (method === 'turn/start' ? { turn: { id: 'long' } } : {}));
+  const running = server.runTurn(params);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(server.interruptThread(threadId, 'Stopped by the reader.'), 1);
+  await assert.rejects(running, /Stopped by the reader\./);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(calls.some((call) => call.method === 'turn/interrupt'));
+});
+
+test('a stop requested while turn/start is in flight interrupts the turn once it exists', async () => {
+  let cancelled = false;
+  const { server, calls } = mockServer((method) => {
+    if (method !== 'turn/start') return {};
+    cancelled = true; // The reader pressed Stop before Codex answered turn/start.
+    return { turn: { id: 'late' } };
+  });
+  await assert.rejects(server.runTurn(params, { isCancelled: () => cancelled }), /Stopped by the reader\./);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(calls.some((call) => call.method === 'turn/interrupt'));
+});

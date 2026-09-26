@@ -47,6 +47,9 @@ class CodexAppServer {
     this.pending = new Map();
     this.loadedThreads = new Set();
     this.turns = new Map();
+    // Events for a turn can arrive in the same stdout chunk as the turn/start
+    // response, before runTurn has registered the turn; keep them for replay.
+    this.earlyTurnEvents = new Map();
     this.account = null;
     this.models = [];
     this.lastError = null;
@@ -166,6 +169,17 @@ class CodexAppServer {
     } catch {
       return;
     }
+    if (message.id !== undefined && message.method) {
+      // A request from the app-server (for example an approval). This bridge runs
+      // with approvals off and cannot answer interactively; say so rather than
+      // leaving Codex waiting forever.
+      try {
+        this.write({ id: message.id, error: { code: -32601, message: 'arXivpecker does not handle this request.' } });
+      } catch {
+        /* The process is already gone. */
+      }
+      return;
+    }
     if (message.id !== undefined) {
       const request = this.pending.get(message.id);
       if (!request) return;
@@ -189,11 +203,22 @@ class CodexAppServer {
     // including reasoning deltas and token-usage updates that this bridge does
     // not otherwise need to render.
     const notifiedTurnId = params.turnId ?? params.turn?.id;
+    if (notifiedTurnId && !this.turns.has(notifiedTurnId)) {
+      const events = this.earlyTurnEvents.get(notifiedTurnId) ?? [];
+      if (events.length < 1000) events.push(message);
+      this.earlyTurnEvents.set(notifiedTurnId, events);
+      // Events of turns that already ended (e.g. after an interrupt) are never replayed.
+      while (this.earlyTurnEvents.size > 32) this.earlyTurnEvents.delete(this.earlyTurnEvents.keys().next().value);
+      return;
+    }
     let activeTurn = notifiedTurnId ? this.turns.get(notifiedTurnId) : null;
     if (!activeTurn && params.threadId) {
       activeTurn = [...this.turns.values()].find((turn) => turn.threadId === params.threadId);
     }
-    if (activeTurn && message.method !== 'turn/completed') activeTurn.touch();
+    if (activeTurn && message.method !== 'turn/completed') {
+      activeTurn.touch();
+      activeTurn.progress(message);
+    }
     if (message.method === 'item/completed' && params.item?.type === 'agentMessage') {
       const turn = this.turns.get(params.turnId);
       if (turn) turn.messages.push(params.item.text ?? '');
@@ -233,7 +258,18 @@ class CodexAppServer {
     }
   }
 
-  async runTurn(params, { taskLabel = 'Codex task' } = {}) {
+  /** Stops the running turn of a thread; its caller receives `reason` as the error. */
+  interruptThread(threadId, reason = 'Stopped by the reader.') {
+    let stopped = 0;
+    for (const turn of [...this.turns.values()])
+      if (turn.threadId === threadId) {
+        turn.interrupt(new Error(reason));
+        stopped += 1;
+      }
+    return stopped;
+  }
+
+  async runTurn(params, { taskLabel = 'Codex task', onProgress = null, isCancelled = () => false } = {}) {
     let result;
     try {
       result = await this.call('turn/start', params, 30000);
@@ -278,6 +314,14 @@ class CodexAppServer {
         threadId: params.threadId,
         messages: [],
         touch,
+        interrupt: interruptAndReject,
+        progress: (message) => {
+          try {
+            onProgress?.(message);
+          } catch {
+            /* Progress reporting must never break the turn. */
+          }
+        },
         resolve: (value) => {
           if (settled) return;
           settled = true;
@@ -293,6 +337,14 @@ class CodexAppServer {
       };
       this.turns.set(turnId, turn);
       touch();
+      // A stop requested while turn/start was in flight found no turn to interrupt.
+      if (isCancelled()) {
+        interruptAndReject(new Error('Stopped by the reader.'));
+        return;
+      }
+      const early = this.earlyTurnEvents.get(turnId) ?? [];
+      this.earlyTurnEvents.delete(turnId);
+      for (const message of early) this.handleNotification(message);
       if (this.turnHardTimeoutMs)
         hardTimer = setTimeout(
           () =>
@@ -316,6 +368,8 @@ class CodexAppServer {
     updateContext = null,
     resumeThreadId = '',
     onThreadReady = null,
+    onProgress = null,
+    isCancelled = () => false,
   }) {
     await this.start();
     const model = profile.model || this.models.find((item) => item.isDefault)?.model || undefined;
@@ -360,7 +414,7 @@ class CodexAppServer {
         sandboxPolicy: { type: 'readOnly', networkAccess: true },
         outputSchema: makeAuditSchema(),
       },
-      { taskLabel: 'AI audit' },
+      { taskLabel: 'AI audit', onProgress, isCancelled },
     );
     return { threadId, ...output };
   }
