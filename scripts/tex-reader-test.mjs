@@ -772,6 +772,21 @@ assert.match(
   'Macro substitution must preserve a TeX control-word boundary before a letter argument.',
 );
 
+// Arguments are taken unexpanded, as TeX takes them: a nested use of the same
+// macro and a macro passed as an argument both expand cleanly.
+assert.match(
+  expandAuthorMacros(
+    String.raw`\newcommand{\abs}[1]{|#1|}\newcommand{\FF}{\mathbb F}\newcommand{\ol}[1]{\overline{#1}}\begin{document}$\abs{\abs{x}} + \ol\FF$\end{document}`,
+  ),
+  /\$\|\|x\|\| \+ \\overline\{\\mathbb F\}\$/,
+);
+// A recursive definition must not grow the document without bound.
+const recursiveSource = String.raw`\def\a{\a\a\a\a\a\a\a\a}\begin{document}${'$\\a$ '.repeat(20000)}\end{document}`;
+assert.ok(
+  expandAuthorMacros(recursiveSource).length <= recursiveSource.length + 2 * 1024 * 1024,
+  'Recursive macro expansion must stay within its growth budget.',
+);
+
 const literalMacroExample = expandAuthorMacros(
   String.raw`\newcommand{\R}{\mathbb R}\begin{document}\begin{verbatim}\newcommand{\R}{wrong}\R\end{verbatim}Live $\R$.\end{document}`,
 );

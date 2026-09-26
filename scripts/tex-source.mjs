@@ -314,41 +314,89 @@ function normalizeTextLineBreaks(source) {
   return output;
 }
 
-function stripLatexComments(source) {
-  const value = String(source || '');
-  let output = '';
-  // Percent signs are data inside literal source environments. Preserve them
-  // while still treating the dedicated `comment` environment as invisible.
-  const literalRanges = literalSourceRanges(value).filter(([start]) => !/^\\begin\{comment\}/.test(value.slice(start)));
-  for (let index = 0; index < value.length; index += 1) {
-    if (insideSourceRanges(index, literalRanges)) {
-      output += value[index];
-      continue;
-    }
-    if (value[index] !== '%') {
-      output += value[index];
-      continue;
-    }
-    let slashes = 0;
-    for (let previous = index - 1; previous >= 0 && value[previous] === '\\'; previous -= 1) slashes += 1;
-    if (slashes % 2 === 1) {
-      output += value[index];
-      continue;
-    }
-    while (index + 1 < value.length && value[index + 1] !== '\n' && value[index + 1] !== '\r') index += 1;
-  }
-  return output;
+function escapedByBackslashes(value, index) {
+  let slashes = 0;
+  for (let previous = index - 1; previous >= 0 && value[previous] === '\\'; previous -= 1) slashes += 1;
+  return slashes % 2 === 1;
 }
 
+function stripLatexComments(source) {
+  const value = String(source || '');
+  if (!value.includes('%')) return value;
+  // Percent signs are data inside literal source environments. Preserve them
+  // while still treating the dedicated `comment` environment as invisible.
+  const literalRanges = mergeSourceRanges(
+    literalSourceRanges(value).filter(([start]) => !value.startsWith('\\begin{comment}', start)),
+  );
+  // Jump between percent signs and join the kept slices once; the ranges are
+  // sorted, so one pointer tracks the literal range each sign could fall in.
+  const pieces = [];
+  let cursor = 0;
+  let range = 0;
+  for (let index = value.indexOf('%'); index >= 0; index = value.indexOf('%', index + 1)) {
+    while (range < literalRanges.length && literalRanges[range][1] <= index) range += 1;
+    if ((range < literalRanges.length && literalRanges[range][0] <= index) || escapedByBackslashes(value, index))
+      continue;
+    pieces.push(value.slice(cursor, index));
+    while (index + 1 < value.length && value[index + 1] !== '\n' && value[index + 1] !== '\r') index += 1;
+    cursor = index + 1;
+  }
+  pieces.push(value.slice(cursor));
+  return pieces.join('');
+}
+
+// Positions of every `%` (and whether it starts a comment) and every line
+// break, per long text, so a comment check is two binary searches instead of a
+// walk back to the line start, which is quadratic on paragraph-long lines.
+const commentIndexes = new Map();
+function commentIndex(value) {
+  let index = commentIndexes.get(value);
+  if (index) return index;
+  const percents = [];
+  const active = [];
+  for (let at = value.indexOf('%'); at >= 0; at = value.indexOf('%', at + 1)) {
+    percents.push(at);
+    active.push(!escapedByBackslashes(value, at));
+  }
+  const breaks = [];
+  for (let at = 0; at < value.length; at += 1) {
+    const code = value.charCodeAt(at);
+    if (code === 10 || code === 13) breaks.push(at);
+  }
+  index = { percents, active, breaks };
+  if (commentIndexes.size >= 4) commentIndexes.delete(commentIndexes.keys().next().value);
+  commentIndexes.set(value, index);
+  return index;
+}
+
+function lastIndexBelow(sorted, limit) {
+  let low = 0;
+  let high = sorted.length - 1;
+  let found = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (sorted[middle] < limit) {
+      found = middle;
+      low = middle + 1;
+    } else high = middle - 1;
+  }
+  return found;
+}
+
+// TeX reads a line as commented from the nearest `%` before `index` on the
+// same line, unless that sign is escaped.
 function isLatexCommentedAt(source, index) {
   const value = String(source || '');
-  for (let cursor = index - 1; cursor >= 0 && value[cursor] !== '\n' && value[cursor] !== '\r'; cursor -= 1) {
-    if (value[cursor] !== '%') continue;
-    let slashes = 0;
-    for (let previous = cursor - 1; previous >= 0 && value[previous] === '\\'; previous -= 1) slashes += 1;
-    return slashes % 2 === 0;
+  if (value.length < 4096) {
+    for (let cursor = index - 1; cursor >= 0 && value[cursor] !== '\n' && value[cursor] !== '\r'; cursor -= 1)
+      if (value[cursor] === '%') return !escapedByBackslashes(value, cursor);
+    return false;
   }
-  return false;
+  const { percents, active, breaks } = commentIndex(value);
+  const percent = lastIndexBelow(percents, index);
+  if (percent < 0) return false;
+  const lineBreak = lastIndexBelow(breaks, index);
+  return !(lineBreak >= 0 && breaks[lineBreak] > percents[percent]) && active[percent];
 }
 
 function readableLatex(source) {
@@ -729,55 +777,77 @@ function authorMacroTable(source) {
   return macros;
 }
 
-function expandMacroUse(text, name, macro) {
-  const pattern = new RegExp(`\\\\${name}(?![A-Za-z@])`, 'g');
-  const literalRanges = literalSourceRanges(text);
-  let output = '';
-  let cursor = 0;
-  for (const match of text.matchAll(pattern)) {
-    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
-    let position = (match.index ?? 0) + match[0].length;
-    const args = [];
-    // TeX uses whitespace to terminate a zero-argument control word. Preserve
-    // that separator or `\\leq R` becomes the undefined command `\\leqslantR`.
-    if (macro.arity > 0 || macro.defaultArg !== undefined) while (/\s/.test(text[position] || '')) position += 1;
-    if (macro.defaultArg !== undefined) {
-      const optional = balancedGroup(text, position, '[', ']');
-      args.push(optional ? optional.content : macro.defaultArg);
-      if (optional) position = optional.end;
+// Reads one use of an author macro whose name ends at `position`: its
+// arguments, then the replacement text with the arguments substituted.
+function expandMacroUse(text, position, macro) {
+  const args = [];
+  // TeX uses whitespace to terminate a zero-argument control word. Preserve
+  // that separator or `\\leq R` becomes the undefined command `\\leqslantR`.
+  if (macro.arity > 0 || macro.defaultArg !== undefined) while (/\s/.test(text[position] || '')) position += 1;
+  if (macro.defaultArg !== undefined) {
+    const optional = balancedGroup(text, position, '[', ']');
+    args.push(optional ? optional.content : macro.defaultArg);
+    if (optional) position = optional.end;
+  }
+  for (let argIndex = args.length; argIndex < macro.arity; argIndex += 1) {
+    while (/\s/.test(text[position] || '')) position += 1;
+    const group = balancedGroup(text, position);
+    if (group) {
+      args.push(group.content);
+      position = group.end;
+      continue;
     }
-    let complete = true;
-    for (let argIndex = args.length; argIndex < macro.arity; argIndex += 1) {
-      while (/\s/.test(text[position] || '')) position += 1;
-      const group = balancedGroup(text, position);
-      if (group) {
-        args.push(group.content);
-        position = group.end;
-        continue;
-      }
-      const token = text[position] === '\\' ? /^\\[A-Za-z@]+|^\\./.exec(text.slice(position))?.[0] : text[position];
-      if (!token) {
-        complete = false;
-        break;
-      }
-      args.push(token);
-      position += token.length;
-    }
-    if (!complete) continue;
-    let replacement = macro.replacement;
-    args.forEach((argument, index) => {
-      replacement = replacement.replace(new RegExp(`#${index + 1}`, 'g'), (_placeholder, offset, whole) => {
+    const token = text[position] === '\\' ? /^\\[A-Za-z@]+|^\\./.exec(text.slice(position))?.[0] : text[position];
+    if (!token) return null;
+    args.push(token);
+    position += token.length;
+  }
+  let replacement = macro.replacement;
+  args.forEach((argument, index) => {
+    replacement = replacement.replace(
+      macroParameters[index] || new RegExp(`#${index + 1}`, 'g'),
+      (_placeholder, offset, whole) => {
         // TeX tokenizes a control word before substituting macro parameters.
         // Preserve that boundary or `\\lVert#1` with `#1=A` becomes the
         // undefined reader command `\\lVertA`.
         const needsBoundary = /\\[A-Za-z@]+$/.test(whole.slice(0, offset)) && /^[A-Za-z@]/.test(argument);
         return needsBoundary ? ` ${argument}` : argument;
-      });
-    });
-    output += text.slice(cursor, match.index ?? 0) + replacement;
-    cursor = position;
+      },
+    );
+  });
+  return { replacement, end: position };
+}
+
+const macroParameters = Array.from({ length: 9 }, (_, index) => new RegExp(`#${index + 1}`, 'g'));
+
+// One expansion pass: a single scan over control words with a table lookup,
+// against this pass's literal ranges and comment index. Arguments are taken
+// unexpanded, as TeX takes them, and are expanded by the next pass. Returns
+// null once the output would outgrow `limit`.
+function expandMacroPass(text, macros, limit) {
+  const literalRanges = mergeSourceRanges(literalSourceRanges(text));
+  const controlWord = /\\([A-Za-z@]+)/g;
+  const pieces = [];
+  let length = 0;
+  let cursor = 0;
+  let range = 0;
+  for (let match = controlWord.exec(text); match; match = controlWord.exec(text)) {
+    const macro = macros.get(match[1]);
+    if (!macro) continue;
+    const start = match.index;
+    while (range < literalRanges.length && literalRanges[range][1] <= start) range += 1;
+    if ((range < literalRanges.length && literalRanges[range][0] <= start) || isLatexCommentedAt(text, start)) continue;
+    const use = expandMacroUse(text, start + match[0].length, macro);
+    if (!use) continue;
+    length += start - cursor + use.replacement.length;
+    if (length + text.length - use.end > limit) return null;
+    pieces.push(text.slice(cursor, start), use.replacement);
+    cursor = use.end;
+    controlWord.lastIndex = cursor;
   }
-  return output + text.slice(cursor);
+  if (!pieces.length) return text;
+  pieces.push(text.slice(cursor));
+  return pieces.join('');
 }
 
 function expandSimpleEnvironments(source) {
@@ -803,16 +873,53 @@ function expandSimpleEnvironments(source) {
   return expanded;
 }
 
+let lastMacroExpansion = { source: null, expanded: '' };
 function expandAuthorMacros(source) {
-  const macros = authorMacroTable(source);
+  const text = String(source || '');
+  // One enrichment expands the same text several times; reuse the last result.
+  if (lastMacroExpansion.source === text) return lastMacroExpansion.expanded;
+  const macros = authorMacroTable(text);
   // Collect definitions before removing them, then expand only author-facing
   // uses. Expanding the command name inside its own `\newcommand` declaration
   // corrupts the declaration and can make it appear as proof text.
-  let expanded = stripDocumentDeclarations(expandSimpleEnvironments(source));
-  const entries = [...macros.entries()].sort((a, b) => b[0].length - a[0].length);
-  for (let pass = 0; pass < 4; pass += 1)
-    for (const [name, macro] of entries) expanded = expandMacroUse(expanded, name, macro);
+  let expanded = stripDocumentDeclarations(expandSimpleEnvironments(text));
+  // A recursive definition such as \def\a{\a\a} doubles its uses every pass,
+  // so stop expanding before the document outgrows this budget.
+  const limit = Math.max(4 * text.length, text.length + 2 * 1024 * 1024);
+  // Each pass expands one level. After four, only macros that cannot reach
+  // themselves continue, so a deep but finite chain still resolves while a
+  // recursive definition stops where it always did.
+  let table = macros;
+  for (let pass = 0; pass < 16 && table.size; pass += 1) {
+    if (pass === 4) table = finiteMacros(macros);
+    const next = expandMacroPass(expanded, table, limit);
+    if (next === null || next === expanded) break;
+    expanded = next;
+  }
+  lastMacroExpansion = { source: text, expanded };
   return expanded;
+}
+
+function finiteMacros(macros) {
+  const references = new Map(
+    [...macros].map(([name, macro]) => [
+      name,
+      [...macro.replacement.matchAll(/\\([A-Za-z@]+)/g)].map((match) => match[1]).filter((used) => macros.has(used)),
+    ]),
+  );
+  const reachesItself = (name) => {
+    const seen = new Set();
+    const stack = [...references.get(name)];
+    while (stack.length) {
+      const next = stack.pop();
+      if (next === name) return true;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      stack.push(...references.get(next));
+    }
+    return false;
+  };
+  return new Map([...macros].filter(([name]) => !reachesItself(name)));
 }
 
 function theoremKind(title, environment) {
@@ -923,6 +1030,18 @@ function literalSourceRanges(source) {
 
 function insideSourceRanges(index, ranges) {
   return ranges.some(([start, end]) => start <= index && index < end);
+}
+
+// Sorted, non-overlapping union of [start, end) ranges, for callers that walk
+// increasing positions with a single pointer.
+function mergeSourceRanges(ranges) {
+  const merged = [];
+  for (const [start, end] of [...ranges].sort((left, right) => left[0] - right[0])) {
+    const last = merged.at(-1);
+    if (last && start < last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
 }
 
 function sourceProofEvents(source, units = [], declarationSource = source) {
@@ -1688,14 +1807,16 @@ function stripDocumentDeclarations(source) {
     }
     ranges.push([start, position]);
   }
-  let balancedCleaned = text;
-  for (const [start, end] of ranges.sort((left, right) => right[0] - left[0])) {
-    balancedCleaned =
-      balancedCleaned.slice(0, start) +
-      balancedCleaned.slice(start, end).replace(/[^\r\n]/g, ' ') +
-      balancedCleaned.slice(end);
+  // Blank every declaration in one pass over the text; rebuilding the whole
+  // string per declaration was quadratic in long papers.
+  const pieces = [];
+  let cursor = 0;
+  for (const [start, end] of mergeSourceRanges(ranges)) {
+    pieces.push(text.slice(cursor, start), text.slice(start, end).replace(/[^\r\n]/g, ' '));
+    cursor = end;
   }
-  return balancedCleaned;
+  pieces.push(text.slice(cursor));
+  return pieces.join('');
 }
 
 function readableBodyFragment(source) {
