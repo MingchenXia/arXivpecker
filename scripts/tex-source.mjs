@@ -19,6 +19,8 @@ async function readExpandedTex(
   seen = new Set(),
   depth = 0,
   mainDirectory = path.dirname(entryFile),
+  documentDirectory = mainDirectory,
+  subfile = false,
 ) {
   if (depth > 12 || seen.has(entryFile)) return '';
   const relative = path.relative(sourceRoot, entryFile);
@@ -27,8 +29,12 @@ async function readExpandedTex(
   if (relativePathEscapes(path.relative(await realpath(sourceRoot), await realpath(entryFile)))) return '';
   seen.add(entryFile);
   let source = decodeSourceBuffer(await readFile(entryFile));
+  if (subfile) source = documentBody(source);
   // `\\include` needs braces; `\\input` also accepts a bare file name (`\\input macros`).
-  const include = /\\(?:input|include)\s*\{([^}]+)\}|\\input\s+([A-Za-z0-9_./-]+)/g;
+  // The import package adds \import{dir/}{file}, its \inputfrom and \includefrom
+  // aliases, and their \sub... forms; the subfiles package adds \subfile{file}.
+  const include =
+    /\\(?:input|include)\s*\{([^}]+)\}|\\input\s+([A-Za-z0-9_./-]+)|\\(sub)?(?:import|inputfrom|includefrom)\*?\s*\{([^}]*)\}\s*\{([^}]+)\}|\\subfile(?:include)?\s*\{([^}]+)\}/g;
   const literalRanges = literalSourceRanges(source);
   let expanded = '';
   let cursor = 0;
@@ -36,17 +42,32 @@ async function readExpandedTex(
     const start = match.index ?? 0;
     if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(source, start)) continue;
     expanded += source.slice(cursor, match.index);
-    const requested = (match[1] ?? match[2]).trim();
+    const [, inputName, bareName, sub, folder = '', importName, subfileName] = match;
+    const requested = (inputName ?? bareName ?? importName ?? subfileName).trim();
     const filename = /\.[A-Za-z0-9]+$/.test(requested) ? requested : `${requested}.tex`;
     // TeX resolves every include against the main document's folder, even from
     // a nested file; also accept paths written relative to the including file.
+    // \import is relative to the main document too, \subimport to the including
+    // file. An imported file or subfile then resolves its own includes against
+    // its folder, as the import package makes TeX do.
+    const imports = importName !== undefined || subfileName !== undefined;
+    const bases = sub
+      ? [path.dirname(entryFile), mainDirectory]
+      : importName !== undefined
+        ? [documentDirectory, path.dirname(entryFile)]
+        : [mainDirectory, path.dirname(entryFile), documentDirectory];
     let included = null;
-    for (const candidate of new Set([
-      path.resolve(mainDirectory, filename),
-      path.resolve(path.dirname(entryFile), filename),
-    ])) {
+    for (const candidate of new Set(bases.map((base) => path.resolve(base, folder.trim(), filename)))) {
       try {
-        included = await readExpandedTex(candidate, sourceRoot, seen, depth + 1, mainDirectory);
+        included = await readExpandedTex(
+          candidate,
+          sourceRoot,
+          seen,
+          depth + 1,
+          imports ? path.dirname(candidate) : mainDirectory,
+          documentDirectory,
+          subfileName !== undefined,
+        );
         break;
       } catch {
         /* Try the next location. */
@@ -57,6 +78,20 @@ async function readExpandedTex(
   }
   expanded += source.slice(cursor);
   return expanded;
+}
+
+// A subfile is a complete document that compiles on its own; the main document
+// takes only its body.
+function documentBody(source) {
+  const literalRanges = literalSourceRanges(source);
+  const markers = [...source.matchAll(/\\(begin|end)\{document\}/g)].filter(
+    (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(source, match.index ?? 0),
+  );
+  const begin = markers.find((match) => match[1] === 'begin');
+  if (!begin) return source;
+  const bodyStart = (begin.index ?? 0) + begin[0].length;
+  const end = markers.find((match) => match[1] === 'end' && (match.index ?? 0) >= bodyStart);
+  return source.slice(bodyStart, end?.index ?? source.length);
 }
 
 async function sameExpandedTexSource(left, right) {
@@ -96,8 +131,190 @@ function stripLegacyFontMarkup(source) {
   return text.replace(/\\(?:bf|it|rm|tt|sf|sl|sc)\b\s*/g, '');
 }
 
+const siunitxPrefixes = {
+  femto: 'f',
+  pico: 'p',
+  nano: 'n',
+  micro: '\\mu',
+  milli: 'm',
+  centi: 'c',
+  deci: 'd',
+  kilo: 'k',
+  mega: 'M',
+  giga: 'G',
+  tera: 'T',
+};
+const siunitxUnits = {
+  meter: 'm',
+  metre: 'm',
+  second: 's',
+  kilogram: 'kg',
+  gram: 'g',
+  kelvin: 'K',
+  ampere: 'A',
+  mole: 'mol',
+  candela: 'cd',
+  hertz: 'Hz',
+  newton: 'N',
+  joule: 'J',
+  watt: 'W',
+  volt: 'V',
+  pascal: 'Pa',
+  coulomb: 'C',
+  ohm: '\\Omega',
+  tesla: 'T',
+  liter: 'L',
+  litre: 'L',
+  minute: 'min',
+  hour: 'h',
+  electronvolt: 'eV',
+  radian: 'rad',
+  percent: '\\%',
+  degree: '{}^{\\circ}',
+  degreeCelsius: '{}^{\\circ}C',
+};
+
+// siunitx's interpreted units (\\kilo\\meter\\per\\second\\squared) or a literal
+// unit (m/s), as upright math. Several \\per units share one denominator.
+function siunitxUnit(unit) {
+  const numerator = [];
+  const denominator = [];
+  let prefix = '';
+  let power = '';
+  let per = false;
+  let last = null;
+  const add = (symbol) => {
+    last = { symbol: joinControlWords(prefix, symbol), power };
+    (per ? denominator : numerator).push(last);
+    prefix = '';
+    power = '';
+    per = false;
+  };
+  for (const match of unit.matchAll(/\\([A-Za-z]+)\s*(?:\{([^{}]*)\})?|\\(.)|([^\\]+)/g)) {
+    const [, name, group, symbol, literal] = match;
+    if (literal !== undefined) {
+      // Literal units separate factors with `.`, `~`, or spaces.
+      const text = literal.trim().replace(/\s*(?:(?<!\d)\.(?!\d)|~)\s*|\s+/g, '\\,');
+      if (text) add(text);
+    } else if (symbol !== undefined) add(`\\${symbol}`);
+    else if (name === 'per') per = true;
+    else if (name === 'square' || name === 'cubic') power = name === 'square' ? '2' : '3';
+    else if (name === 'raiseto' && group !== undefined) power = group;
+    else if ((name === 'squared' || name === 'cubed' || name === 'tothe') && last)
+      last.power = name === 'squared' ? '2' : name === 'cubed' ? '3' : group || '';
+    else if (siunitxPrefixes[name]) prefix = joinControlWords(prefix, siunitxPrefixes[name]);
+    else add(siunitxUnits[name] || `\\${name}${group === undefined ? '' : `{${group}}`}`);
+  }
+  const render = (factor, negate = false) =>
+    negate || factor.power
+      ? `${factor.symbol}^{${negate ? '-' : ''}${factor.power || (negate ? '1' : '')}}`
+      : factor.symbol;
+  if (!numerator.length && !denominator.length) return '';
+  // A bare \\per unit reads as a negative power, as siunitx prints it.
+  if (!numerator.length) return `\\mathrm{${denominator.map((factor) => render(factor, true)).join('\\,')}}`;
+  const above = numerator.map((factor) => render(factor)).join('\\,');
+  const below = denominator.map((factor) => render(factor)).join('\\,');
+  return `\\mathrm{${above}${below ? `/${denominator.length > 1 ? `(${below})` : below}` : ''}}`;
+}
+
+// siunitx input numbers: `1.5e-3` is 1.5 × 10⁻³, `2x3` is 2 × 3, and a
+// decimal comma must not read as a list separator.
+function siunitxNumber(value) {
+  const number = value.trim().replace(/\s+/g, ' ');
+  const exponent = /^([^eEdD]*?)\s*[eEdD]\s*([+-]?)\s*(\d+)$/.exec(number);
+  const mantissa = (exponent ? exponent[1] : number)
+    .replace(/(\d),(?=\d)/g, '$1{,}')
+    .replace(/(\d)\s*x\s*(?=\d)/g, '$1\\times ');
+  if (!exponent) return mantissa;
+  const power = `10^{${exponent[2] === '-' ? '-' : ''}${exponent[3]}}`;
+  return mantissa ? `${mantissa}\\times ${power}` : power;
+}
+
+// \\ang{1;2;3} is 1 degree, 2 minutes, 3 seconds; empty parts are omitted.
+function siunitxAngle(value) {
+  return value
+    .split(';')
+    .map((part, index) => part.trim() && `${siunitxNumber(part)}${['^{\\circ}', "'", "''"][index] ?? ''}`)
+    .join('');
+}
+
+function siunitxQuantity(number, unit, before = '') {
+  const symbol = siunitxUnit(unit);
+  // siunitx sets an angle in degrees without a space before the unit.
+  const space = symbol && symbol !== `\\mathrm{${siunitxUnits.degree}}` ? '\\,' : '';
+  return `${before}${siunitxNumber(number)}${space}${symbol}`;
+}
+
+// KaTeX has no siunitx. Rewrite \\SI, \\qty, \\si, \\unit, \\num, and \\ang as
+// plain TeX, wrapped in `$...$` where they appear in prose.
+function normalizeSiunitxCommands(source) {
+  const text = String(source || '');
+  if (!/\\(?:SI|si|qty|unit|num|ang|sisetup)(?![A-Za-z@])/.test(text)) return text;
+  const literalRanges = literalSourceRanges(text);
+  const mathRanges = [
+    ...text.matchAll(
+      /\\begin\{(equation|align|gather|multline|flalign|alignat|eqnarray|displaymath|math)(\*?)\}[\s\S]*?\\end\{\1\2\}|\$\$[\s\S]*?\$\$|(?<!\\)\\\[[\s\S]*?\\\]|(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\$(?:\\.|[^$\\])+\$/g,
+    ),
+  ].map((match) => [match.index, match.index + match[0].length]);
+  const textRanges = [];
+  for (const match of text.matchAll(/\\(?:text|textrm|textnormal|mbox|intertext)\s*\{/g)) {
+    const group = balancedGroup(text, match.index + match[0].length - 1);
+    if (group) textRanges.push([match.index, group.end]);
+  }
+  let output = '';
+  let cursor = 0;
+  for (const match of text.matchAll(/\\(SI|si|qty|unit|num|ang|sisetup)(?![A-Za-z@])/g)) {
+    const start = match.index;
+    if (start < cursor || insideSourceRanges(start, literalRanges)) continue;
+    let position = start + match[0].length;
+    const optional = () => {
+      while (/\s/.test(text[position] || '')) position += 1;
+      const group = balancedGroup(text, position, '[', ']');
+      if (group) position = group.end;
+      return group?.content;
+    };
+    const argument = () => {
+      while (/\s/.test(text[position] || '')) position += 1;
+      const group = balancedGroup(text, position);
+      if (group) position = group.end;
+      return group?.content;
+    };
+    const options = optional();
+    let quantity;
+    if (match[1] === 'sisetup') quantity = argument() === undefined ? undefined : '';
+    else if (match[1] === 'SI') {
+      const number = argument();
+      const before = optional();
+      const unit = argument();
+      if (number !== undefined && unit !== undefined) quantity = siunitxQuantity(number, unit, before);
+    } else if (match[1] === 'qty') {
+      const number = argument();
+      const unit = argument();
+      // The physics package's \\qty{x} is automatic bracing, never a number.
+      if (number !== undefined && unit !== undefined && /^\s*[-+]?\.?\d/.test(number))
+        quantity = siunitxQuantity(number, unit);
+    } else if (match[1] === 'si' || match[1] === 'unit') {
+      const unit = argument();
+      // The units package writes the value as the option: \\unit[3]{m}.
+      if (unit !== undefined)
+        quantity =
+          match[1] === 'unit' && /^\s*[-+]?[\d.,]+\s*$/.test(options || '')
+            ? siunitxQuantity(options, unit)
+            : siunitxUnit(unit);
+    } else {
+      const value = argument();
+      if (value !== undefined) quantity = match[1] === 'num' ? siunitxNumber(value) : siunitxAngle(value);
+    }
+    if (quantity === undefined) continue;
+    const inMath = insideSourceRanges(start, mathRanges) && !insideSourceRanges(start, textRanges);
+    output += text.slice(cursor, start) + (inMath || !quantity ? quantity : `$${quantity}$`);
+    cursor = position;
+  }
+  return output + text.slice(cursor);
+}
+
 function normalizeMathTextCommands(source) {
-  let text = String(source || '');
+  let text = normalizeSiunitxCommands(source);
   const command = /\\(mbox|text)\s*\{/g;
   for (let pass = 0; pass < 3; pass += 1) {
     let output = '';
@@ -399,8 +616,44 @@ function isLatexCommentedAt(source, index) {
   return !(lineBreak >= 0 && breaks[lineBreak] > percents[percent]) && active[percent];
 }
 
+// Every command that prints a citation: the \cite family, natbib's, and
+// biblatex's, starred or not. biblatex's multicites (\cites, \textcites, ...)
+// take optional (pre)(post) notes for the whole list, then repeat
+// [pre][post]{keys}; the others take one group, so a brace group after them
+// stays text. \nocite prints nothing and is not one of them.
+const citeCommand =
+  /\\(?:((?:[Cc]ite|[Pp]arencite|[Tt]extcite|[Aa]utocite|[Ss]martcite|[Ss]upercite|[Ff]ootcite(?:text)?)s)\*?((?:\s*\([^()]*\)){0,2})((?:(?:\s*\[[^\]]*\]){0,2}\s*\{[^}]*\})+)|([Cc]ite\w*|(?:[Pp]aren|[Tt]ext|[Aa]uto|[Ss]mart|[Ss]uper|[Ff]ull|[Ff]oot(?:full)?)cite(?:text)?)\*?((?:\s*\[[^\]]*\]){0,2}\s*\{[^}]*\}))/g;
+
+// The keys of one citeCommand match, each with the notes printed around it as
+// its locator: a group's own [pre][post], and a multicite's (pre) before its
+// first group and (post) after its last. A lone note is the postnote.
+function citeCommandMentions(globalNotes = '', groups = '') {
+  const notes = [...globalNotes.matchAll(/\(([^()]*)\)/g)].map((note) => note[1]);
+  const [before, after] = notes.length > 1 ? notes : ['', notes[0] || ''];
+  const parsed = [...groups.matchAll(/((?:\s*\[[^\]]*\]){0,2})\s*\{([^}]*)\}/g)];
+  return parsed.flatMap((group, index) => {
+    const locator = [
+      index === 0 ? before : '',
+      ...[...group[1].matchAll(/\[([^\]]*)\]/g)].map((note) => note[1]),
+      index === parsed.length - 1 ? after : '',
+    ]
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join('; ');
+    return group[2]
+      .split(',')
+      .map((key) => key.trim())
+      .filter(Boolean)
+      .map((key) => ({ key, locator }));
+  });
+}
+
 function readableLatex(source) {
-  const withoutCommentEnvironments = String(source || '').replace(/\\begin\{comment\}[\s\S]*?\\end\{comment\}/g, '');
+  // A \verb example is literal: no command inside it (\ref, \label, %) is interpreted.
+  const literals = [];
+  const withoutCommentEnvironments = String(source || '')
+    .replace(/\\begin\{comment\}[\s\S]*?\\end\{comment\}/g, '')
+    .replace(/\\verb\*?([^A-Za-z0-9\s])[^\n]*?\1/g, (match) => `\u0001${literals.push(match) - 1}\u0001`);
   const prepared = stripDocumentDeclarations(
     stripLatexComments(normalizeXyMatrices(normalizePrescriptCommands(withoutCommentEnvironments))),
   );
@@ -409,18 +662,20 @@ function readableLatex(source) {
     .replace(/\\begin\{(?:otherlanguage\*?|thebibliography)\}(?:\{[^}]*\})?/g, '')
     .replace(/\\end\{(?:otherlanguage\*?|thebibliography)\}/g, '')
     .replace(/\\(?:tiny|scriptsize|footnotesize|small|normalsize|large|Large|LARGE|huge|Huge)\b/g, '')
-    .replace(/\\label\s*\{[^}]*\}/g, '')
-    .replace(/\\(?:eqref|ref|autoref|cref|Cref)\s*\{[^}]*\}/g, 'the referenced result')
-    .replace(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/g, (_match, preNote, postNote, keys) => {
-      const locator = [preNote, postNote]
-        .map((item) => String(item || '').trim())
-        .filter(Boolean)
-        .join('; ');
-      return String(keys)
-        .split(',')
-        .map((key) => `[[cite:${key.trim()}${locator ? `|${locator}` : ''}]]`)
-        .join(' ');
-    })
+    .replace(/\\label\s*(?:\[[^\]]*\])?\s*\{[^}]*\}/g, '')
+    // A reference whose label is nowhere in the source prints as LaTeX prints it.
+    .replace(/\\(?:crefrange|Crefrange|cpagerefrange|Cpagerefrange)\*?\s*\{[^}]*\}\s*\{[^}]*\}/g, '??')
+    .replace(/\\vpageref\*?\s*(?:\[[^\]]*\]\s*)*\{[^}]*\}/g, '')
+    .replace(
+      new RegExp(`\\\\(?:${referenceCommands})(?![A-Za-z@])\\*?\\s*(?:\\[[^\\]]*\\]\\s*)*\\{[^}]*\\}`, 'g'),
+      '??',
+    )
+    .replace(/\\hyperref\s*\[[^\]]*\]\s*\{([^{}]*)\}/g, '$1')
+    .replace(citeCommand, (_match, _multicite, globalNotes, groups, _cite, group) =>
+      citeCommandMentions(globalNotes, groups ?? group)
+        .map(({ key, locator }) => `[[cite:${key}${locator ? `|${locator}` : ''}]]`)
+        .join(' '),
+    )
     .replace(/\\begin\{tikzcd\}(?:\[[^\]]*\])?/g, '\\begin{array}{cccccccccccc}')
     .replace(/\\end\{tikzcd\}/g, '\\end{array}')
     .replace(/\\ar(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/g, '')
@@ -492,7 +747,16 @@ function readableLatex(source) {
     )
     .replace(/\\begin\{(?:enumerate|itemize|description)\}(?:\[[^\]]*\])?/g, '')
     .replace(/\\end\{(?:enumerate|itemize|description)\}/g, '')
-    .replace(/\\item(?:\[[^\]]*\])?/g, '\n• ')
+    // A list item starts its own paragraph; a numbered or described item shows
+    // its label in place of the bullet (marked until paragraphs are split).
+    .replace(/\\item(?![A-Za-z@])\s*(?:\[([^\]]*)\])?/g, (_match, label) =>
+      label === undefined ? '\n• ' : `\n• \u0007${label.trim()}\u0007 `,
+    )
+    // Subfigure wrappers are layout; their captions stay as text.
+    .replace(/\\begin\{(?:subfigure|subtable)\}(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/g, '')
+    .replace(/\\end\{(?:subfigure|subtable)\}/g, '')
+    .replace(/\\subfloat(?![A-Za-z@])(?:\s*\[[^\]]*\])*/g, '')
+    .replace(/\\sub(?:caption|captionbox)(?![A-Za-z@])\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g, '$1')
     .replace(/\\(?:emph|textbf|textit|texttt|textsc|textrm|textsf|underline|centerline|mbox)\s*\{([^{}]*)\}/g, '$1')
     .replace(/\\(?:vspace|hspace)\*?\s*\{[^}]*\}/g, ' ')
     .replace(/\\(?:medskip|smallskip|bigskip|noindent|par)\b/g, '\n')
@@ -510,10 +774,13 @@ function readableLatex(source) {
       paragraph
         .replace(/[ \t]*\n[ \t]*/g, ' ')
         .replace(/[ \t]{2,}/g, ' ')
+        .replace(/^•\s*\u0007([^\u0007]*)\u0007\s*/, (_match, label) => (label ? `${label} ` : ''))
+        .replace(/\u0007/g, '')
         .trim(),
     )
     .filter(Boolean)
-    .join('\n\n');
+    .join('\n\n')
+    .replace(/\u0001(\d+)\u0001/g, (_match, index) => literals[Number(index)]);
 }
 
 function citationKeys(source) {
@@ -524,18 +791,10 @@ function citationMentions(source) {
   const value = String(source || '');
   const literalRanges = literalSourceRanges(value);
   const mentions = [];
-  for (const match of value.matchAll(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)) {
+  for (const match of value.matchAll(citeCommand)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
-    for (const key of match[3]
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean)) {
-      const locator = [match[1], match[2]]
-        .map((item) => String(item || '').trim())
-        .filter(Boolean)
-        .join('; ');
+    for (const { key, locator } of citeCommandMentions(match[2], match[3] ?? match[5]))
       if (!mentions.some((item) => item.key === key && item.locator === locator)) mentions.push({ key, locator });
-    }
   }
   return mentions;
 }
@@ -565,36 +824,219 @@ function extractBibliography(source) {
       (match.index ?? 0) + match[0].length,
       matches[index + 1]?.index ?? text.indexOf('\\end{thebibliography}', (match.index ?? 0) + match[0].length),
     );
-    const blocks = raw
-      .split(/\\newblock\b/)
-      .map(cleanBibliographyFragment)
-      .filter(Boolean);
-    const citationText = cleanBibliographyFragment(raw);
-    const title = blocks[1] || blocks[0] || match[1];
-    const authors = blocks.length > 1 ? blocks[0] : '';
-    const href = /\\href\s*\{([^}]+)\}/.exec(raw)?.[1];
-    const explicitUrl = /\\(?:url|nolinkurl|path)\s*\{([^}]+)\}/.exec(raw)?.[1] || /https?:\/\/[^\s}]+/.exec(raw)?.[0];
-    const doi = /\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/i.exec(raw)?.[0]?.replace(/[.,;]+$/, '') || '';
-    const arxivId = /(?:arXiv\s*:\s*|arXiv\s+)([a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i.exec(citationText)?.[1] || '';
-    const searchQuery = [title, authors].filter(Boolean).join(' ');
-    const searchUrl = `https://scholar.google.com/scholar?q=${encodeURIComponent(searchQuery)}`;
-    const url =
-      explicitUrl ||
-      href ||
-      (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : searchUrl);
-    references.set(match[1], {
-      key: match[1],
-      title,
-      authors,
-      text: citationText,
-      url,
-      searchUrl,
-      doi,
-      arxivId,
-      direct: Boolean(explicitUrl || href || doi || arxivId),
-    });
+    references.set(match[1], bibliographyRecord(match[1], raw, raw.split(/\\newblock\b/)));
   }
+  if (!matches.length)
+    for (const { key, raw } of handWrittenBibliography(text)?.entries || [])
+      references.set(key, bibliographyRecord(key, raw, handWrittenFragments(raw)));
   return references;
+}
+
+// `fragments` splits the entry's raw TeX into its authors, then its title.
+function bibliographyRecord(key, raw, fragments) {
+  const blocks = fragments.map(cleanBibliographyFragment).filter(Boolean);
+  const citationText = cleanBibliographyFragment(raw);
+  const title = blocks[1] || blocks[0] || key;
+  const authors = blocks.length > 1 ? blocks[0] : '';
+  const href = /\\href\s*\{([^}]+)\}/.exec(raw)?.[1];
+  const explicitUrl = /\\(?:url|nolinkurl|path)\s*\{([^}]+)\}/.exec(raw)?.[1] || /https?:\/\/[^\s}]+/.exec(raw)?.[0];
+  const doi = /\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/i.exec(raw)?.[0]?.replace(/[.,;]+$/, '') || '';
+  const arxivId = /(?:arXiv\s*:\s*|arXiv\s+)([a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i.exec(citationText)?.[1] || '';
+  const searchQuery = [title, authors].filter(Boolean).join(' ');
+  const searchUrl = `https://scholar.google.com/scholar?q=${encodeURIComponent(searchQuery)}`;
+  const url =
+    explicitUrl || href || (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : searchUrl);
+  return {
+    key,
+    title,
+    authors,
+    text: citationText,
+    url,
+    searchUrl,
+    doi,
+    arxivId,
+    direct: Boolean(explicitUrl || href || doi || arxivId),
+  };
+}
+
+// Hand-written entries have no \newblock, but they usually set the title in
+// italics after the authors.
+function handWrittenFragments(raw) {
+  const title = /\{\\(?:it|em)\s[^{}]*\}|\\(?:emph|textit)\s*\{[^{}]*\}/.exec(raw);
+  return title ? [raw.slice(0, title.index).replace(/[\s,;:-]+$/, ''), title[0]] : [raw];
+}
+
+// Headings that open a hand-written reference list, and the spacing, labels,
+// and list markup that may stand between them and its entries.
+const referencesHeading =
+  /\\(?:chapter|(?:sub)?section)\*?\s*\{\s*(?:References|Bibliography)\s*\}|\{\s*\\(?:bf|bfseries)\s+(?:References|Bibliography)[.:]?\s*\}|\\textbf\s*\{\s*(?:References|Bibliography)[.:]?\s*\}|^[ \t]*(?:References|Bibliography)[.:]?[ \t]*$/gim;
+const referencesLayout =
+  /\\\\(?:\[[^\]]*\])?|\\(?:vspace|hspace)\*?\s*\{[^}]*\}|\\(?:label|addcontentsline)\s*(?:\{[^}]*\}\s*)+|\\(?:noindent|par|medskip|smallskip|bigskip|small|footnotesize)(?![A-Za-z@])|\\begin\{(?:description|itemize|enumerate)\}(?:\[[^\]]*\])?|[{}]/g;
+// An entry opens a line or paragraph with its key, as `\noindent [Kob82]` or
+// `[1]`, or is a list `\item[Kob82]`; it runs to the next entry or the end of
+// its paragraph, list, or section.
+const handWrittenEntry =
+  /^[ \t]*(?:\\(?:noindent|par)(?![A-Za-z@])[ \t]*)*\[([^[\]{}\\$%,\n]{1,40})\]|\\item\s*\[([^[\]{}\\$%,\n]{1,40})\]/gm;
+const handWrittenEntryEnd =
+  /\n[ \t]*\r?\n|\\end\{(?:description|itemize|enumerate|document)\}|\\(?:chapter|section|appendix)(?![A-Za-z@])/;
+
+// Some authors typeset the reference list by hand, with no \bibitem. Returns
+// the list's extent and its entries' keys and raw TeX, or null. The extent
+// starts after a sectioning heading, which renders as its own section, and at
+// any other heading, which the list replaces.
+function handWrittenBibliography(source) {
+  const text = String(source || '');
+  const literalRanges = literalSourceRanges(text);
+  const active = (index) => !insideSourceRanges(index, literalRanges) && !isLatexCommentedAt(text, index);
+  if ([...text.matchAll(/\\bibitem(?![A-Za-z@])/g)].some((match) => active(match.index ?? 0))) return null;
+  const headings = [...text.matchAll(referencesHeading)].filter((match) => active(match.index ?? 0));
+  if (!headings.length) return null;
+  const candidates = [];
+  for (const match of text.matchAll(handWrittenEntry)) {
+    const key = (match[1] ?? match[2]).trim();
+    const start = match.index ?? 0;
+    if (/[\p{L}\p{N}]/u.test(key) && active(start)) candidates.push({ key, start, end: start + match[0].length });
+  }
+  const starts = candidates.map((candidate) => candidate.start);
+  const entryAfter = (position) => candidates[lastIndexBelow(starts, position) + 1];
+  const layoutOnly = (fragment) => !stripLatexComments(fragment).replace(referencesLayout, '').trim();
+  // The reference list closes the paper, so the last heading followed by entries
+  // is it. A list never runs past the next heading, which keeps the scan linear.
+  for (let index = headings.length - 1; index >= 0; index -= 1) {
+    const heading = headings[index];
+    const headingEnd = (heading.index ?? 0) + heading[0].length;
+    const limit = headings[index + 1]?.index ?? text.length;
+    const entries = [];
+    let cursor = headingEnd;
+    for (let entry = entryAfter(cursor); entry && entry.start < limit && layoutOnly(text.slice(cursor, entry.start));) {
+      const next = entryAfter(entry.end);
+      const rest = text.slice(entry.end, next?.start ?? text.length);
+      const boundary = rest.search(handWrittenEntryEnd);
+      const raw = boundary < 0 ? rest : rest.slice(0, boundary);
+      // Drop the spacing that separates the key from the entry, as in `[Kob82]\, S. Kobayashi`.
+      entries.push({ key: entry.key, raw: raw.replace(/^(?:\s|~|\\[,;: ])+/, '') });
+      cursor = entry.end + raw.length;
+      entry = next;
+    }
+    if (entries.length)
+      return {
+        start: /^\\(?:chapter|(?:sub)?section)/.test(heading[0]) ? headingEnd : (heading.index ?? 0),
+        end: cursor,
+        entries,
+      };
+  }
+  return null;
+}
+
+// Sorted [start, end) ranges of math in raw TeX: $...$, $$...$$, \(...\),
+// \[...\], and display environments. Comments and literal source hold no math.
+function mathSourceRanges(source) {
+  const text = String(source || '');
+  const literalRanges = mergeSourceRanges(literalSourceRanges(text));
+  const ranges = [];
+  let open = '';
+  let start = 0;
+  let literal = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    while (literal < literalRanges.length && literalRanges[literal][1] <= index) literal += 1;
+    if (literal < literalRanges.length && literalRanges[literal][0] <= index) {
+      index = literalRanges[literal][1] - 1;
+      continue;
+    }
+    const character = text[index];
+    if (character === '%') {
+      while (index + 1 < text.length && text[index + 1] !== '\n') index += 1;
+    } else if (character === '\\') {
+      // A control symbol such as \$ or \\ is never a delimiter.
+      const next = text[index + 1];
+      if (!open && (next === '(' || next === '[')) {
+        open = next === '(' ? ')' : ']';
+        start = index;
+      } else if ((next === ')' || next === ']') && open === next) {
+        ranges.push([start, index + 2]);
+        open = '';
+      }
+      index += 1;
+    } else if (character === '$') {
+      if (!open) {
+        open = text[index + 1] === '$' ? '$$' : '$';
+        start = index;
+        index += open.length - 1;
+      } else if (open === '$' || (open === '$$' && text[index + 1] === '$')) {
+        ranges.push([start, index + open.length]);
+        index += open.length - 1;
+        open = '';
+      }
+    }
+  }
+  if (open) ranges.push([start, text.length]);
+  for (const match of text.matchAll(
+    /\\begin\{(equation|align|gather|multline|flalign|alignat|eqnarray|displaymath|math)(\*?)\}[\s\S]*?\\end\{\1\2\}/g,
+  )) {
+    const at = match.index ?? 0;
+    if (!insideSourceRanges(at, literalRanges) && !isLatexCommentedAt(text, at))
+      ranges.push([at, at + match[0].length]);
+  }
+  return mergeSourceRanges(ranges);
+}
+
+// A hand-written reference list is cited in plain text: [DP25], [Buc88, Kob82],
+// or [Kob82, Theorem 3]. Rewrites each such citation in the body's prose as
+// \cite, so results, proofs, and paragraphs carry it like any other citation.
+// Only brackets that name keys of the list count, a number only when the whole
+// list is numbered; math such as $[0,1]$ and a command's optional argument such
+// as \item[1] stay as written.
+function citeHandWrittenReferences(source) {
+  const text = String(source || '');
+  const list = handWrittenBibliography(text);
+  if (!list) return text;
+  const keys = new Set(list.entries.map((entry) => entry.key));
+  const numbered = [...keys].every((key) => /^\d+$/.test(key));
+  const cited = (key) => keys.has(key) && (numbered || !/^\d+$/.test(key));
+  const literalRanges = literalSourceRanges(text);
+  const mathRanges = mathSourceRanges(text);
+  const body =
+    [...text.matchAll(/\\begin\{document\}/g)].find(
+      (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(text, match.index ?? 0),
+    )?.index ?? 0;
+  const pieces = [];
+  let cursor = 0;
+  let math = 0;
+  for (const match of text.matchAll(/\[([^[\]]{1,200})\]/g)) {
+    const start = match.index ?? 0;
+    while (math < mathRanges.length && mathRanges[math][1] <= start) math += 1;
+    if (
+      start < body ||
+      (start >= list.start && start < list.end) ||
+      (math < mathRanges.length && mathRanges[math][0] <= start) ||
+      /(?:\\[A-Za-z@]+\*?\s*|[\\}\]])$/.test(text.slice(Math.max(0, start - 40), start)) ||
+      /\n[ \t]*\n/.test(match[1]) ||
+      insideSourceRanges(start, literalRanges) ||
+      isLatexCommentedAt(text, start)
+    )
+      continue;
+    const parts = match[1].split(',');
+    let count = 0;
+    while (count < parts.length && cited(parts[count].trim())) count += 1;
+    if (!count) continue;
+    // What follows the keys is a locator such as "Theorem 3.1", never a key
+    // missing from the list, as in [DP25, Foo99], nor, in a numbered list, a
+    // number alone, as in the interval [1, 2.5].
+    const locator = parts.slice(count).join(',').trim();
+    if (
+      locator &&
+      ((numbered && !/\p{L}/u.test(locator)) || /^\p{L}[\p{L}'+-]*\d{2,4}[a-z]?$/u.test(parts[count].trim()))
+    )
+      continue;
+    // A locator renders as plain text, so print a section sign such as
+    // [Dem97, V-$\S14$] rather than show its TeX.
+    const printed = locator.replace(/\\S(?![A-Za-z@])\s*/g, '§').replace(/\$([^$\\]*)\$/g, '$1');
+    const citedKeys = parts.slice(0, count).map((key) => key.trim());
+    pieces.push(text.slice(cursor, start), `\\cite${printed ? `[${printed}]` : ''}{${citedKeys.join(',')}}`);
+    cursor = start + match[0].length;
+  }
+  pieces.push(text.slice(cursor));
+  return pieces.join('');
 }
 
 function bibtexField(entry, name) {
@@ -748,8 +1190,29 @@ function authorMacroTable(source) {
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
     if (group) macros.set(name, { replacement: group.content, arity: Number(match[4] || 0), defaultArg: match[5] });
   }
+  const pairedRanges = [];
+  for (const match of text.matchAll(
+    /\\DeclarePairedDelimiter(XPP|X)?\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*(?:\[(\d)\])?/g,
+  )) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
+    // Delimiters are often single tokens: \\DeclarePairedDelimiter\\paren().
+    const parts = readMacroArguments(text, (match.index ?? 0) + match[0].length, pairedDelimiterParts(match[1]));
+    if (!parts) continue;
+    pairedRanges.push([match.index ?? 0, parts.end]);
+    const [pre, left, right, post, body] =
+      match[1] === 'XPP'
+        ? parts.contents
+        : ['', parts.contents[0], parts.contents[1], '', match[1] ? parts.contents[2] : '#1'];
+    macros.set(
+      match[2] || match[3],
+      pairedDelimiterMacro(pre, left, right, post, body, match[1] ? Number(match[4] || 0) : 1),
+    );
+  }
   for (const match of text.matchAll(/\\def\s*\\([A-Za-z@]+)\s*((?:#\d\s*)*)\{/g)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
+    // A helper such as \\given defined inside a paired delimiter's body is
+    // local to each use of that delimiter; pairedDelimiterMacro applies it.
+    if (insideSourceRanges(match.index ?? 0, pairedRanges)) continue;
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
     let arity = Math.max(0, ...[...String(match[2] || '').matchAll(/#(\d)/g)].map((item) => Number(item[1])));
     let replacement = group?.content || '';
@@ -766,6 +1229,20 @@ function authorMacroTable(source) {
     if (group)
       macros.set(match[2] || match[3], { replacement: `\\operatorname${match[1]}{${group.content}}`, arity: 0 });
   }
+  for (const match of text.matchAll(
+    /\\(New|Renew|Provide|Declare)(?:Expandable)?DocumentCommand\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*\{/g,
+  )) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
+    const name = match[2] || match[3];
+    const spec = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    const body = spec && readMacroArgument(text, spec.end);
+    if (!body || (match[1] === 'Provide' && macros.has(name))) continue;
+    const macro = documentCommandMacro(spec.content, body.content);
+    if (macro) macros.set(name, macro);
+    // An argument type or conditional this reader cannot follow leaves the
+    // command undefined rather than half-expanded.
+    else macros.delete(name);
+  }
   for (const match of text.matchAll(/\\let\s*\\([A-Za-z@]+)\s*(?:=\s*)?\\([A-Za-z@]+)/g)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
     const takesArgument = /^(?:widehat|widetilde|overline|underline)$/.test(match[2]);
@@ -777,9 +1254,182 @@ function authorMacroTable(source) {
   return macros;
 }
 
+// mathtools reads `\\abs{x}` at normal size, the scaling `\\abs*{x}`, and a
+// fixed size `\\abs[\\big]{x}`, as the paper prints them; inside the body,
+// \\delimsize is the size of the delimiter it precedes.
+function pairedDelimiterMacro(pre, left, right, post, body, arity) {
+  const locals = [];
+  const ownBody = body.replace(/\\def\s*\\([A-Za-z@]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g, (_definition, name, value) => {
+    locals.push([new RegExp(`\\\\${name}(?![A-Za-z@])`, 'g'), value]);
+    return '';
+  });
+  const sized = (content, middle) =>
+    content
+      .replace(
+        /\\delimsize(?![A-Za-z@])\s*(?=[|/]|\\(?:\||vert|Vert|lvert|rvert|lVert|rVert|backslash|langle|rangle)(?![A-Za-z@]))/g,
+        () => middle,
+      )
+      .replace(/\\delimsize(?![A-Za-z@])\s*/g, '');
+  // An empty side is \left. when scaled, and nothing at normal size.
+  const side = (value, sizing) => value.trim() || (sizing === '\\mathopen' || sizing === '\\mathclose' ? '{}' : '.');
+  const delimited = (open, middle, close) =>
+    joinControlWords(pre, open, side(left, open), sized(ownBody, middle), close, side(right, close), post);
+  return {
+    replacement: delimited('\\left', '\\middle', '\\right'),
+    signature: ['s', {}, ...Array.from({ length: arity }, () => 'm')],
+    expand: ([star, size, ...values]) => {
+      const fixed = /^\s*\\(big|Big|bigg|Bigg)[lrm]?\s*$/.exec(size || '')?.[1];
+      const [open, middle, close] = star
+        ? ['\\left', '\\middle', '\\right']
+        : fixed
+          ? [`\\${fixed}l`, `\\${fixed}`, `\\${fixed}r`]
+          : ['\\mathopen', '', '\\mathclose'];
+      return {
+        template: delimited(open, middle, close),
+        values: values.map((value) =>
+          locals.reduce((result, [name, local]) => result.replace(name, () => sized(local, middle)), value),
+        ),
+      };
+    },
+  };
+}
+
+// xparse argument types that read like \\newcommand's: mandatory `m`, the
+// optional `o` and `O{default}`, and the star `s`. `+` only allows paragraphs.
+function documentCommandMacro(spec, body) {
+  const signature = [];
+  for (let index = 0; index < spec.length; index += 1) {
+    const type = spec[index];
+    if (/[\s+]/.test(type)) continue;
+    if (type === 'm' || type === 's') signature.push(type);
+    else if (type === 'o') signature.push({});
+    else if (type === 'O') {
+      const fallback = readMacroArgument(spec, index + 1);
+      if (!fallback) return null;
+      signature.push({ default: fallback.content });
+      index = fallback.end - 1;
+    } else return null;
+  }
+  // Every branch must resolve, whichever arguments a use supplies.
+  const absent = signature.map((kind) => (kind === 's' ? false : kind === 'm' ? '' : kind.default));
+  const present = signature.map((kind) => kind === 's' || '');
+  if (resolveDocumentConditionals(body, absent) === null || resolveDocumentConditionals(body, present) === null)
+    return null;
+  return {
+    replacement: body,
+    signature,
+    expand: (args) => {
+      const template = resolveDocumentConditionals(body, args);
+      // A star or an absent optional argument has no text of its own.
+      return template === null
+        ? null
+        : { template, values: args.map((value) => (typeof value === 'string' ? value : '')) };
+    },
+  };
+}
+
+// Resolves \\IfNoValueTF, \\IfValueTF, and \\IfBooleanTF (and their T and F
+// forms) on a bare argument. Returns null if any other xparse test remains.
+function resolveDocumentConditionals(body, args) {
+  let text = body;
+  for (let guard = 0; guard < 256; guard += 1) {
+    const match = /\\If(NoValue|Value|Boolean)(TF|T|F)(?![A-Za-z@])\s*/.exec(text);
+    if (!match) break;
+    const test = balancedGroup(text, match.index + match[0].length);
+    const parameter = test && /^\s*#(\d)\s*$/.exec(test.content);
+    if (!parameter) return null;
+    const value = args[Number(parameter[1]) - 1];
+    const holds = match[1] === 'Boolean' ? value === true : (value === undefined) === (match[1] === 'NoValue');
+    let position = test.end;
+    let chosen = '';
+    for (const branch of match[2]) {
+      while (/\s/.test(text[position] || '')) position += 1;
+      const group = balancedGroup(text, position);
+      if (!group) return null;
+      if ((branch === 'T') === holds) chosen = group.content;
+      position = group.end;
+    }
+    text = text.slice(0, match.index) + chosen + text.slice(position);
+  }
+  return /\\(?:If[A-Za-z]*(?:TF|T|F)|BooleanTrue|BooleanFalse|NoValue)(?![A-Za-z@])/.test(text) ? null : text;
+}
+
+// Joins TeX fragments, keeping a control word at the end of one fragment from
+// absorbing a letter at the start of the next.
+function joinControlWords(...parts) {
+  return parts.reduce(
+    (joined, part) => (/\\[A-Za-z@]+$/.test(joined) && /^[A-Za-z@]/.test(part) ? `${joined} ${part}` : joined + part),
+    '',
+  );
+}
+
+// A mandatory argument is a balanced group or, as in TeX, a single token.
+function readMacroArgument(text, position) {
+  while (/\s/.test(text[position] || '')) position += 1;
+  const group = balancedGroup(text, position);
+  if (group) return group;
+  const token = text[position] === '\\' ? /^\\[A-Za-z@]+|^\\./.exec(text.slice(position))?.[0] : text[position];
+  return token ? { content: token, end: position + token.length } : null;
+}
+
+function readMacroArguments(text, position, count) {
+  const contents = [];
+  let end = position;
+  while (contents.length < count) {
+    const argument = readMacroArgument(text, end);
+    if (!argument) return null;
+    contents.push(argument.content);
+    end = argument.end;
+  }
+  return { contents, end };
+}
+
+// The plain, X, and XPP forms take 2, 3, and 5 arguments after the name.
+function pairedDelimiterParts(form) {
+  return form === 'XPP' ? 5 : form === 'X' ? 3 : 2;
+}
+
+// Reads a use of a macro with a star or optional arguments in its signature.
+// An absent optional argument is undefined, xparse's NoValue.
+function expandSignatureUse(text, position, macro) {
+  const args = [];
+  let end = position;
+  for (const kind of macro.signature) {
+    if (kind === 'm') {
+      const argument = readMacroArgument(text, end);
+      if (!argument) return null;
+      args.push(argument.content);
+      end = argument.end;
+      continue;
+    }
+    // Look past spaces for `*` or `[`, but keep them when neither follows:
+    // they may end the control word.
+    let next = end;
+    while (/\s/.test(text[next] || '')) next += 1;
+    if (kind === 's') {
+      args.push(text[next] === '*');
+      if (text[next] === '*') end = next + 1;
+      continue;
+    }
+    const optional = balancedGroup(text, next, '[', ']');
+    args.push(optional ? optional.content : kind.default);
+    if (optional) end = optional.end;
+  }
+  const expansion = macro.expand(args);
+  return expansion && { replacement: substituteMacroArguments(expansion.template, expansion.values), end };
+}
+
 // Reads one use of an author macro whose name ends at `position`: its
 // arguments, then the replacement text with the arguments substituted.
 function expandMacroUse(text, position, macro) {
+  const use = macro.signature ? expandSignatureUse(text, position, macro) : expandArityUse(text, position, macro);
+  // A replacement ending in a control word must not absorb the letter after
+  // the use: `\\norm{x}y` would otherwise become the undefined `\\rVerty`.
+  if (use && /\\[A-Za-z@]+$/.test(use.replacement) && /[A-Za-z@]/.test(text[use.end] || '')) use.replacement += ' ';
+  return use;
+}
+
+function expandArityUse(text, position, macro) {
   const args = [];
   // TeX uses whitespace to terminate a zero-argument control word. Preserve
   // that separator or `\\leq R` becomes the undefined command `\\leqslantR`.
@@ -790,19 +1440,16 @@ function expandMacroUse(text, position, macro) {
     if (optional) position = optional.end;
   }
   for (let argIndex = args.length; argIndex < macro.arity; argIndex += 1) {
-    while (/\s/.test(text[position] || '')) position += 1;
-    const group = balancedGroup(text, position);
-    if (group) {
-      args.push(group.content);
-      position = group.end;
-      continue;
-    }
-    const token = text[position] === '\\' ? /^\\[A-Za-z@]+|^\\./.exec(text.slice(position))?.[0] : text[position];
-    if (!token) return null;
-    args.push(token);
-    position += token.length;
+    const argument = readMacroArgument(text, position);
+    if (!argument) return null;
+    args.push(argument.content);
+    position = argument.end;
   }
-  let replacement = macro.replacement;
+  return { replacement: substituteMacroArguments(macro.replacement, args), end: position };
+}
+
+function substituteMacroArguments(template, args) {
+  let replacement = template;
   args.forEach((argument, index) => {
     replacement = replacement.replace(
       macroParameters[index] || new RegExp(`#${index + 1}`, 'g'),
@@ -815,7 +1462,7 @@ function expandMacroUse(text, position, macro) {
       },
     );
   });
-  return { replacement, end: position };
+  return replacement;
 }
 
 const macroParameters = Array.from({ length: 9 }, (_, index) => new RegExp(`#${index + 1}`, 'g'));
@@ -1102,24 +1749,119 @@ const defaultTheoremEnvironments = [
   ['example', 'example', 'Example'],
 ];
 
+// Splits a key=value list at top-level commas: `name={A, B}, sibling=theorem`.
+function keyValueOptions(value) {
+  const options = new Map();
+  const text = String(value || '');
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index <= text.length; index += 1) {
+    const character = text[index];
+    if (character === '{') depth += 1;
+    else if (character === '}') depth = Math.max(0, depth - 1);
+    else if (index === text.length || (character === ',' && !depth)) {
+      const part = text.slice(start, index);
+      start = index + 1;
+      const equals = part.indexOf('=');
+      const key = (equals < 0 ? part : part.slice(0, equals)).trim();
+      let entry = equals < 0 ? '' : part.slice(equals + 1).trim();
+      if (entry.startsWith('{') && entry.endsWith('}')) entry = entry.slice(1, -1).trim();
+      if (key) options.set(key, entry);
+    }
+  }
+  return options;
+}
+
+// The theorem environments llncs defines itself, as [environment, name, numbered].
+const llncsTheorems = [
+  ['theorem', 'Theorem', true],
+  ['case', 'Case', true],
+  ['claim', 'Claim', false],
+  ['conjecture', 'Conjecture', true],
+  ['corollary', 'Corollary', true],
+  ['definition', 'Definition', true],
+  ['example', 'Example', true],
+  ['exercise', 'Exercise', true],
+  ['lemma', 'Lemma', true],
+  ['note', 'Note', true],
+  ['problem', 'Problem', true],
+  ['property', 'Property', true],
+  ['proposition', 'Proposition', true],
+  ['question', 'Question', true],
+  ['solution', 'Solution', true],
+  ['remark', 'Remark', true],
+];
+
 function theoremDeclarations(source) {
   const text = String(source || '');
   const literalRanges = literalSourceRanges(text);
+  const active = (pattern) =>
+    [...text.matchAll(pattern)].filter(
+      (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(text, match.index ?? 0),
+    );
   const environments = new Map(defaultTheoremEnvironments.map(([name, kind]) => [name, kind]));
   const displayNames = new Map(defaultTheoremEnvironments.map(([name, , displayName]) => [name, displayName]));
   const counters = new Map();
-  const declarations = /\\newtheorem(\*)?\s*\{([^}]+)\}(?:\[([^\]]+)\])?\s*\{([^}]+)\}(?:\[([^\]]+)\])?/g;
-  for (const match of text.matchAll(declarations)) {
-    const start = match.index ?? 0;
-    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(text, start)) continue;
-    const environment = match[2];
-    const displayName = readableLatex(match[4]);
+  // Reference names a declaration gives its type (thmtools refname/Refname).
+  const referenceNames = new Map();
+  // \newaliascnt{lemma}{theorem}: a counter that is another counter under a new name.
+  const aliases = new Map();
+  const declare = (environment, displayName, counter) => {
     environments.set(environment, theoremKind(displayName, environment));
     displayNames.set(environment, displayName);
-    const root = String(match[3] || '').trim() || environment;
-    counters.set(environment, { start, root, within: String(match[5] || '').trim(), numbered: !match[1] });
+    counters.set(environment, counter);
+  };
+  // llncs declares its environments in the class, with separate counters unless
+  // envcountsame, numbered within sections under envcountsect.
+  const llncs = active(/\\documentclass\s*(?:\[([^\]]*)\])?\s*\{\s*llncs\s*\}/g)[0];
+  if (llncs) {
+    const shared = /\benvcountsame\b/.test(llncs[1] || '');
+    const within = /\benvcountsect\b/.test(llncs[1] || '') ? 'section' : '';
+    for (const [environment, displayName, numbered] of llncsTheorems)
+      declare(environment, displayName, {
+        start: llncs.index ?? 0,
+        root: shared && numbered ? 'theorem' : environment,
+        within: !shared || environment === 'theorem' ? within : '',
+        numbered,
+      });
   }
-  return { environments, displayNames, counters };
+  // \newtheorem and llncs's \spnewtheorem (whose trailing font arguments do not matter here).
+  for (const match of active(
+    /\\(?:newtheorem|spnewtheorem)(\*)?\s*\{([^}]+)\}(?:\[([^\]]+)\])?\s*\{([^}]+)\}(?:\[([^\]]+)\])?/g,
+  )) {
+    const environment = match[2].trim();
+    declare(environment, readableLatex(match[4]), {
+      start: match.index ?? 0,
+      root: String(match[3] || '').trim() || environment,
+      within: String(match[5] || '').trim(),
+      numbered: !match[1],
+    });
+  }
+  // thmtools: \declaretheorem[options]{names} or \declaretheorem{names}[options].
+  for (const match of active(/\\declaretheorem\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}(?:\s*\[([^\]]*)\])?/g)) {
+    const options = keyValueOptions([match[1], match[3]].filter(Boolean).join(','));
+    const names = (value) =>
+      value
+        ? value
+            .split(',')
+            .map((name) => name.trim())
+            .filter(Boolean)
+        : null;
+    for (const environment of names(match[2]) || []) {
+      const name = options.get('name') || options.get('title') || options.get('heading');
+      declare(environment, readableLatex(name || environment[0].toUpperCase() + environment.slice(1)), {
+        start: match.index ?? 0,
+        root: options.get('sibling') || options.get('numberlike') || options.get('sharenumber') || environment,
+        within: options.get('parent') || options.get('numberwithin') || options.get('within') || '',
+        numbered: !/^no$/i.test(options.get('numbered') || ''),
+      });
+      if (options.has('refname') || options.has('Refname'))
+        referenceNames.set(environment, { cref: names(options.get('refname')), Cref: names(options.get('Refname')) });
+    }
+  }
+  for (const match of active(/\\newaliascnt\s*\{([^}]+)\}\s*\{([^}]+)\}/g))
+    aliases.set(match[1].trim(), match[2].trim());
+  return { environments, displayNames, counters, referenceNames, aliases };
 }
 
 const nestedNumberedEnvironments =
@@ -1281,6 +2023,7 @@ function latexNumbering(declarationSource, body, declarations = theoremDeclarati
 
   counter('part').format = 'Roman';
   if (hasChapters) for (const name of ['section', 'equation', 'figure', 'table']) numberWithin(name, 'chapter');
+  if (hasChapters) numberWithin('footnote', 'chapter', false);
   numberWithin('subsection', 'section');
   numberWithin('subsubsection', 'subsection');
   numberWithin('paragraph', 'subsubsection');
@@ -1343,6 +2086,16 @@ function latexNumbering(declarationSource, body, declarations = theoremDeclarati
       name: match[2] || match[5],
       value: Number(match[3] || 0),
     });
+  // \footnote steps the footnote counter unless it gives its own [number];
+  // a \label inside the note names that number.
+  for (const match of activeMatches(
+    text,
+    literalRanges,
+    /\\footnote(?:mark)?(?![A-Za-z@])\s*(?:\[\s*(\d+)\s*\])?\s*(\{)?/g,
+  )) {
+    const note = match[2] ? balancedGroup(text, (match.index ?? 0) + match[0].length - 1) : null;
+    events.push({ type: 'footnote', start: match.index ?? 0, fixed: match[1] || '', content: note?.content || '' });
+  }
   // Once an environment has no \end after some \begin, no later one has either.
   const unclosed = new Set();
   for (const match of activeMatches(text, literalRanges, /\\begin\s*\{([^}]+)\}/g)) {
@@ -1376,27 +2129,50 @@ function latexNumbering(declarationSource, body, declarations = theoremDeclarati
   events.sort((left, right) => left.start - right.start);
 
   const labels = new Map();
+  // What each label names, for references that print more than the number:
+  // the type (cleveref's and hyperref's name for it) and a title for \nameref.
+  const targets = new Map();
   const theoremNumbers = new Map();
-  const labelKeys = (fragment) => [...fragment.matchAll(/\\label\s*\{([^}]+)\}/g)].map((match) => match[1].trim());
-  const setLabels = (keys, number) => {
-    if (number) for (const key of keys) labels.set(key, number);
+  const labelKeys = (fragment) => [...fragment.matchAll(labelPattern)].map((match) => match[2].trim());
+  const setLabels = (keys, number, type = '', title = '', extra = {}) => {
+    for (const key of keys) {
+      if (number) labels.set(key, number);
+      if (number || title) targets.set(key, { number: number || '', type, title, ...extra });
+    }
   };
   const equationRanges = [];
   const groups = [];
   let group = null;
   let skipUntil = -1;
+  let inAppendix = false;
+  // The innermost numbered heading, which a label in an unnumbered display names, as in LaTeX.
+  let heading = { number: '', type: '' };
   for (const event of events) {
     if (event.type === 'heading') {
-      if (event.starred || sectionDepths[event.name] > secnumdepth) continue;
-      step(event.name);
       const title = balancedGroup(text, event.start + event.match[0].length - 1);
-      const immediate = title ? /^\s*\\label\s*\{([^}]+)\}/.exec(text.slice(title.end, title.end + 240)) : null;
-      setLabels([...labelKeys(title?.content || ''), ...(immediate ? [immediate[1].trim()] : [])], the(event.name));
+      const immediate = title
+        ? /^\s*\\label\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/.exec(text.slice(title.end, title.end + 240))
+        : null;
+      const keys = [...labelKeys(title?.content || ''), ...(immediate ? [immediate[1].trim()] : [])];
+      const type = inAppendix && event.name === (hasChapters ? 'chapter' : 'section') ? 'appendix' : event.name;
+      const readableTitle = readableLatex(title?.content || '');
+      // An unnumbered heading has no number to print; references to it show its title.
+      if (event.starred || sectionDepths[event.name] > secnumdepth) {
+        setLabels(keys, '', type, readableTitle);
+        continue;
+      }
+      step(event.name);
+      heading = { number: the(event.name), type };
+      setLabels(keys, the(event.name), type, readableTitle);
     } else if (event.type === 'appendix') {
       // \appendix restarts the top sectioning counter and prints it as A, B, ...
       const [top, next] = hasChapters ? ['chapter', 'section'] : ['section', 'subsection'];
       Object.assign(counter(top), { value: 0, format: 'Alph', template: null });
       counter(next).value = 0;
+      inAppendix = true;
+    } else if (event.type === 'footnote') {
+      if (!event.fixed) step('footnote');
+      setLabels(labelKeys(event.content), event.fixed || the('footnote'), 'footnote');
     } else if (event.type === 'counter') {
       if (event.name === 'secnumdepth') {
         if (event.command === 'setcounter') secnumdepth = event.value;
@@ -1412,13 +2188,13 @@ function latexNumbering(declarationSource, body, declarations = theoremDeclarati
       }
       let root = declared?.root || event.environment;
       for (let depth = 0; depth < 8; depth += 1) {
-        const shared = declarations.counters.get(root)?.root;
+        const shared = declarations.aliases?.get(root) || declarations.counters.get(root)?.root;
         if (!shared || shared === root) break;
         root = shared;
       }
-      // A theorem that shares a sectioning counter shows the current number
-      // without stepping it, so results never renumber the paper's sections.
-      if (sectionDepths[root] === undefined) step(root);
+      // As in LaTeX, a theorem sharing a sectioning counter steps it, so
+      // \newtheorem{claim}[section] renumbers the sections after it.
+      step(root);
       theoremNumbers.set(event.start, the(root));
     } else if (event.type === 'equation') {
       // A display nested in another one is malformed; count the outer one only.
@@ -1440,9 +2216,11 @@ function latexNumbering(declarationSource, body, declarations = theoremDeclarati
         }
         pending.push(...labelKeys(row));
         if (!number) continue;
-        setLabels(pending, number);
+        setLabels(pending, number, 'equation');
         pending = [];
       }
+      // A label in a display with no numbered row names the enclosing heading, as in LaTeX.
+      setLabels(pending, heading.number, heading.type);
     } else if (event.type === 'group') {
       // subequations steps equation once, then prints (Na), (Nb), ... inside.
       step('equation');
@@ -1456,33 +2234,313 @@ function latexNumbering(declarationSource, body, declarations = theoremDeclarati
       group = null;
     } else if (event.type === 'float') {
       // Floats step their counter at each \caption; a label takes the caption
-      // before it, or the first caption when it precedes all of them.
+      // before it, or the first caption when it precedes all of them. Captions
+      // of subfigures and subtables step their own counter (a, b, ...) and print
+      // after the float's number, as subcaption and subfig do.
       const name = floatCounters.get(event.environment);
       const content = stripLatexComments(event.content);
+      const subparts = subfloatParts(content);
+      const insideSubpart = (index) => subparts.some((part) => part.start <= index && index < part.end);
       const captions = [...content.matchAll(/\\caption(?![A-Za-z@])\s*(\*)?/g)]
-        .filter((match) => !match[1])
+        .filter((match) => !match[1] && !insideSubpart(match.index ?? 0))
         .map((match) => {
           step(name);
-          return { index: match.index ?? 0, number: the(name) };
+          return { index: match.index ?? 0, number: the(name), title: floatCaption(content, match.index ?? 0) };
         });
-      for (const match of content.matchAll(/\\label\s*\{([^}]+)\}/g))
-        setLabels(
-          [match[1].trim()],
-          captions.filter((caption) => caption.index < (match.index ?? 0)).at(-1)?.number || captions[0]?.number,
-        );
+      const floatNumber = captions[0]?.number || the(name);
+      const subType = name === 'table' ? 'subtable' : 'subfigure';
+      for (const [position, part] of subparts.entries()) {
+        const letter = counterFormats.alph(position + 1);
+        part.number = `${floatNumber}${letter}`;
+        setLabels(labelKeys(part.labels), part.number, subType, part.caption, { subref: `(${letter})` });
+      }
+      for (const match of content.matchAll(labelPattern)) {
+        const index = match.index ?? 0;
+        if (insideSubpart(index)) continue;
+        // A \subcaption outside any subfigure environment names the labels that follow it.
+        const loose = subparts.filter((part) => part.loose && part.start <= index).at(-1);
+        const caption = captions.filter((item) => item.index < index).at(-1) || captions[0];
+        if (loose && (!caption || caption.index < loose.start)) continue;
+        setLabels([match[2].trim()], caption?.number, name, caption?.title || '');
+      }
     } else if (event.type === 'longtable' && !event.environment.endsWith('*')) {
       step('table');
-      setLabels(labelKeys(stripLatexComments(event.content)), the('table'));
+      setLabels(labelKeys(stripLatexComments(event.content)), the('table'), 'table');
     }
   }
   // A \label directly inside subequations, outside its equations, names the group.
   for (const { start, end, number } of groups)
-    for (const match of text.slice(start, end).matchAll(/\\label\s*\{([^}]+)\}/g)) {
+    for (const match of text.slice(start, end).matchAll(labelPattern)) {
       const index = start + (match.index ?? 0);
       if (insideSourceRanges(index, equationRanges) || insideSourceRanges(index, literalRanges)) continue;
-      if (!isLatexCommentedAt(text, index)) labels.set(match[1].trim(), number);
+      if (!isLatexCommentedAt(text, index)) setLabels([match[2].trim()], number, 'equation');
     }
-  return { labels, theoremNumbers };
+  return { labels, targets, theoremNumbers };
+}
+
+// \label{key}, or cleveref's \label[type]{key}, which also names the reference type.
+const labelPattern = /\\label\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g;
+
+const listLevelNames = ['i', 'ii', 'iii', 'iv'];
+
+// The text a list label or reference template prints for the current item:
+// enumitem's \arabic* forms, LaTeX's \roman{enumii} and \theenumi forms, and
+// literal text, with font and spacing commands dropped.
+function listTemplateText(template, value, stack) {
+  return String(template || '')
+    .replace(/\\(arabic|alph|Alph|roman|Roman)\*/g, (_match, format) => counterFormats[format](value))
+    .replace(/\\@?(arabic|alph|Alph|roman|Roman)\s*\{\s*enum(iv|i{1,3})\s*\}/g, (_match, format, level) =>
+      counterFormats[format](stack[listLevelNames.indexOf(level)]?.value ?? 0),
+    )
+    .replace(/\\theenum(iv|i{1,3})(?![a-z])/g, (_match, level) => stack[listLevelNames.indexOf(level)]?.the ?? '')
+    .replace(/\\(?:text(?:up|bf|it|rm|sf|sc|normal)|emph|mbox)\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\\(?:upshape|bfseries|itshape|normalfont|rmfamily|sffamily|scshape|mdseries|em)(?![A-Za-z@])\s*/g, '')
+    .replace(/\\[ ,;]|~/g, ' ')
+    .replace(/[{}]/g, '')
+    .trim();
+}
+
+// enumerate's short form ([(i)], [1.], [a)]) marks the counter with the first
+// 1, a, A, i, or I outside braces; the rest is printed as written.
+function shortListTemplate(value) {
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === '{') depth += 1;
+    else if (character === '}') depth = Math.max(0, depth - 1);
+    else if (character === '\\') {
+      index += /^\\[A-Za-z@]*/.exec(value.slice(index))?.[0].length - 1 || 1;
+    } else if (!depth && '1aAiI'.includes(character)) {
+      const format = { 1: 'arabic', a: 'alph', A: 'Alph', i: 'roman', I: 'Roman' }[character];
+      return `${value.slice(0, index)}\\${format}*${value.slice(index + 1)}`;
+    }
+  }
+  return value;
+}
+
+/**
+ * The numbers LaTeX gives enumerate items: the label each item prints and what
+ * \ref prints for a \label inside it. Covers the class defaults (amsart's
+ * "(1)", article's "1."), enumitem's label/ref/start/resume keys and \setlist,
+ * enumerate's short form, \newlist, and \labelenumi/\theenumi redefinitions.
+ */
+function listNumbering(source) {
+  const text = String(source || '');
+  const literalRanges = literalSourceRanges(text);
+  const active = (pattern) =>
+    [...text.matchAll(pattern)].filter(
+      (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(text, match.index ?? 0),
+    );
+  const className = active(/\\documentclass\s*(?:\[[^\]]*\])?\s*\{\s*([^}\s]+)\s*\}/g)[0]?.[1] || '';
+  const ams = /^ams(?:art|book|proc)$/.test(className);
+  const listTypes = new Map([
+    ['enumerate', 'enumerate'],
+    ['itemize', 'itemize'],
+    ['description', 'description'],
+  ]);
+  for (const match of active(/\\newlist\s*\{([^}]+)\}\s*\{(enumerate|itemize|description)\}/g))
+    listTypes.set(match[1].trim(), match[2]);
+  const settings = [];
+  for (const match of active(/\\setlist\*?\s*(?:\[([^\]]*)\])?\s*\{/g)) {
+    const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    if (!group) continue;
+    const scope = String(match[1] || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const names = scope.filter((item) => !/^\d+$/.test(item));
+    const levels = scope.filter((item) => /^\d+$/.test(item)).map(Number);
+    settings.push({ names, levels, options: keyValueOptions(group.content) });
+  }
+  const labelOverrides = new Map();
+  const theOverrides = new Map();
+  for (const match of active(/\\(?:renewcommand|def)\*?\s*\{?\\(label|the)enum(iv|i{1,3})\}?\s*\{/g)) {
+    const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    if (group)
+      (match[1] === 'label' ? labelOverrides : theOverrides).set(listLevelNames.indexOf(match[2]), group.content);
+  }
+  const defaultFormats = ['arabic', 'alph', 'roman', 'Alph'];
+  const defaultLabels = ams
+    ? ['(\\theenumi)', '(\\theenumii)', '(\\theenumiii)', '(\\theenumiv)']
+    : ['\\theenumi.', '(\\theenumii)', '\\theenumiii.', '\\theenumiv.'];
+  // What \ref prints by default: \p@enumii is \theenumi, \p@enumiii is \theenumi(\theenumii), ...
+  const defaultRefs = [
+    '\\theenumi',
+    '\\theenumi\\theenumii',
+    '\\theenumi(\\theenumii)\\theenumiii',
+    '\\theenumi(\\theenumii)\\theenumiii\\theenumiv',
+  ];
+
+  const targets = new Map();
+  const items = [];
+  // A \newlist environment is written as its base list, so the reader treats it as one.
+  const renames = [];
+  const stack = [];
+  const lastValues = new Map();
+  const tokens = active(/\\(begin|end)\s*\{([^}]+)\}|\\item(?![A-Za-z@])|\\label\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g);
+  for (const token of tokens) {
+    const start = token.index ?? 0;
+    if (listTypes.has(token[2]) && listTypes.get(token[2]) !== token[2])
+      renames.push({ index: start, length: token[0].length, text: `\\${token[1]}{${listTypes.get(token[2])}}` });
+    if (token[1] === 'begin' && listTypes.has(token[2])) {
+      const type = listTypes.get(token[2]);
+      const optionMatch = /^\s*\[/.exec(text.slice(start + token[0].length));
+      const optionGroup = optionMatch
+        ? balancedGroup(text, start + token[0].length + optionMatch[0].length - 1, '[', ']')
+        : null;
+      const raw = optionGroup?.content.trim() || '';
+      const levelIndex = stack.filter((entry) => entry.type === 'enumerate').length;
+      if (type !== 'enumerate' || levelIndex > 3) {
+        stack.push({ name: token[2], type, item: null });
+        continue;
+      }
+      const options = new Map();
+      for (const setting of settings)
+        if (
+          // \setlist[name] configures that list only; a \newlist keeps its own settings.
+          (!setting.names.length || setting.names.includes(token[2])) &&
+          (!setting.levels.length || setting.levels.includes(levelIndex + 1))
+        )
+          for (const [key, value] of setting.options) options.set(key, value);
+      // enumitem's keys, or enumerate's short form ([(i)], [a], [1.]). Keys are
+      // words of three or more letters (resume, nosep, wide, label=...).
+      const keyed = raw.split(',').every((part) => /=/.test(part) || /^\s*[A-Za-z]{3,}\*?\s*$/.test(part));
+      if (raw && !keyed) options.set('label', shortListTemplate(raw));
+      else for (const [key, value] of keyValueOptions(raw)) options.set(key, value);
+      const format =
+        /\\(arabic|alph|Alph|roman|Roman)\*/.exec(options.get('label') || '')?.[1] || defaultFormats[levelIndex];
+      const label = options.get('label') ?? labelOverrides.get(levelIndex) ?? defaultLabels[levelIndex];
+      // enumitem prints a reference like the label unless ref= says otherwise.
+      const ref = options.get('ref') ?? (options.has('label') ? options.get('label') : defaultRefs[levelIndex]);
+      const resume = options.has('resume') || options.has('resume*');
+      const startValue = Number(options.get('start'));
+      stack.push({
+        name: token[2],
+        type,
+        levelIndex,
+        format,
+        label,
+        ref,
+        value: resume ? (lastValues.get(levelIndex) ?? 0) : Number.isFinite(startValue) ? startValue - 1 : 0,
+        the: '',
+        item: null,
+      });
+    } else if (token[1] === 'end' && listTypes.has(token[2])) {
+      const index = stack.map((entry) => entry.name).lastIndexOf(token[2]);
+      if (index < 0) continue;
+      const [closed] = stack.splice(index);
+      if (closed.type === 'enumerate') lastValues.set(closed.levelIndex, closed.value);
+    } else if (token[0].startsWith('\\item')) {
+      const list = stack.at(-1);
+      if (!list) continue;
+      if (list.type !== 'enumerate') {
+        list.item = null;
+        continue;
+      }
+      // \item[label] prints its own label and does not step the counter.
+      const explicit = /^\s*\[/.exec(text.slice(start + token[0].length));
+      if (explicit) {
+        const group = balancedGroup(text, start + token[0].length + explicit[0].length - 1, '[', ']');
+        list.item = { ref: listTemplateText(group?.content || '', list.value, stack) };
+        continue;
+      }
+      list.value += 1;
+      const enumerates = stack.filter((entry) => entry.type === 'enumerate');
+      list.the = theOverrides.has(list.levelIndex)
+        ? listTemplateText(theOverrides.get(list.levelIndex), list.value, enumerates)
+        : counterFormats[list.format](list.value);
+      const printed = listTemplateText(list.label, list.value, enumerates);
+      list.item = { ref: listTemplateText(list.ref, list.value, enumerates) };
+      if (printed && !printed.includes(']')) items.push({ index: start, length: token[0].length, label: printed });
+    } else if (token[3]) {
+      // A label names the innermost numbered item it sits in.
+      const owner = [...stack].reverse().find((entry) => entry.type === 'enumerate' && entry.item);
+      if (owner?.item.ref) targets.set(token[3].trim(), { number: owner.item.ref, type: 'item', title: '' });
+    }
+  }
+  return { targets, items, renames };
+}
+
+// The readable caption whose \caption command starts at `index` in `content`.
+function floatCaption(content, index) {
+  const match = /^\\caption(?![A-Za-z@])\s*(?:\[[^\]]*\])?\s*\{/.exec(content.slice(index));
+  return match ? readableLatex(balancedGroup(content, index + match[0].length - 1)?.content || '') : '';
+}
+
+// The subfigures and subtables of one float, in order: subfigure/subtable
+// environments with a \caption, \subfloat and \subcaptionbox (subfig and
+// subcaption), and a bare \subcaption, which covers what follows it up to the
+// next caption. Each part keeps the text its labels live in and its caption.
+function subfloatParts(content) {
+  const parts = [];
+  for (const match of content.matchAll(/\\begin\{(subfigure|subtable)\}/g)) {
+    const start = match.index ?? 0;
+    const close = content.indexOf(`\\end{${match[1]}}`, start);
+    if (close < 0) continue;
+    const inner = content.slice(start, close);
+    const caption = /\\caption(?![A-Za-z@])/.exec(inner);
+    if (!caption) continue;
+    parts.push({ start, end: close, labels: inner, caption: floatCaption(inner, caption.index) });
+  }
+  const covered = (index) => parts.some((part) => part.start <= index && index < part.end);
+  for (const match of content.matchAll(/\\(subfloat|subcaptionbox)(?![A-Za-z@])/g)) {
+    const start = match.index ?? 0;
+    if (covered(start)) continue;
+    let cursor = start + match[0].length;
+    const groups = [];
+    for (let guard = 0; guard < 5; guard += 1) {
+      const next = /^\s*([[{])/.exec(content.slice(cursor));
+      if (!next) break;
+      const open = cursor + next[0].length - 1;
+      const group = balancedGroup(content, open, next[1], next[1] === '[' ? ']' : '}');
+      if (!group) break;
+      groups.push({ bracket: next[1], content: group.content });
+      cursor = group.end;
+      if (next[1] === '{' && (match[1] === 'subfloat' || groups.filter((item) => item.bracket === '{').length === 2))
+        break;
+    }
+    // \subfloat[list entry][caption]{body}: the last optional argument is the caption.
+    const caption =
+      match[1] === 'subfloat'
+        ? groups.filter((item) => item.bracket === '[').at(-1)?.content || ''
+        : groups.find((item) => item.bracket === '{')?.content || '';
+    parts.push({ start, end: cursor, labels: content.slice(start, cursor), caption: readableLatex(caption) });
+  }
+  const captions = [...content.matchAll(/\\(?:sub)?caption(?![A-Za-z@])/g)].map((match) => match.index ?? 0);
+  for (const match of content.matchAll(/\\subcaption(?![A-Za-z@*])\s*(?:\[[^\]]*\])?\s*\{/g)) {
+    const start = match.index ?? 0;
+    if (covered(start)) continue;
+    const end = captions.find((index) => index > start) ?? content.length;
+    const group = balancedGroup(content, start + match[0].length - 1);
+    parts.push({
+      start,
+      end,
+      loose: true,
+      labels: content.slice(start, end),
+      caption: readableLatex(group?.content || ''),
+    });
+  }
+  return parts.sort((left, right) => left.start - right.start);
+}
+
+// The \label that names a result itself. One inside a nested display or float
+// names that display, and one inside a list names an item.
+function ownLabel(statement) {
+  const text = String(statement || '').replace(nestedNumberedEnvironments, '');
+  const lists = [];
+  const open = [];
+  for (const match of text.matchAll(/\\(begin|end)\s*\{(enumerate|itemize|description)\}/g)) {
+    if (match[1] === 'begin') open.push(match.index ?? 0);
+    else if (open.length) {
+      const start = open.pop();
+      if (!open.length) lists.push([start, (match.index ?? 0) + match[0].length]);
+    }
+  }
+  if (open.length) lists.push([open[0], text.length]);
+  for (const match of text.matchAll(labelPattern))
+    if (!insideSourceRanges(match.index ?? 0, lists))
+      return { key: match[2].trim(), type: String(match[1] || '').trim() };
+  return { key: '', type: '' };
 }
 
 function extractSourceUnits(source) {
@@ -1518,8 +2576,7 @@ function extractSourceUnits(source) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
     if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(normalizedSource, start)) continue;
-    // A \label inside a nested equation or float names that display, not the result.
-    const label = /\\label\s*\{([^}]+)\}/.exec(match[3].replace(nestedNumberedEnvironments, ''))?.[1] || '';
+    const label = ownLabel(match[3]);
     const embeddedProofs = [...match[3].matchAll(embeddedProofPattern)];
     const statementSource = match[3].replace(embeddedProofPattern, '');
     units.push({
@@ -1528,7 +2585,8 @@ function extractSourceUnits(source) {
       displayName: displayNames.get(match[1]) || readableLatex(match[1]),
       printedNumber: theoremNumbers.get(start) ?? '',
       title: match[2] || '',
-      texLabel: label,
+      texLabel: label.key,
+      texLabelType: label.type,
       start,
       end,
       statement: readableLatex(statementSource),
@@ -1571,7 +2629,7 @@ function extractSourceUnits(source) {
       (unit) => unit.printedNumber && printedKey(`${unit.displayName}${unit.printedNumber}`) === printedKey(reference),
     );
   const explicitProofPattern = new RegExp(
-    `(?:proof\\s+of|prove|complet(?:e|es|ed)\\s+the\\s+proof\\s+of|preuve\\s+(?:de|du|des)|d[ée]monstration\\s+(?:de|du|des))[\\s\\S]{0,180}?(?:\\\\ref\\s*\\{([^}]+)\\}|\\\\hyperref\\s*\\[([^\\]]+)\\]${
+    `(?:proof\\s+of|prove|complet(?:e|es|ed)\\s+the\\s+proof\\s+of|preuve\\s+(?:de|du|des)|d[ée]monstration\\s+(?:de|du|des))[\\s\\S]{0,180}?(?:\\\\(?:ref|cref|Cref|autoref|Autoref|thref)\\*?\\s*\\{([^},]+)[^}]*\\}|\\\\hyperref\\s*\\[([^\\]]+)\\]${
       printedPattern ? `|(${printedPattern})(?![\\w']|\\.\\d)` : ''
     })`,
     'gi',
@@ -1605,14 +2663,250 @@ function extractSourceUnits(source) {
   return units;
 }
 
+// Default reference names: cleveref's \cref forms (lowercase, abbreviated for
+// equations and figures) and hyperref's \autoref forms.
+const crefDefaults = {
+  equation: ['eq.', 'eqs.'],
+  figure: ['fig.', 'figs.'],
+  subfigure: ['fig.', 'figs.'],
+  table: ['table', 'tables'],
+  subtable: ['table', 'tables'],
+  part: ['part', 'parts'],
+  chapter: ['chapter', 'chapters'],
+  section: ['section', 'sections'],
+  subsection: ['section', 'sections'],
+  subsubsection: ['section', 'sections'],
+  paragraph: ['paragraph', 'paragraphs'],
+  subparagraph: ['subparagraph', 'subparagraphs'],
+  appendix: ['appendix', 'appendices'],
+  item: ['item', 'items'],
+  footnote: ['footnote', 'footnotes'],
+  theorem: ['theorem', 'theorems'],
+  lemma: ['lemma', 'lemmas'],
+  corollary: ['corollary', 'corollaries'],
+  proposition: ['proposition', 'propositions'],
+  definition: ['definition', 'definitions'],
+  result: ['result', 'results'],
+  example: ['example', 'examples'],
+  remark: ['remark', 'remarks'],
+  note: ['note', 'notes'],
+};
+const crefUnabbreviated = { equation: ['equation', 'equations'], figure: ['figure', 'figures'] };
+const autorefDefaults = {
+  equation: 'Equation',
+  footnote: 'footnote',
+  item: 'item',
+  figure: 'Figure',
+  subfigure: 'Figure',
+  table: 'Table',
+  subtable: 'Table',
+  part: 'Part',
+  appendix: 'Appendix',
+  chapter: 'chapter',
+  section: 'section',
+  subsection: 'subsection',
+  subsubsection: 'subsubsection',
+  paragraph: 'paragraph',
+  subparagraph: 'subparagraph',
+  theorem: 'Theorem',
+};
+const capitalized = (value) => (value ? value[0].toUpperCase() + value.slice(1) : value);
+
+// Splits "1.2.3" into its prefix and final number, so consecutive references
+// (1.2, 1.3, 1.4) can be printed as a range, as cleveref does.
+function numberParts(number) {
+  const match = /^(.*?)(\d+)$/.exec(String(number));
+  return match ? { prefix: match[1], value: Number(match[2]) } : null;
+}
+
+function joinReferences(parts) {
+  return parts.length <= 1 ? parts[0] || '' : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+}
+
+/**
+ * Prints references as the paper's packages would: cleveref (\cref, \Cref,
+ * ranges, \labelcref, \namecref, with the capitalise and noabbrev options,
+ * \crefname, \Crefname, \crefalias, and thmtools' refname), hyperref's
+ * \autoref (and \...autorefname), \nameref, \subref, and \eqref. Page
+ * references name their target, since a reflowed paper has no pages.
+ */
+function referenceFormatter(source, declarations) {
+  const text = String(source || '');
+  const cleveref = /\\usepackage\s*(?:\[([^\]]*)\])?\s*\{[^}]*\bcleveref\b[^}]*\}/.exec(text);
+  const capitalise = /\bcapitali[sz]e\b/.test(cleveref?.[1] || '');
+  const noabbrev = /\bnoabbrev\b/.test(cleveref?.[1] || '');
+  const crefNames = new Map();
+  const CrefNames = new Map();
+  for (const match of text.matchAll(/\\(crefname|Crefname)\s*\{([^}]+)\}\s*\{([^}]*)\}\s*\{([^}]*)\}/g))
+    (match[1] === 'crefname' ? crefNames : CrefNames).set(match[2].trim(), [
+      readableLatex(match[3]),
+      readableLatex(match[4]),
+    ]);
+  for (const [environment, names] of declarations.referenceNames || []) {
+    if (names.cref?.[0]) crefNames.set(environment, [names.cref[0], names.cref[1] || `${names.cref[0]}s`]);
+    if (names.Cref?.[0]) CrefNames.set(environment, [names.Cref[0], names.Cref[1] || `${names.Cref[0]}s`]);
+  }
+  const aliases = new Map();
+  for (const match of text.matchAll(/\\crefalias\s*\{([^}]+)\}\s*\{([^}]+)\}/g))
+    aliases.set(match[1].trim(), match[2].trim());
+  const autorefNames = new Map(Object.entries(autorefDefaults));
+  for (const match of text.matchAll(
+    /\\(?:renewcommand|newcommand|providecommand|def)\*?\s*\{?\\([A-Za-z]+)autorefname\}?\s*\{([^}]*)\}/g,
+  ))
+    autorefNames.set(match[1], readableLatex(match[2]));
+
+  // cleveref's type for a target: an explicit \label[type], else its counter's
+  // type (items are enumi, whatever their level), after \crefalias.
+  const typeOf = (target) => {
+    const type = target.labelType || (target.type === 'item' ? 'enumi' : target.type);
+    return aliases.get(type) || type;
+  };
+  const names = (target, capital) => {
+    const type = typeOf(target);
+    const key = type === 'enumi' ? 'item' : type;
+    const lower = crefNames.get(type) || (noabbrev && crefUnabbreviated[key]) || crefDefaults[key];
+    const upper = CrefNames.get(type);
+    // Environments cleveref has no name for fall back to their printed name.
+    const fallback = target.name ? [target.name, `${target.name}s`] : null;
+    if (capital) {
+      if (upper) return upper;
+      if (crefNames.get(type)) return crefNames.get(type).map(capitalized);
+      if (key === 'equation' || key === 'figure' || key === 'subfigure')
+        return key === 'equation' ? ['Equation', 'Equations'] : ['Figure', 'Figures'];
+      return lower ? lower.map(capitalized) : fallback || ['', ''];
+    }
+    if (lower) return capitalise ? lower.map(capitalized) : lower;
+    if (upper) return capitalise ? upper : upper.map((name) => name[0].toLowerCase() + name.slice(1));
+    return fallback || ['', ''];
+  };
+  const isEquation = (target) => typeOf(target) === 'equation';
+  const numberText = (target) => (isEquation(target) ? `(${target.number})` : target.number);
+  // An unnumbered target (a starred section, an unnumbered theorem) is named instead.
+  const unnumbered = (target) => target.title || target.name || '??';
+
+  const cref = (targets, capital) => {
+    const groups = [];
+    for (const target of targets) {
+      const type = target ? typeOf(target) : '';
+      const last = groups.at(-1);
+      if (target && last && last.type === type && last.targets[0]) last.targets.push(target);
+      else groups.push({ type, targets: [target] });
+    }
+    return joinReferences(
+      groups.map(({ targets: members }) => {
+        const [first] = members;
+        if (!first) return '??';
+        if (members.length === 1 && !first.number) return unnumbered(first);
+        const numbered = members.filter((target) => target.number);
+        // Consecutive numbers of three or more print as "1.2 to 1.4".
+        const printed = [];
+        for (let index = 0; index < numbered.length;) {
+          let end = index;
+          const start = numberParts(numbered[index].number);
+          while (
+            start &&
+            end + 1 < numbered.length &&
+            numberParts(numbered[end + 1].number)?.prefix === start.prefix &&
+            numberParts(numbered[end + 1].number)?.value === numberParts(numbered[end].number).value + 1
+          )
+            end += 1;
+          if (end - index >= 2) {
+            printed.push(`${numberText(numbered[index])} to ${numberText(numbered[end])}`);
+          } else for (let item = index; item <= end; item += 1) printed.push(numberText(numbered[item]));
+          index = end + 1;
+        }
+        const [singular, plural] = names(first, capital);
+        const numbers = joinReferences(printed);
+        const many = numbered.length > 1;
+        return `${many ? plural : singular}${singular ? ' ' : ''}${numbers}`.trim();
+      }),
+    );
+  };
+  const autoref = (target, capital) => {
+    if (!target.number) return unnumbered(target);
+    const name = autorefNames.get(target.counter || target.type) ?? target.name ?? '';
+    const shown = capital ? capitalized(name || target.name || '') : name || target.name || '';
+    return `${shown}${shown ? ' ' : ''}${target.number}`;
+  };
+  return (command, targets) => {
+    const [target] = targets;
+    switch (command) {
+      case 'ref':
+        return target.number || unnumbered(target);
+      case 'eqref':
+        return target.number ? `(${target.number})` : unnumbered(target);
+      case 'autoref':
+      case 'Autoref':
+        return autoref(target, command === 'Autoref');
+      case 'thref':
+      case 'Thref':
+        return target.number
+          ? `${target.name || autorefNames.get(target.type) || ''} ${target.number}`.trim()
+          : unnumbered(target);
+      case 'cref':
+      case 'Cref':
+      case 'vref':
+      case 'Vref':
+      case 'cpageref':
+      case 'Cpageref':
+      case 'pageref':
+        return cref(targets, command[0] === 'C' || command[0] === 'V' || command === 'pageref');
+      case 'crefrange':
+      case 'Crefrange':
+      case 'cpagerefrange':
+      case 'Cpagerefrange': {
+        const [first, last] = targets;
+        const [, plural] = names(first, command[0] === 'C');
+        return `${plural}${plural ? ' ' : ''}${numberText(first)} to ${numberText(last)}`;
+      }
+      case 'labelcref':
+        return joinReferences(targets.map((item) => (item ? numberText(item) : '??')));
+      case 'namecref':
+      case 'nameCref':
+      case 'lcnamecref':
+      case 'namecrefs':
+      case 'nameCrefs':
+      case 'lcnamecrefs': {
+        const [singular, plural] = names(target, command.startsWith('nameC'));
+        const name = command.endsWith('s') ? plural : singular;
+        return command.startsWith('lc') ? name.toLowerCase() : name;
+      }
+      case 'nameref':
+      case 'Nameref':
+        return target.title || cref([target], true);
+      case 'subref':
+        return target.subref || target.number || unnumbered(target);
+      case 'vpageref':
+        return '';
+      default:
+        return null;
+    }
+  };
+}
+
+const referenceCommands =
+  'ref|eqref|autoref|Autoref|thref|Thref|cref|Cref|crefrange|Crefrange|cpageref|Cpageref|cpagerefrange|Cpagerefrange|labelcref|namecref|nameCref|lcnamecref|namecrefs|nameCrefs|lcnamecrefs|pageref|vref|Vref|vpageref|nameref|Nameref|subref';
+const rangeReferenceCommands = new Set(['crefrange', 'Crefrange', 'cpagerefrange', 'Cpagerefrange']);
+const multiReferenceCommands = new Set(['cref', 'Cref', 'cpageref', 'Cpageref', 'labelcref', 'vref', 'Vref']);
+
 function resolveLatexReferences(source, sourceUnits = []) {
   const value = String(source || '');
-  const labels = new Map(
-    sourceUnits
-      .filter((unit) => unit.texLabel && unit.printedNumber)
-      .map((unit) => [unit.texLabel, unit.printedNumber]),
-  );
   const literalRanges = literalSourceRanges(value);
+  const declarations = theoremDeclarations(value);
+  // Every label's target. Items come first so a result or display inside an
+  // item keeps its own number; structure (sections, equations, floats) last.
+  const lists = listNumbering(value);
+  const targets = new Map(lists.targets);
+  for (const unit of sourceUnits) {
+    if (!unit.texLabel) continue;
+    targets.set(unit.texLabel, {
+      number: unit.printedNumber || '',
+      type: unit.environment,
+      counter: declarations.counters.get(unit.environment)?.root || unit.environment,
+      name: unit.displayName || '',
+      title: readableLatex(unit.title || ''),
+    });
+  }
   const proofNames = new Set(['proof']);
   for (const match of value.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
@@ -1628,14 +2922,62 @@ function resolveLatexReferences(source, sourceUnits = []) {
   // Number displays on the macro-expanded text, the same text extractSourceUnits
   // numbers theorems on, so a theorem sharing the equation counter and an
   // equation built by an author macro both count exactly once.
-  for (const [key, number] of latexNumbering(value, expandAuthorMacros(value)).labels) labels.set(key, number);
+  for (const [key, target] of latexNumbering(value, expandAuthorMacros(value)).targets) targets.set(key, target);
+  for (const match of value.matchAll(labelPattern))
+    if (match[1] && targets.has(match[2].trim())) targets.get(match[2].trim()).labelType = match[1].trim();
+  const format = referenceFormatter(value, declarations);
 
-  return value.replace(/\\(eqref|ref|autoref|cref|Cref)\s*\{([^}]+)\}/g, (match, command, key, offset) => {
-    if (insideSourceRanges(offset, literalRanges) || insideSourceRanges(offset, proofHeaderRanges)) return match;
-    const number = labels.get(String(key).trim());
-    if (!number) return match;
-    return command === 'eqref' ? `(${number})` : number;
-  });
+  // Edits on the original text, applied back to front: enumerate items gain
+  // their printed label, and references become what the paper prints.
+  const edits = [];
+  for (const item of lists.items) {
+    if (insideSourceRanges(item.index, proofHeaderRanges)) continue;
+    edits.push({ start: item.index, end: item.index + item.length, text: `\\item[${item.label}]` });
+  }
+  for (const rename of lists.renames)
+    edits.push({ start: rename.index, end: rename.index + rename.length, text: rename.text });
+  const pattern = new RegExp(
+    `\\\\(${referenceCommands})(?![A-Za-z@])(\\*?)\\s*((?:\\[[^\\]]*\\]\\s*)*)\\{([^}]*)\\}`,
+    'g',
+  );
+  for (const match of value.matchAll(pattern)) {
+    let start = match.index ?? 0;
+    let end = start + match[0].length;
+    if (insideSourceRanges(start, literalRanges) || insideSourceRanges(start, proofHeaderRanges)) continue;
+    if (isLatexCommentedAt(value, start)) continue;
+    const command = match[1];
+    let keys = [match[4]];
+    if (rangeReferenceCommands.has(command)) {
+      const second = /^\s*\{([^}]*)\}/.exec(value.slice(end));
+      if (!second) continue;
+      keys.push(second[1]);
+      end += second[0].length;
+    } else if (multiReferenceCommands.has(command)) keys = match[4].split(',');
+    const found = keys.map((key) => targets.get(key.trim()));
+    // A single unresolved label stays for readableLatex to mark; in a list, only it is marked.
+    if (!found.some(Boolean) || (keys.length === 1 && !found[0])) continue;
+    if (command !== 'labelcref' && !multiReferenceCommands.has(command) && found.some((target) => !target)) continue;
+    // "page~\pageref{x}" or "p.~\pageref{x}" becomes the target's name.
+    if (command === 'pageref') {
+      const before = /(?:\b(?:on\s+)?(?:pages?|pp?\.))(?:\s|~|\\ )*$/i.exec(
+        value.slice(Math.max(0, start - 24), start),
+      );
+      if (before) start -= before[0].length;
+    }
+    const printed = format(command, found);
+    if (printed === null) continue;
+    edits.push({ start, end, text: printed });
+  }
+  // One pass over the text, so the cost stays linear in the paper's length.
+  const pieces = [];
+  let cursor = 0;
+  for (const edit of edits.sort((left, right) => left.start - right.start)) {
+    if (edit.start < cursor) continue;
+    pieces.push(value.slice(cursor, edit.start), edit.text);
+    cursor = edit.end;
+  }
+  pieces.push(value.slice(cursor));
+  return pieces.join('');
 }
 
 function citationReference(mention, bibliography, aiCitations = []) {
@@ -1709,7 +3051,7 @@ function stripDocumentDeclarations(source) {
   const literalRanges = literalSourceRanges(text);
   const ranges = [];
   const commandPattern =
-    /\\(newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator|newenvironment|renewenvironment|newtheorem|renewtheorem|def|gdef|edef|xdef|mathchardef|chardef|let|theoremstyle|numberwithin|counterwithin|counterwithout)\*?/g;
+    /\\(newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator|DeclarePairedDelimiter(?:XPP|X)?|(?:New|Renew|Provide|Declare)(?:Expandable)?DocumentCommand|newenvironment|renewenvironment|newtheorem|renewtheorem|def|gdef|edef|xdef|mathchardef|chardef|let|theoremstyle|numberwithin|counterwithin|counterwithout)\*?/g;
   const skipSpace = (position) => {
     while (/\s/.test(text[position] || '')) position += 1;
     return position;
@@ -1746,6 +3088,26 @@ function stripDocumentDeclarations(source) {
       position = takeMacroName(position);
       if (position < 0) continue;
       const replacement = takeGroup(position);
+      if (!replacement) continue;
+      position = replacement.end;
+    } else if (command.startsWith('DeclarePairedDelimiter')) {
+      position = takeMacroName(position);
+      if (position < 0) continue;
+      const arity = takeOptional(position);
+      if (arity) position = arity.end;
+      const parts = readMacroArguments(
+        text,
+        position,
+        pairedDelimiterParts(command.replace('DeclarePairedDelimiter', '')),
+      );
+      if (!parts) continue;
+      position = parts.end;
+    } else if (command.endsWith('DocumentCommand')) {
+      position = takeMacroName(position);
+      if (position < 0) continue;
+      const spec = takeGroup(position);
+      if (!spec) continue;
+      const replacement = takeGroup(spec.end);
       if (!replacement) continue;
       position = replacement.end;
     } else if (/^(?:newenvironment|renewenvironment)$/.test(command)) {
@@ -1855,10 +3217,14 @@ function tableEvents(source) {
   const events = [];
   const covered = [];
   const literalRanges = literalSourceRanges(source);
+  // The table's own caption, not the first subtable's.
   const caption = (fragment) => {
-    const match = /\\caption(?:\[[^\]]*\])?\s*\{/.exec(fragment);
-    if (!match) return '';
-    return readableLatex(balancedGroup(fragment, (match.index ?? 0) + match[0].length - 1)?.content || '');
+    const subparts = subfloatParts(fragment);
+    const match = [...fragment.matchAll(/\\caption(?![A-Za-z@])/g)].find(
+      (candidate) =>
+        !subparts.some((part) => part.start <= (candidate.index ?? 0) && (candidate.index ?? 0) < part.end),
+    );
+    return match ? floatCaption(fragment, match.index ?? 0) : '';
   };
   const tabular = (fragment) =>
     /\\begin\{(?:tabular\*?|tabularx)\}[\s\S]*?\\end\{(?:tabular\*?|tabularx)\}/.exec(fragment)?.[0] || '';
@@ -1918,6 +3284,14 @@ function bibliographyEvents(source, bibliography) {
       .filter((entry) => entry.key);
     if (entries.length) events.push({ type: 'bibliography', start, end: start + match[0].length, entries });
   }
+  const handWritten = events.length ? null : handWrittenBibliography(value);
+  if (handWritten)
+    events.push({
+      type: 'bibliography',
+      start: handWritten.start,
+      end: handWritten.end,
+      entries: handWritten.entries.map(({ key, raw }) => ({ key, content: cleanBibliographyFragment(raw) || key })),
+    });
   if (events.length || !bibliography?.size) return events;
   const external = /\\(?:printbibliography|bibliography)\b(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/.exec(value);
   if (
@@ -2223,10 +3597,14 @@ function figureEvents(source) {
   const covered = [];
   const literalRanges = literalSourceRanges(source);
   const images = (fragment) => graphicPaths(fragment);
+  // The figure's own caption, not the first subfigure's.
   const caption = (fragment) => {
-    const match = /\\caption(?:\[[^\]]*\])?\s*\{/.exec(fragment);
-    if (!match) return '';
-    return readableLatex(balancedGroup(fragment, (match.index ?? 0) + match[0].length - 1)?.content || '');
+    const subparts = subfloatParts(fragment);
+    const match = [...fragment.matchAll(/\\caption(?![A-Za-z@])/g)].find(
+      (candidate) =>
+        !subparts.some((part) => part.start <= (candidate.index ?? 0) && (candidate.index ?? 0) < part.end),
+    );
+    return match ? floatCaption(fragment, match.index ?? 0) : '';
   };
   for (const match of String(source || '').matchAll(/\\begin\{figure\*?\}([\s\S]*?)\\end\{figure\*?\}/g)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(source, match.index ?? 0)) continue;
@@ -2280,7 +3658,9 @@ async function enrichAuditFromTex(rawText, primarySource) {
     return rawText;
   }
   if (!Array.isArray(audit.nodes)) return rawText;
-  const unresolved = await readExpandedTex(primarySource.entryFile, primarySource.sourceDirectory);
+  const unresolved = citeHandWrittenReferences(
+    await readExpandedTex(primarySource.entryFile, primarySource.sourceDirectory),
+  );
   const expanded = resolveLatexReferences(unresolved, extractSourceUnits(unresolved));
   const sourceUnits = extractSourceUnits(expanded);
   const bibliography = await extractBibliographyTree(expanded, primarySource.sourceDirectory, primarySource.entryFile);

@@ -8,6 +8,7 @@ import {
   buildSourceBlocks,
   enrichAuditFromTex,
   expandAuthorMacros,
+  extractBibliography,
   extractBibliographyTree,
   extractSourceUnits,
   readExpandedTex,
@@ -48,13 +49,19 @@ const sharedSectionSource = String.raw`\newtheorem{claim}[section]{Claim}
 \section{First}
 \begin{claim}First claim.\end{claim}
 \begin{claim}Second claim.\end{claim}
-\section{Second}
+\section{Second}\label{sec:second}
 \begin{claim}Third claim.\end{claim}
+See Section~\ref{sec:second}.
 \end{document}`;
 assert.deepEqual(
   extractSourceUnits(sharedSectionSource).map((unit) => unit.printedNumber),
-  ['1', '1', '2'],
-  'A theorem sharing the section counter must display the current section number without incrementing it.',
+  ['2', '3', '5'],
+  'A theorem sharing the section counter steps it, as in LaTeX.',
+);
+assert.match(
+  resolveLatexReferences(sharedSectionSource, extractSourceUnits(sharedSectionSource)),
+  /See Section~4\./,
+  'Sections after a theorem sharing their counter are renumbered, as in LaTeX.',
 );
 
 const nestedCounterSource = String.raw`\newtheorem{lemma}{Lemma}[subsection]
@@ -194,6 +201,70 @@ try {
   assert.match(nested, /Macro file text\./, 'A brace-less \\input must be expanded.');
   assert.match(nested, /Section A\. Section B\./, 'A nested include must resolve against the main document folder.');
 
+  // The import and subfiles packages read files relative to the importing
+  // file, and an imported file's own \input resolves beside it.
+  const importRoot = path.join(sourceRoot, 'import');
+  await mkdir(path.join(importRoot, 'parts/deeper/more'), { recursive: true });
+  await mkdir(path.join(importRoot, 'sections'));
+  await writeFile(
+    path.join(importRoot, 'main.tex'),
+    String.raw`\documentclass{article}
+\usepackage{import,subfiles}
+\begin{document}
+\import{parts/}{intro}
+\subfile{sections/sub}
+\inputfrom{parts/}{from} \includefrom{parts}{includedfrom}
+% \import{parts/}{ignored}
+\import{parts/}{missing} \import{../}{outside} \import*{parts/}{cycle}
+\end{document}`,
+  );
+  await writeFile(path.join(importRoot, 'detail.tex'), 'WRONG detail beside the main file.');
+  await writeFile(
+    path.join(importRoot, 'parts/intro.tex'),
+    String.raw`Imported intro. \input{detail} \subimport{deeper/}{leaf}`,
+  );
+  await writeFile(path.join(importRoot, 'parts/detail.tex'), 'Detail beside the imported file.');
+  await writeFile(
+    path.join(importRoot, 'parts/deeper/leaf.tex'),
+    String.raw`Leaf. \subinputfrom{more/}{a} \subincludefrom{more/}{b}`,
+  );
+  await writeFile(path.join(importRoot, 'parts/deeper/more/a.tex'), 'Sub input from.');
+  await writeFile(path.join(importRoot, 'parts/deeper/more/b.tex'), 'Sub include from.');
+  await writeFile(path.join(importRoot, 'parts/from.tex'), 'Input from.');
+  await writeFile(path.join(importRoot, 'parts/includedfrom.tex'), 'Include from.');
+  await writeFile(path.join(importRoot, 'parts/ignored.tex'), 'This commented import must stay excluded.');
+  await writeFile(path.join(importRoot, 'parts/cycle.tex'), String.raw`Cycle once. \subimport{./}{cycle}`);
+  await writeFile(path.join(sourceRoot, 'outside.tex'), 'OUTSIDE THE PAPER SOURCE');
+  await writeFile(
+    path.join(importRoot, 'sections/sub.tex'),
+    String.raw`\documentclass[../main.tex]{subfiles}
+\newcommand{\onlyhere}{SUBFILE PREAMBLE}
+\begin{document}
+Subfile body. \input{piece}
+\end{document}
+After the subfile document.`,
+  );
+  await writeFile(path.join(importRoot, 'sections/piece.tex'), 'Subfile piece.');
+  const imported = await readExpandedTex(path.join(importRoot, 'main.tex'), importRoot);
+  assert.match(
+    imported,
+    /Imported intro\. Detail beside the imported file\. Leaf\. Sub input from\. Sub include from\./,
+    'An imported file and its nested inputs and subimports must be read relative to their own folders.',
+  );
+  assert.match(imported, /Subfile body\. Subfile piece\./, 'A subfile must contribute its document body.');
+  assert.match(imported, /Input from\. Include from\./);
+  assert.equal(imported.match(/Cycle once\./g)?.length, 1, 'A self-importing file must be read once.');
+  assert.doesNotMatch(
+    imported,
+    /WRONG detail|SUBFILE PREAMBLE|main\.tex\]|After the subfile document|commented import must stay excluded|OUTSIDE THE PAPER SOURCE/,
+    'Only the subfile body, active imports, and files inside the source may be read.',
+  );
+  assert.doesNotMatch(
+    imported,
+    /^[^%\n]*\\(?:sub)?(?:import|inputfrom|includefrom|file)\b/m,
+    'No active import command may remain unexpanded.',
+  );
+
   // arXiv sources usually ship only the compiled .bbl for \bibliography{...}.
   const bblRoot = path.join(sourceRoot, 'bbl');
   await mkdir(bblRoot);
@@ -279,6 +350,101 @@ try {
     'A source record that cannot cross to a worker must be enriched on this thread.',
   );
 
+  // A hand-written list is cited in plain text. Each bracket in prose that names
+  // only its keys becomes a citation; math, command arguments, and other
+  // brackets stay text.
+  const readerAudit = async (name, tex) => {
+    const root = path.join(sourceRoot, name);
+    await mkdir(root);
+    await writeFile(path.join(root, 'main.tex'), tex);
+    return JSON.parse(
+      await enrichAuditFromTex(JSON.stringify({ nodes: [] }), {
+        entryFile: path.join(root, 'main.tex'),
+        sourceDirectory: root,
+      }),
+    );
+  };
+  const mentionsOf = (citations) => citations.map(({ key, locator }) => (locator ? `${key}|${locator}` : key));
+  const paragraphsOf = (audit) => audit.sourceBlocks.filter((block) => block.kind === 'paragraph');
+  const plainCited = await readerAudit(
+    'plain-cited',
+    String.raw`\documentclass{article}
+\newtheorem{theorem}{Theorem}
+\begin{document}
+\section{Introduction}
+As in [DP25] and [Buc88, Kob82], see [LT95, 4.3.2], [DP25, Theorem 3.1], [LT95, Remark 1.1.20., (i)], and [Kob82,
+Theorem 3]. Math stays: $[DP25]$, \[ f([Kob82]) \], and \begin{equation} x = [Buc88] \end{equation}
+Other brackets stay: [Foo99], [DP25, Foo99], [Theorem 2], [1]. % and a commented [DP25].
+
+\begin{itemize}\item[Kob82] An item label stays.\end{itemize}
+\begin{theorem}[Kob82]By [Kob82, Theorem 3], every bundle is stable.\end{theorem}
+
+\noindent {\bf References.}
+
+\noindent [Buc88] N. P. Buchdahl --- {\it First} --- Math. Ann. (1988).
+
+\noindent [DP25] S. Dinew, D. Popovici --- {\it Second} --- arXiv:2510.27362v1 [math.DG].
+
+\noindent [Kob82] S. Kobayashi --- {\it Third} --- Proc. Jap. Acad. (1982).
+
+\noindent [LT95] M. L\"ubke, A. Teleman --- {\it Fourth} --- World Scientific, 1995.
+\end{document}`,
+  );
+  const plainCitations = paragraphsOf(plainCited).flatMap((block) => block.citations);
+  assert.deepEqual(
+    mentionsOf(plainCitations),
+    ['DP25', 'Buc88', 'Kob82', 'LT95|4.3.2', 'DP25|Theorem 3.1', 'LT95|Remark 1.1.20., (i)', 'Kob82|Theorem 3'],
+    'Plain-text citations of a hand-written list must become citations in prose.',
+  );
+  assert.equal(plainCitations[0].arxivId, '2510.27362');
+  const plainText = paragraphsOf(plainCited)
+    .map((block) => block.content)
+    .join('\n');
+  for (const kept of ['$[DP25]$', '\\[ f([Kob82]) \\]', 'x = [Buc88]', '[Foo99], [DP25, Foo99], [Theorem 2], [1].'])
+    assert.ok(plainText.includes(kept), `${kept} must stay as written.`);
+  assert.doesNotMatch(plainText, /commented|\[\[cite:[^\]]*\]\] An item/);
+  const plainTheorem = plainCited.nodes.find((node) => node.id === 'source-unit-1');
+  assert.equal(plainTheorem.title, 'Kob82', 'A theorem note in brackets must stay its title.');
+  assert.deepEqual(mentionsOf(plainTheorem.citations), ['Kob82|Theorem 3']);
+  assert.deepEqual(
+    plainCited.sourceBlocks.filter((block) => block.kind === 'bibliography').map((block) => block.title),
+    ['Buc88', 'DP25', 'Kob82', 'LT95'],
+    'The entries of the list itself must not become citations.',
+  );
+
+  const numberCited = await readerAudit(
+    'number-cited',
+    String.raw`\begin{document}
+\section{Introduction}
+By [1] and [2, Theorem 4], and by [1, 2]. Math stays: $[1,2]$ and \[ [1] \].
+Other brackets stay: [0, 1], [1, 2.5], [3], and [1-2].
+\section*{References}
+[1] A. Author, {\it One}, J. (2001).
+
+[2] B. Author, {\it Two}, J. (2002).
+\end{document}`,
+  );
+  const numberParagraph = paragraphsOf(numberCited)[0];
+  assert.deepEqual(mentionsOf(numberParagraph.citations), ['1', '2|Theorem 4', '1', '2']);
+  for (const kept of ['$[1,2]$', '\\[ [1] \\]', '[0, 1], [1, 2.5], [3], and [1-2].'])
+    assert.ok(numberParagraph.content.includes(kept), `${kept} must stay as written.`);
+  const mixedCited = await readerAudit(
+    'mixed-cited',
+    String.raw`\begin{document}
+\section{Introduction}
+By [Kob82] but not [7].
+\section*{References}
+[Kob82] S. Kobayashi, {\it Third}, Proc. Jap. Acad. (1982).
+
+[7] A numbered entry in a list keyed by names.
+\end{document}`,
+  );
+  assert.deepEqual(
+    mentionsOf(paragraphsOf(mixedCited)[0].citations),
+    ['Kob82'],
+    'A bracketed number is a citation only when the whole list is numbered.',
+  );
+
   // A symbolic link inside the source tree must not pull in a file outside it.
   const outsideRoot = await mkdtemp(path.join(tmpdir(), 'arxivpecker-outside-'));
   try {
@@ -286,7 +452,10 @@ try {
     const linkedRoot = path.join(sourceRoot, 'linked');
     await mkdir(linkedRoot);
     await symlink(path.join(outsideRoot, 'secret.tex'), path.join(linkedRoot, 'secret.tex'));
-    await writeFile(path.join(linkedRoot, 'main.tex'), String.raw`Before. \input{secret} After.`);
+    await writeFile(
+      path.join(linkedRoot, 'main.tex'),
+      String.raw`Before. \input{secret} \subimport{./}{secret} After.`,
+    );
     const linked = await readExpandedTex(path.join(linkedRoot, 'main.tex'), linkedRoot);
     assert.doesNotMatch(linked, /PRIVATE KEY MATERIAL/, 'A symlinked include must not escape the paper source folder.');
     assert.match(linked, /Before\. .*After\./s);
@@ -296,6 +465,29 @@ try {
 } finally {
   await rm(sourceRoot, { recursive: true, force: true });
 }
+
+// The bundled m-positive paper writes its references by hand and cites them
+// in plain text, as [DP25] and [Kob87, Corollary 7.1.15].
+const mPositiveSource = path.resolve(
+  import.meta.dirname,
+  '../examples/starter-library/arxiv-2607.17203--m-positive-stability-of-holomorphic-vector-bundles-and-m/attachments/source',
+);
+const mPositive = JSON.parse(
+  await enrichAuditFromTex(JSON.stringify({ nodes: [] }), {
+    entryFile: path.join(mPositiveSource, 'm-pos-stability.tex'),
+    sourceDirectory: mPositiveSource,
+  }),
+);
+const mPositiveCitations = mPositive.sourceBlocks
+  .filter((block) => block.kind !== 'bibliography')
+  .flatMap((block) => block.citations);
+assert.equal(mPositiveCitations.find((citation) => citation.key === 'DP25')?.arxivId, '2510.27362');
+assert.ok(mPositiveCitations.some((citation) => citation.key === 'Kob87' && citation.locator === 'Corollary 7.1.15'));
+assert.ok(
+  mPositiveCitations.some((citation) => citation.key === 'Dem97' && citation.locator === 'V-§14'),
+  'A locator written as [Dem97, V-$\\S14$] must read as printed.',
+);
+assert.equal(mPositive.sourceBlocks.filter((block) => block.kind === 'bibliography').length, 12);
 
 const figureUnit =
   extractSourceUnits(String.raw`\newtheorem{example}{Example}\begin{example}% \includegraphics{discarded.png}
@@ -730,6 +922,38 @@ assert.deepEqual(
   'Commented and literal image examples must not become live paper assets.',
 );
 
+// biblatex's citation commands, their starred forms, and its multicites are
+// citations like \cite, in theorem statements and in prose; \nocite prints nothing.
+const biblatexCitations = String.raw`By \parencite{a}, \Parencite[p. 3]{b}, \textcite{c}, \Textcite*{d},
+\autocite[see][ch. 2]{e}, \Autocite{f}, \footcite{g}, \footcitetext{h}, \smartcite{i}, \supercite{j},
+\fullcite{k}, \Cite{l}, \cite*{m}, \citeauthor*{n}, \textcites[pre][post]{o}[post2]{p,q},
+\cites(Global)(end)[x]{r}{s}, \parencites{t}{u}, and \cite{v}{\em also \cite{w}}.\nocite{z}`;
+const biblatexMentions = [
+  ...['a', ['b', 'p. 3'], 'c', 'd', ['e', 'see; ch. 2'], 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n'],
+  ...[['o', 'pre; post'], ['p', 'post2'], ['q', 'post2'], ['r', 'Global; x'], ['s', 'end'], 't', 'u', 'v', 'w'],
+].map((mention) => (Array.isArray(mention) ? { key: mention[0], locator: mention[1] } : { key: mention, locator: '' }));
+assert.deepEqual(
+  extractSourceUnits(String.raw`\newtheorem{theorem}{Theorem}\begin{theorem}${biblatexCitations}\end{theorem}`)[0]
+    .citationMentions,
+  biblatexMentions,
+  'biblatex citation commands must be read as citations in a result.',
+);
+const biblatexParagraph = buildSourceBlocks(
+  String.raw`\begin{document}${biblatexCitations}\end{document}`,
+  [],
+  new Map(),
+).find((block) => block.kind === 'paragraph');
+assert.deepEqual(
+  biblatexParagraph.citations.map(({ key, locator }) => ({ key, locator })),
+  biblatexMentions,
+  'biblatex citation commands must become citation markers in prose.',
+);
+assert.doesNotMatch(
+  biblatexParagraph.content,
+  /\\\w*cite|\(Global\)|\[post2\]|\{u\}/i,
+  'No part of a biblatex citation may leak into prose.',
+);
+
 const bibliographyBlocks = buildSourceBlocks(
   String.raw`\begin{document}\begin{thebibliography}{9}\bibitem{alpha} A. Author. \newblock \emph{First reference.}\bibitem[Beta]{beta} B. Author. \newblock \textit{Second reference.}\end{thebibliography}\end{document}`,
   [],
@@ -748,6 +972,139 @@ assert.ok(
 assert.ok(
   bibliographyBlocks.some((block) => block.kind === 'section' && block.title === 'References'),
   'An inline bibliography must receive a readable references heading.',
+);
+
+// Some authors write the reference list by hand: a References heading, then
+// entries that open with a bracketed key instead of \bibitem.
+const handWrittenSource = String.raw`\documentclass{article}\begin{document}
+\section{Introduction}
+Body text.
+
+\vspace{6ex}
+
+\noindent {\bf References.} \\
+
+\noindent [Buc88]\, N. P. Buchdahl --- {\it Hermitian-Einstein Connections} --- Math. Ann. {\bf 280} (1988), 625-648.
+
+\vspace{1ex}
+
+%\noindent [Old25]\, A. Withdrawn --- {\it Withdrawn} --- arXiv:2501.00001.
+
+\noindent [DP25]\, S. Dinew, D. Popovici --- {\it $m$-Pseudo-effectivity} --- arXiv:2510.27362v1 [math.DG].
+
+\noindent [Web]\, A. Author, \emph{Online notes}, \url{https://example.org/notes.pdf}, doi:10.1000/xyz123.
+
+\vspace{6ex}
+
+\noindent Institut de Math\'ematiques, Toulouse
+\end{document}`;
+const handWritten = extractBibliography(handWrittenSource);
+const referenceFields = (reference) =>
+  reference && {
+    title: reference.title,
+    authors: reference.authors,
+    arxivId: reference.arxivId,
+    doi: reference.doi,
+    url: reference.url,
+  };
+assert.deepEqual([...handWritten.keys()], ['Buc88', 'DP25', 'Web'], 'A hand-written list must be the bibliography.');
+assert.deepEqual(referenceFields(handWritten.get('DP25')), {
+  title: '$m$-Pseudo-effectivity',
+  authors: 'S. Dinew, D. Popovici',
+  arxivId: '2510.27362',
+  doi: '',
+  url: 'https://arxiv.org/abs/2510.27362',
+});
+assert.deepEqual(referenceFields(handWritten.get('Web')), {
+  title: 'Online notes',
+  authors: 'A. Author',
+  arxivId: '',
+  doi: '10.1000/xyz123',
+  url: 'https://example.org/notes.pdf',
+});
+assert.match(
+  handWritten.get('Buc88').text,
+  /^N\. P\. Buchdahl --- Hermitian-Einstein Connections --- Math\. Ann\. 280/,
+);
+const handWrittenBlocks = buildSourceBlocks(handWrittenSource, [], handWritten);
+assert.deepEqual(
+  handWrittenBlocks.map((block) => [block.kind, block.title]).slice(-5),
+  [
+    ['section', 'References'],
+    ['bibliography', 'Buc88'],
+    ['bibliography', 'DP25'],
+    ['bibliography', 'Web'],
+    ['paragraph', ''],
+  ],
+  'A hand-written list must render as one references heading and one block per entry.',
+);
+assert.equal(handWrittenBlocks.find((block) => block.title === 'DP25').citations[0].arxivId, '2510.27362');
+assert.match(handWrittenBlocks.at(-1).content, /^Institut de Mathématiques, Toulouse$/);
+assert.doesNotMatch(
+  handWrittenBlocks.map((block) => block.content).join('\n'),
+  /References\.|\[Buc88\]|Withdrawn|\\,/,
+  'The heading, keys, and commented entries of a hand-written list must not leak into the reader.',
+);
+for (const [heading, list, keys] of [
+  [
+    String.raw`\section*{References}`,
+    String.raw`[1] A. Author, {\em First title}, J. One (2001).
+
+[2] B. Author, {\em Second title}, J. Two (2002).`,
+    ['1', '2'],
+  ],
+  [
+    String.raw`\textbf{References}`,
+    String.raw`\begin{description}
+\item[AB01] A. Author, \textit{First title}, J. One (2001).
+\item [CD02] B. Author, \textit{Second title}, J. Two (2002).
+\end{description}`,
+    ['AB01', 'CD02'],
+  ],
+  [
+    'References',
+    String.raw`[AB01] A. Author, {\it First title}, J. One (2001).\\
+[CD02] B. Author, {\it Second title}, J. Two (2002).`,
+    ['AB01', 'CD02'],
+  ],
+  [
+    String.raw`\noindent{\bf Bibliography}\medskip`,
+    String.raw`\noindent[1] A. Author, {\it First title}, J. One (2001).
+
+\noindent[2] B. Author, {\it Second title}, J. Two (2002).`,
+    ['1', '2'],
+  ],
+]) {
+  const source = String.raw`\begin{document}\section{Body}Text.
+
+${heading}
+${list}
+\end{document}`;
+  const references = extractBibliography(source);
+  assert.deepEqual([...references.keys()], keys, `A list under ${heading} must be the bibliography.`);
+  assert.deepEqual(
+    [...references.values()].map((reference) => [reference.authors, reference.title]),
+    [
+      ['A. Author', 'First title'],
+      ['B. Author', 'Second title'],
+    ],
+  );
+  assert.deepEqual(
+    buildSourceBlocks(source, [], references).map((block) => [block.kind, block.title]),
+    [['section', 'Body'], ['paragraph', ''], ['section', 'References'], ...keys.map((key) => ['bibliography', key])],
+    `A list under ${heading} must render as entries after one references heading.`,
+  );
+}
+assert.equal(
+  extractBibliography(String.raw`\begin{document}
+References
+
+We thank the referee.
+
+[1] is not an entry after prose.
+\end{document}`).size,
+  0,
+  'Prose between the heading and a bracket must not make a hand-written list.',
 );
 
 const decorative = readableLatex(
@@ -821,6 +1178,105 @@ assert.match(
   literalMacroExample,
   /Live \$\\mathbb R\$[.]/,
   'A real author macro must still expand outside literal source examples.',
+);
+
+const expandedFormulas = (preamble, body) =>
+  [...expandAuthorMacros(`${preamble}\\begin{document}${body}\\end{document}`).matchAll(/\$([^$]*)\$/g)].map(
+    (match) => match[1],
+  );
+const assertTypesets = (formulas) => {
+  for (const formula of formulas)
+    assert.doesNotThrow(() => katex.renderToString(formula, { throwOnError: true, strict: 'ignore' }), formula);
+};
+assert.deepEqual(
+  expandedFormulas(String.raw`\newcommand{\norm}[1]{\left\lVert#1\right\rVert}`, String.raw`$\norm{x}y$`),
+  [String.raw`\left\lVert x\right\rVert y`],
+  'A replacement ending in a control word must not absorb the letter after the use.',
+);
+// Without these declarations, KaTeX shows an undefined \abs{x} as "abs x".
+const pairedDelimiters = expandedFormulas(
+  String.raw`\DeclarePairedDelimiter\abs{\lvert}{\rvert}
+\DeclarePairedDelimiter{\ceil}{\lceil}{\rceil}
+\DeclarePairedDelimiter\paren()
+\DeclarePairedDelimiterX\inner[2]{\langle}{\rangle}{#1,#2}
+\DeclarePairedDelimiterX\set[1]\lbrace\rbrace{\def\given{\;\delimsize\vert\;}#1}
+\DeclarePairedDelimiterX{\cond}[2]{(}{)}{#1\delimsize|#2}
+\DeclarePairedDelimiterXPP\Prob[1]{\mathbb{P}}(){}{#1}`,
+  String.raw`$\abs{x}$ $\abs*{\frac12}$ $\abs[\big]{x}$ $\abs[\Big]{x}$ $\abs[\bigg]{x}$ $\abs[\Bigg]{x}$ $\ceil{x}$
+$\paren{x}y$ $\inner{a}{b}$ $\inner[\big]{a}{b}$ $\set{x\given x>0}$ $\cond{A}{B}$ $\cond[\Big]{A}{B}$ $\Prob{A}$`,
+);
+// As in mathtools: the plain form keeps the normal size, the starred form scales.
+assert.deepEqual(pairedDelimiters, [
+  String.raw`\mathopen\lvert x\mathclose\rvert`,
+  String.raw`\left\lvert\frac12\right\rvert`,
+  String.raw`\bigl\lvert x\bigr\rvert`,
+  String.raw`\Bigl\lvert x\Bigr\rvert`,
+  String.raw`\biggl\lvert x\biggr\rvert`,
+  String.raw`\Biggl\lvert x\Biggr\rvert`,
+  String.raw`\mathopen\lceil x\mathclose\rceil`,
+  String.raw`\mathopen(x\mathclose)y`,
+  String.raw`\mathopen\langle a,b\mathclose\rangle`,
+  String.raw`\bigl\langle a,b\bigr\rangle`,
+  String.raw`\mathopen\lbrace x\;\vert\; x>0\mathclose\rbrace`,
+  String.raw`\mathopen(A|B\mathclose)`,
+  String.raw`\Bigl(A\Big|B\Bigr)`,
+  String.raw`\mathbb{P}\mathopen(A\mathclose)`,
+]);
+assertTypesets(pairedDelimiters);
+
+const documentCommands = expandedFormulas(
+  String.raw`\NewDocumentCommand\nrm{m}{\lVert #1\rVert}
+\NewDocumentCommand{\Norm}{s O{} m}{\IfBooleanTF{#1}{\left\lVert #3\right\rVert}{\lVert #3\rVert}_{#2}}
+\DeclareDocumentCommand\opt{o +m}{\IfNoValueTF{#1}{f(#2)}{f_{#1}(#2)}}
+\NewDocumentCommand\sub{m o}{#1\IfValueT{#2}{_{#2}}}
+\ProvideDocumentCommand\nrm{m}{WRONG}
+\NewDocumentCommand\verbatimArgument{v}{#1}
+\NewDocumentCommand\blank{m}{\IfBlankTF{#1}{a}{b}}`,
+  String.raw`$\nrm{x}y$ $\Norm{x}$ $\Norm*[2]{x}$ $\opt{x}$ $\opt [n] {x}$ $\sub{x}$ $\sub{x}[i]$
+$\verbatimArgument|x|$ $\blank{x}$`,
+);
+assert.deepEqual(documentCommands, [
+  String.raw`\lVert x\rVert y`,
+  String.raw`\lVert x\rVert_{}`,
+  String.raw`\left\lVert x\right\rVert_{2}`,
+  'f(x)',
+  'f_{n}(x)',
+  'x',
+  'x_{i}',
+  // Argument types and tests the reader cannot follow stay undefined, never
+  // half-expanded.
+  String.raw`\verbatimArgument|x|`,
+  String.raw`\blank{x}`,
+]);
+assertTypesets(documentCommands.slice(0, 7));
+assert.equal(
+  readableLatex(
+    String.raw`\DeclarePairedDelimiter\paren() \DeclarePairedDelimiterX\inner[2]{\langle}{\rangle}{#1,#2} \NewDocumentCommand{\nrm}{m}{\lVert #1\rVert} Text.`,
+  ),
+  'Text.',
+  'Paired-delimiter and document-command declarations must not leak into reader text.',
+);
+
+// KaTeX has no siunitx, so \SI{3}{\meter} would read as "SI 3 meter".
+const quantities = readableLatex(
+  String.raw`A speed of \SI{3}{\meter\per\second} and $v = \qty{3}{\meter}$, \si{\kilogram\per\meter\per\second\squared}, \si{\per\second}, \num{1e3}, \num{-1.5e-3}, \ang{30}, $\ang{1;2;3}$, \qty{9.81}{m/s^2}, \SI{30}{\degree}.\sisetup{per-mode=symbol}`,
+);
+assert.equal(
+  quantities,
+  String.raw`A speed of $3\,\mathrm{m/s}$ and $v = 3\,\mathrm{m}$, $\mathrm{kg/(m\,s^{2})}$, $\mathrm{s^{-1}}$, $1\times 10^{3}$, $-1.5\times 10^{-3}$, $30^{\circ}$, $1^{\circ}2'3''$, $9.81\,\mathrm{m/s^2}$, $30\mathrm{{}^{\circ}}$.`,
+);
+const units = readableLatex(
+  String.raw`$\si{\kilo\meter} \si{\milli\gram} \si{\micro\second} \si{\nano\meter} \si{\centi\metre} \si{\mega\hertz} \si{\giga\watt} \si{\newton\meter} \si{\joule\per\kelvin\per\mole} \si{\volt\ampere} \si{\pascal} \si{\meter\cubed}$`,
+);
+assert.equal(
+  units,
+  String.raw`$\mathrm{km} \mathrm{mg} \mathrm{\mu s} \mathrm{nm} \mathrm{cm} \mathrm{MHz} \mathrm{GW} \mathrm{N\,m} \mathrm{J/(K\,mol)} \mathrm{V\,A} \mathrm{Pa} \mathrm{m^{3}}$`,
+);
+assertTypesets([...`${quantities} ${units}`.matchAll(/\$([^$]*)\$/g)].map((match) => match[1]));
+assert.equal(
+  readableLatex(String.raw`$\qty{x}$ and $\qty(y)$ \begin{verbatim}\SI{3}{\meter}\end{verbatim}`),
+  String.raw`$\qty{x}$ and $\qty(y)$ \begin{verbatim}\SI{3}{\meter}\end{verbatim}`,
+  "The physics package's \\qty and literal source examples must stay as written.",
 );
 
 const horizontalFill = readableLatex(String.raw`Conclusion.\hfil Middle.\hfill $\Box$`);

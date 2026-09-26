@@ -24,6 +24,56 @@ assert.notEqual(
   'Display and inline math are cached separately.',
 );
 
+// Package commands KaTeX lacks must not fall back to operator names such as
+// "abs x", "mathbbm 1", or "SI 3 meter". Compare what a reader sees and hears:
+// the rendered HTML and MathML text, without the TeX source annotation.
+const renderedText = (expression, display = false) =>
+  (renderMath(expression, display) ?? 'did not typeset')
+    .replace(/<annotation[\s\S]*?<\/annotation>/g, '')
+    .replace(/<[^>]+>/g, '');
+for (const [command, definition] of [
+  [String.raw`\abs{x}`, String.raw`\left\lvert x\right\rvert`],
+  [String.raw`\abs*{x}`, String.raw`\left\lvert x\right\rvert`],
+  [String.raw`\abs[\big]{x}`, String.raw`\bigl\lvert x\bigr\rvert`],
+  [String.raw`\norm{x}`, String.raw`\left\lVert x\right\rVert`],
+  [String.raw`\ceil{x}`, String.raw`\left\lceil x\right\rceil`],
+  [String.raw`\floor{x}`, String.raw`\left\lfloor x\right\rfloor`],
+  [String.raw`\mathds{R}`, String.raw`\mathbb{R}`],
+  [String.raw`\SI{3}{\meter}`, String.raw`3\,\mathrm{m}`],
+  [String.raw`\si{\kilo\meter\per\second\squared}`, String.raw`\mathrm{km/s^{2}}`],
+  [String.raw`\si{\micro\meter}`, String.raw`\mathrm{\mu m}`],
+  [String.raw`\num{0.5}`, '0.5'],
+  [String.raw`\ang{30}`, String.raw`30^{\circ}`],
+  [String.raw`x \defeq y`, String.raw`x \coloneqq y`],
+  [String.raw`\faktor{G}{H}`, String.raw`{\raisebox{.2em}{$G$}\left/\raisebox{-.2em}{$H$}\right.}`],
+  [String.raw`\bigslant{G}{H}`, String.raw`{\raisebox{.2em}{$G$}\left/\raisebox{-.2em}{$H$}\right.}`],
+  [String.raw`\textsc{abc}`, String.raw`\text{abc}`],
+  [String.raw`\esssup_x f`, String.raw`\operatorname*{ess\,sup}_x f`],
+  [String.raw`\essinf_x f`, String.raw`\operatorname*{ess\,inf}_x f`],
+  [String.raw`\int f \dd x`, String.raw`\int f \mathop{}\!\mathrm{d}x`],
+])
+  assert.equal(renderedText(command), renderedText(definition), `${command} must render as ${definition}.`);
+assert.equal(renderedText(String.raw`\abs{x}`), '∣x∣∣x∣', 'MathML and HTML both show the bars, never "abs".');
+// KaTeX's \mathbb has no digits, so every spelling of the indicator 1 draws it
+// and gives MathML the double-struck character.
+for (const indicator of [
+  String.raw`\mathbbm{1}_A`,
+  String.raw`\mathds{1}_A`,
+  String.raw`\mathbb{1}_A`,
+  String.raw`\mathbb 1_A`,
+  String.raw`\1_A`,
+  String.raw`\bbone_A`,
+]) {
+  assert.match(renderMath(indicator, false) ?? '', /<mi mathvariant="normal">𝟙<\/mi>/, indicator);
+  assert.equal(renderedText(indicator), renderedText(String.raw`\bbone_A`), indicator);
+}
+assert.equal(renderedText(String.raw`\mathbb{1}x`), renderedText(String.raw`\bbone x`));
+const intertext = renderedText(String.raw`\begin{aligned}a&=b\\\intertext{so}c&=d\end{aligned}`, true);
+assert.match(intertext, /so/);
+assert.doesNotMatch(intertext, /intertext/, '\\intertext must set its text between rows.');
+for (const average of [String.raw`\fint_B f`, String.raw`\dashint_B f`])
+  assert.doesNotMatch(renderedText(average, true), /fint|dashint/, `${average} must draw an averaged integral.`);
+
 // Reader state is saved for every paper whose slice changed, and only for those.
 const note = (paperId, id) => ({ id, paperId, nodeId: 'n', anchor: '', text: id, latex: '', createdAt: '' });
 const a1 = note('A', 'a1');
@@ -333,3 +383,13 @@ assert.equal(newerVersion('2401.00001', baseline), '2401.00001v2', 'An unversion
 assert.equal(parseWatch('{broken'), null);
 assert.deepEqual(parseWatch(JSON.stringify(later)).newIds, ['W3', 'W2']);
 console.log('Reader logic: update and citation watch verified.');
+
+// AI-written citations read like the paper's, whichever citation package they use.
+{
+  const { cleanTeXProse } = await import('../app/lib/tex-text.ts');
+  assert.equal(
+    cleanTeXProse(String.raw`As \parencite[Thm.~2]{kn} and \textcite{ab,cd} show, see also \cite{ef}.`),
+    'As [kn, Thm.~2] and [ab] [cd] show, see also [ef].',
+  );
+  console.log('Reader logic: citation commands in AI text verified.');
+}

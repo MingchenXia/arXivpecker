@@ -1,11 +1,84 @@
 import katex from 'katex';
 import type { CitationReference } from './types';
 
+// A mathtools-style delimiter pair: `\abs{x}` at normal size, the scaling
+// `\abs*{x}`, and `\abs[\big]{x}` at a fixed size.
+function pairedDelimiter(left: string, right: string) {
+  return `\\@ifstar{\\@readerpaired${left}${right}}{\\@ifnextchar[{\\@readersized${left}${right}}{\\@readerplain${left}${right}}}`;
+}
+
+// Defaults for commands from common packages that KaTeX lacks. The TeX pipeline
+// expands an author's own definitions first, so these apply only to commands
+// the author took from a package or never defined, and to AI-written math.
 const readerKatexMacros = {
   '\\qed': '\\square',
   '\\qedsymbol': '\\square',
   '\\qedhere': '\\square',
   '\\mbox': '\\text{#1}',
+  '\\@readerpaired': '\\left#1#3\\right#2',
+  '\\@readerplain': '\\mathopen{#1}#3\\mathclose{#2}',
+  // KaTeX's \def reads the delimited `[size]` argument; `##` defers its parameters.
+  '\\@readersized': '\\def\\@readerbody[##1]##2{\\mathopen{##1#1}##2\\mathclose{##1#2}}\\@readerbody',
+  '\\abs': pairedDelimiter('\\lvert', '\\rvert'),
+  '\\norm': pairedDelimiter('\\lVert', '\\rVert'),
+  '\\ceil': pairedDelimiter('\\lceil', '\\rceil'),
+  '\\floor': pairedDelimiter('\\lfloor', '\\rfloor'),
+  // KaTeX's blackboard font has no digits: \mathbb{1} prints a plain 1. Draw the
+  // indicator 1 as an overlapping 1 and l, and give MathML the real character.
+  '\\bbone': '\\html@mathml{\\mathrm{1}\\mkern-4mu\\mathrm{l}}{\\char"1D7D9}',
+  '\\1': '\\bbone',
+  '\\mathbbm': '\\mathbb{#1}',
+  '\\mathds': '\\mathbb{#1}',
+  // siunitx. The TeX pipeline rewrites author TeX, including exponents such as
+  // \num{1e3} that a macro cannot parse; these cover AI-written math. \qty is
+  // left out because the physics package uses that name for bracing.
+  '\\SI': '#1\\,\\mathrm{#2}',
+  '\\si': '\\mathrm{#1}',
+  '\\unit': '\\mathrm{#1}',
+  '\\num': '{#1}',
+  '\\ang': '{#1}^{\\circ}',
+  '\\per': '/',
+  '\\squared': '^{2}',
+  '\\cubed': '^{3}',
+  '\\meter': 'm',
+  '\\metre': 'm',
+  '\\second': 's',
+  '\\kilogram': 'kg',
+  '\\gram': 'g',
+  '\\kelvin': 'K',
+  '\\ampere': 'A',
+  '\\mole': 'mol',
+  '\\hertz': 'Hz',
+  '\\newton': 'N',
+  '\\joule': 'J',
+  '\\watt': 'W',
+  '\\volt': 'V',
+  '\\pascal': 'Pa',
+  '\\kilo': 'k',
+  '\\milli': 'm',
+  '\\micro': '\\mu',
+  '\\nano': 'n',
+  '\\centi': 'c',
+  '\\mega': 'M',
+  '\\giga': 'G',
+  '\\defeq': '\\coloneqq',
+  // The faktor package and the common \bigslant definition: a raised numerator,
+  // a slash, and a lowered denominator.
+  '\\faktor': '{\\raisebox{.2em}{$#1$}\\left/\\raisebox{-.2em}{$#2$}\\right.}',
+  '\\bigslant': '{\\raisebox{.2em}{$#1$}\\left/\\raisebox{-.2em}{$#2$}\\right.}',
+  '\\textsc': '\\text{#1}',
+  // amsmath sets \intertext flush left between rows; start it at the alignment
+  // point without widening the first column.
+  '\\intertext': '\\mathrlap{\\text{#1}}\\\\',
+  '\\shortintertext': '\\mathrlap{\\text{#1}}\\\\',
+  // The esint package's averaged integral: a bar across \int in every style.
+  '\\fint':
+    '\\mathop{\\mathchoice{\\mathrlap{\\mkern6.5mu-}}{\\mathrlap{\\mkern3.5mu-}}{\\mathrlap{\\mkern2mu-}}{\\mathrlap{\\mkern1.5mu-}}\\int}\\nolimits',
+  '\\dashint': '\\fint',
+  '\\esssup': '\\operatorname*{ess\\,sup}',
+  '\\essinf': '\\operatorname*{ess\\,inf}',
+  // The physics package's differential, spaced like an operator.
+  '\\dd': '\\mathop{}\\!\\mathrm{d}',
 };
 
 function unknownMathMacroFallback(command: string) {
@@ -47,7 +120,10 @@ export function renderMath(expression: string, displayMode: boolean) {
 }
 
 function typesetMath(expression: string, displayMode: boolean) {
-  const normalized = expression.replace(/\uE000/g, '\\text{\\$}').replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}');
+  const normalized = expression
+    .replace(/\uE000/g, '\\text{\\$}')
+    .replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}')
+    .replace(/\\(?:mathbb|mathbbm|mathds)\s*(?:\{\s*1\s*\}|1)/g, '\\bbone ');
   let candidate = normalized;
   for (let attempt = 0; attempt < 16; attempt += 1) {
     try {
@@ -162,10 +238,11 @@ function normalizeDisplayMathEnvironments(source: string) {
     );
 }
 
+// AI-written text cites like the paper: \cite and its natbib and biblatex forms.
 export function cleanTeXProse(value: string) {
   return normalizeDisplayMathEnvironments(unwrapTextColorCommands(decodeTeXText(value)))
     .replace(
-      /\$\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}\$/g,
+      /\$\\(?:[Cc]ite\w*|(?:[Pp]aren|[Tt]ext|[Aa]uto|[Ss]mart|[Ss]uper|[Ff]ull|[Ff]oot(?:full)?)cite(?:text)?)\*?\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}\$/g,
       (_match, preNote: string | undefined, postNote: string | undefined, keys: string) => {
         const locator = [preNote, postNote]
           .map((item) => item?.trim())
@@ -178,7 +255,7 @@ export function cleanTeXProse(value: string) {
       },
     )
     .replace(
-      /\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}/g,
+      /\\(?:[Cc]ite\w*|(?:[Pp]aren|[Tt]ext|[Aa]uto|[Ss]mart|[Ss]uper|[Ff]ull|[Ff]oot(?:full)?)cite(?:text)?)\*?\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}/g,
       (_match, preNote: string | undefined, postNote: string | undefined, keys: string) => {
         const locator = [preNote, postNote]
           .map((item) => item?.trim())
