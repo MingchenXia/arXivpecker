@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { get as httpGet } from 'node:http';
 import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
@@ -140,8 +141,14 @@ try {
   assert.equal(missingRoute.status, 404, 'Unknown bridge routes must return a bounded JSON 404.');
 
   const malformed = await fetch(`${url}/vault/paper`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' }, body: '{broken' });
-  assert.equal(malformed.status, 500);
+  assert.equal(malformed.status, 400, 'A malformed request body is a client error.');
   assert.match((await malformed.json()).error, /must be JSON/);
+
+  // fetch() always sends the real Host header, so use node:http to spoof it.
+  const reboundStatus = await new Promise((resolve, reject) => {
+    httpGet({ host: '127.0.0.1', port, path: '/vault', headers: { Host: `attacker.example:${port}` } }, (reply) => { reply.resume(); resolve(reply.statusCode); }).on('error', reject);
+  });
+  assert.equal(reboundStatus, 403, 'A DNS-rebound host name must not read the local library.');
 
   const missingPaper = await jsonRequest(url, '/vault/paper', { paper: { title: '' } });
   assert.equal(missingPaper.response.status, 400, 'Incomplete paper metadata must be rejected before writing to the vault.');
@@ -287,6 +294,7 @@ try {
   const asset = await fetch(`${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=figure.svg`, { headers: { Origin: 'http://localhost:3000' } });
   assert.equal(asset.status, 200);
   assert.equal(asset.headers.get('content-type'), 'image/svg+xml');
+  assert.match(asset.headers.get('content-security-policy') ?? '', /sandbox/, 'An SVG opened directly must not run script on the bridge origin.');
   const dottedAsset = await fetch(`${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=${encodeURIComponent('..valid.svg')}`, { headers: { Origin: 'http://localhost:3000' } });
   assert.equal(dottedAsset.status, 200, 'A legitimate filename beginning with two dots must not be mistaken for parent traversal.');
 

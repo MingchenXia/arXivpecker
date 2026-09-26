@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline';
@@ -1763,6 +1764,7 @@ class CodexAppServer {
         if (text) console.error(`[proofroom-codex] ${text}`);
       });
       child.on('error', (error) => this.stopWithError(error, child));
+      child.stdin.on('error', (error) => this.stopWithError(error, child));
       child.on('exit', (code) => this.stopWithError(new Error(`Codex app-server exited (${code ?? 'unknown'}).`), child));
 
       (async () => {
@@ -2157,6 +2159,10 @@ function bodyLimitFor(pathname) {
   return DEFAULT_JSON_BODY_CHARS;
 }
 
+function httpError(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
 function readBody(request, maxChars = DEFAULT_JSON_BODY_CHARS) {
   return new Promise((resolve, reject) => {
     // Decode the whole stream as UTF-8. Appending raw Buffer chunks decodes each
@@ -2167,11 +2173,14 @@ function readBody(request, maxChars = DEFAULT_JSON_BODY_CHARS) {
     request.on('data', (chunk) => {
       if (tooLarge) return;
       body += chunk;
-      if (body.length > maxChars) { tooLarge = true; body = ''; reject(new Error('Request body is too large.')); }
+      if (body.length > maxChars) { tooLarge = true; body = ''; reject(httpError(413, 'Request body is too large.')); }
     });
     request.on('end', () => {
       if (tooLarge) return;
-      try { resolve(JSON.parse(body || '{}')); } catch { reject(new Error('Request body must be JSON.')); }
+      let parsed;
+      try { parsed = JSON.parse(body || '{}'); } catch { return reject(httpError(400, 'Request body must be JSON.')); }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return reject(httpError(400, 'Request body must be a JSON object.'));
+      resolve(parsed);
     });
     request.on('error', reject);
   });
@@ -2235,6 +2244,10 @@ async function collectFigureFiles(directory, root = directory, depth = 0) {
   return files;
 }
 
+function previewName(key) {
+  return createHash('sha256').update(key).digest('base64url');
+}
+
 async function realPathIsInside(root, candidate) {
   const [realRoot, realCandidate] = await Promise.all([realpath(root), realpath(candidate)]);
   const relative = path.relative(realRoot, realCandidate);
@@ -2266,7 +2279,7 @@ async function figureAsset(paperId, requestedPath) {
     candidate = found?.absolute || null;
   }
   const previewDirectory = path.join(sourceRoot, '.proofroom-previews');
-  const previewToken = Buffer.from(requested).toString('base64url').slice(0, 72);
+  const previewToken = previewName(`remote:${requested}`);
   const remotePreview = path.join(previewDirectory, `${previewToken}.png`);
   if (!candidate) {
     await mkdir(previewDirectory, { recursive: true });
@@ -2278,7 +2291,7 @@ async function figureAsset(paperId, requestedPath) {
   const sourceExtension = path.extname(candidate).toLowerCase();
   if (['.pdf', '.eps', '.ps', '.tif', '.tiff', '.bmp'].includes(sourceExtension)) {
     await mkdir(previewDirectory, { recursive: true });
-    const token = Buffer.from(path.relative(sourceRoot, candidate)).toString('base64url').slice(0, 72); const preview = path.join(previewDirectory, `${token}.png`);
+    const token = previewName(path.relative(sourceRoot, candidate)); const preview = path.join(previewDirectory, `${token}.png`);
     try { await stat(preview); }
     catch {
       try {
@@ -2317,10 +2330,17 @@ async function originalPaperAsset(paperId) {
   return payload;
 }
 
+// A DNS-rebound page reaches 127.0.0.1 under its own host name and sends no
+// Origin header on same-origin GETs, so the Host header must be checked too.
+const allowedHosts = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
+
 const server = createServer(async (request, response) => {
   const origin = request.headers.origin;
   if (!isAllowedOrigin(origin)) return sendJson(response, 403, { error: 'This local bridge accepts only localhost origins.' }, origin);
-  const pathname = new URL(request.url || '/', `http://${HOST}:${PORT}`).pathname;
+  if (!allowedHosts.has(String(request.headers.host || '').toLowerCase())) return sendJson(response, 403, { error: 'This local bridge accepts only localhost host names.' }, origin);
+  let pathname;
+  try { pathname = new URL(request.url || '/', `http://${HOST}:${PORT}`).pathname; }
+  catch { return sendJson(response, 400, { error: 'Malformed request URL.' }, origin); }
   if (request.method === 'OPTIONS') {
     response.writeHead(204, {
       ...(origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}),
@@ -2334,7 +2354,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && pathname === '/asset') {
       const url = new URL(request.url || '/', `http://${HOST}:${PORT}`); const paperId = url.searchParams.get('paperId') || ''; const file = url.searchParams.get('file') || '';
       const asset = await figureAsset(paperId, file);
-      response.writeHead(200, { 'Content-Type': asset.mime, 'Cache-Control': 'private, max-age=3600', ...(origin && isAllowedOrigin(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) });
+      response.writeHead(200, { 'Content-Type': asset.mime, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff', ...(asset.mime === 'image/svg+xml' ? { 'Content-Security-Policy': "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'" } : {}), ...(origin && isAllowedOrigin(origin) ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}) });
       return response.end(asset.payload);
     }
     if (request.method === 'GET' && pathname === '/paper-pdf') {
@@ -2358,7 +2378,7 @@ const server = createServer(async (request, response) => {
     }
     const body = await readBody(request, bodyLimitFor(pathname));
     if (pathname === '/cloud/share') return sendJson(response, 200, { share: await createCloudShare(vault, body) }, origin);
-    if (pathname === '/vault/profile') return sendJson(response, 200, { profile: await vault.saveProfile(normalizeProfile(body.profile)) }, origin);
+    if (pathname === '/vault/profile') return sendJson(response, 200, { profile: await enqueueVaultMutation(() => vault.saveProfile(normalizeProfile(body.profile))) }, origin);
     if (pathname === '/vault/link') return sendJson(response, 200, await enqueueVaultMutation(async () => ({ link: await vault.addLink(body.link), graph: await vault.rebuildGraph() })), origin);
     if (pathname === '/vault/link/delete') return sendJson(response, 200, await enqueueVaultMutation(async () => { await vault.removeLink(String(body.linkId || '')); return { graph: await vault.rebuildGraph() }; }), origin);
     if (pathname === '/vault/paper/delete') {
@@ -2369,7 +2389,7 @@ const server = createServer(async (request, response) => {
     if (pathname === '/vault/paper/order') return sendJson(response, 200, { order: await enqueueVaultMutation(() => vault.reorderPapers(body.paperIds)) }, origin);
     if (pathname === '/vault/reader') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
-      return sendJson(response, 200, { reader: await vault.saveReader(String(body.paperId), body.reader ?? {}) }, origin);
+      return sendJson(response, 200, { reader: await enqueueVaultMutation(() => vault.saveReader(String(body.paperId), body.reader ?? {})) }, origin);
     }
     if (pathname === '/vault/patches') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
@@ -2378,7 +2398,7 @@ const server = createServer(async (request, response) => {
     }
     if (pathname === '/vault/export') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
-      return sendJson(response, 200, { saved: await vault.saveExport(String(body.paperId), body.export ?? {}) }, origin);
+      return sendJson(response, 200, { saved: await enqueueVaultMutation(() => vault.saveExport(String(body.paperId), body.export ?? {})) }, origin);
     }
     if (pathname === '/vault/latex-export') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
@@ -2386,7 +2406,7 @@ const server = createServer(async (request, response) => {
     }
     if (pathname === '/vault/citation-asset') {
       if (!body.paperId) return sendJson(response, 400, { error: 'paperId is required.' }, origin);
-      return sendJson(response, 200, { saved: await vault.saveCitationAsset(String(body.paperId), body.upload ?? {}) }, origin);
+      return sendJson(response, 200, { saved: await enqueueVaultMutation(() => vault.saveCitationAsset(String(body.paperId), body.upload ?? {})) }, origin);
     }
     if (pathname === '/vault/source-upload') {
       if (!validatePaper(body.paper)) return sendJson(response, 400, { error: 'A paper title and local source record are required.' }, origin);
@@ -2415,12 +2435,20 @@ const server = createServer(async (request, response) => {
         return { ...compared, fromVersion, toVersion, sources: { from: fromSource.kind, to: toSource.kind } };
       }
       if (pathname === '/analyze') {
-        const paper = { ...body.paper, id: String(body.paper.id) }; await vault.recordFor(paper.id);
+        const paper = { ...body.paper, id: String(body.paper.id) };
         const checkpointing = !body.updateMode;
-        if (checkpointing && activeAuditPaperIds.has(paper.id)) throw new Error('An AI audit for this paper is already running. Wait for it to finish or reload the page to see its saved status.');
-        const requestedOptions = { convertPdfToLatex: Boolean(body.convertPdfToLatex), correctnessAudit: body.correctnessAudit !== false, detailedAudit: body.detailedAudit !== false };
-        const auditJob = checkpointing ? await vault.startAuditJob(paper.id, requestedOptions, { resume: Boolean(body.resumeAudit) }) : null;
+        if (checkpointing && activeAuditPaperIds.has(paper.id)) throw httpError(409, 'An AI audit for this paper is already running. Wait for it to finish or reload the page to see its saved status.');
+        // Claim the slot before any await: a double click must not start two audits.
         if (checkpointing) activeAuditPaperIds.add(paper.id);
+        let auditJob = null;
+        try {
+          await vault.recordFor(paper.id);
+          const requestedOptions = { convertPdfToLatex: Boolean(body.convertPdfToLatex), correctnessAudit: body.correctnessAudit !== false, detailedAudit: body.detailedAudit !== false };
+          auditJob = checkpointing ? await vault.startAuditJob(paper.id, requestedOptions, { resume: Boolean(body.resumeAudit) }) : null;
+        } catch (error) {
+          if (checkpointing) activeAuditPaperIds.delete(paper.id);
+          throw error;
+        }
         try {
           const localInventory = await vault.compactInventory();
           let primarySource;
@@ -2475,7 +2503,7 @@ const server = createServer(async (request, response) => {
     const output = continuingThread ? await enqueueThread(String(body.threadId), runAiWork) : await runAiWork();
     return sendJson(response, 200, output, origin);
   } catch (error) {
-    return sendJson(response, 500, { error: error instanceof Error ? error.message : 'Local Codex bridge failed.' }, origin);
+    return sendJson(response, Number.isInteger(error?.status) ? error.status : 500, { error: error instanceof Error ? error.message : 'Local Codex bridge failed.' }, origin);
   }
 });
 
