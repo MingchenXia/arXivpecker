@@ -1,4 +1,4 @@
-import { MouseEvent as ReactMouseEvent, memo, useEffect, useMemo, useRef, useState } from 'react';
+import { MouseEvent as ReactMouseEvent, RefObject, memo, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import {
   citationAlphaLabel,
@@ -119,6 +119,66 @@ export function typesetAllMath() {
 }
 
 if (typeof window !== 'undefined') window.addEventListener('beforeprint', typesetAllMath);
+
+/** The width available to an inline or display formula: its nearest block's content box. */
+function lineWidth(element: HTMLElement) {
+  let block: HTMLElement | null = element;
+  while (block && getComputedStyle(block).display.startsWith('inline')) block = block.parentElement;
+  if (!block) return 0;
+  const style = getComputedStyle(block);
+  return block.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+}
+
+/**
+ * Shrinks each formula in `root` whose widest unbreakable piece (a matrix, a long
+ * fraction) is wider than its line, so that it fits without sideways scrolling.
+ * Formulas otherwise break at relations and operators, as KaTeX lays them out.
+ */
+export function fitWideMath(root: HTMLElement) {
+  const formulas = [...root.querySelectorAll<HTMLElement>('.math-inline, .math-display')].filter(
+    (formula) => !formula.classList.contains('math-pending'),
+  );
+  // Reset every formula before measuring any, so the layout is computed once.
+  for (const formula of formulas) formula.style.removeProperty('font-size');
+  const scales = formulas.map((formula) => {
+    const available = lineWidth(formula);
+    let widest = 0;
+    for (const piece of formula.querySelectorAll<HTMLElement>('.katex-base'))
+      widest = Math.max(widest, piece.getBoundingClientRect().width);
+    return available > 0 && widest > available ? Math.floor((available / widest) * 100) : 0;
+  });
+  formulas.forEach((formula, index) => {
+    if (scales[index]) formula.style.fontSize = `${scales[index]}%`;
+  });
+}
+
+/** Keeps the formulas in `container` within its width while `active`, as it resizes or its content changes. */
+export function useFitWideMath(container: RefObject<HTMLElement | null>, active: boolean) {
+  useEffect(() => {
+    const root = container.current;
+    if (!active || !root || typeof ResizeObserver === 'undefined') return;
+    let frame = 0;
+    let width = -1;
+    const fit = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => fitWideMath(root));
+    };
+    // Only a change of width can change what fits; heights change as formulas shrink.
+    const resize = new ResizeObserver(() => {
+      if (root.clientWidth === width) return;
+      width = root.clientWidth;
+      fit();
+    });
+    const content = new MutationObserver(fit);
+    resize.observe(root);
+    content.observe(root, { childList: true, subtree: true, characterData: true });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      resize.disconnect();
+      content.disconnect();
+    };
+  }, [container, active]);
+}
 
 /**
  * Renders prose with inline and display mathematics. With `lazy`, formulas are

@@ -10,7 +10,7 @@ import {
 import { indexedVisibleProof, InteractiveDocument } from './document';
 import { ReaderIcon } from './icons';
 import { NodeInspector, VersionComparisonPanel } from './inspector';
-import { MathText, typesetAllMath } from './math';
+import { MathText, typesetAllMath, useFitWideMath } from './math';
 import {
   assistantSizeKey,
   fileAsBase64,
@@ -106,6 +106,10 @@ type ReaderProps = {
   navigationRequest: ReaderNavigationRequest | null;
 };
 
+// The assistant's smallest size; the minimum width matches .reader-inspector in globals.css.
+const assistantMinWidth = 320;
+const assistantMinHeight = 240;
+
 export function Reader({
   paper,
   audit,
@@ -156,6 +160,7 @@ export function Reader({
   const [pdfPinnedPage, setPdfPinnedPage] = useState<number | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [assistantSize, setAssistantSize] = useState<AssistantSize | null>(null);
+  const assistantBodyRef = useRef<HTMLDivElement>(null);
   const [paperChatOpen, setPaperChatOpen] = useState(false);
   const [paperQuestion, setPaperQuestion] = useState('');
   const [askingPaperIds, setAskingPaperIds] = useState<string[]>([]);
@@ -304,19 +309,28 @@ export function Reader({
     document.addEventListener('pointerdown', dismissFloatingReaderPanels, true);
     return () => document.removeEventListener('pointerdown', dismissFloatingReaderPanels, true);
   }, []);
+  useFitWideMath(assistantBodyRef, inspectorOpen && mode !== 'source');
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       try {
         const saved = JSON.parse(readStorage(assistantSizeKey) ?? 'null') as AssistantSize | null;
-        if (saved && Number.isFinite(saved.width) && Number.isFinite(saved.height))
-          setAssistantSize({ width: Math.max(280, saved.width), height: Math.max(240, saved.height) });
+        if (saved && Number.isFinite(saved.width))
+          setAssistantSize({
+            width: Math.max(assistantMinWidth, saved.width),
+            height: Number.isFinite(saved.height) ? Math.max(assistantMinHeight, saved.height ?? 0) : undefined,
+          });
       } catch {
         /* Use the compact default assistant size. */
       }
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
-  function beginAssistantResize(event: ReactPointerEvent<HTMLButtonElement>) {
+  /**
+   * Resizes the assistant from its left edge, its bottom edge, or the corner
+   * between them; the panel stays anchored at the top right. Dragging only the
+   * left edge keeps the height following the content until one is set.
+   */
+  function beginAssistantResize(event: ReactPointerEvent<HTMLElement>, direction: 'width' | 'height' | 'both') {
     event.preventDefault();
     event.stopPropagation();
     const panel = event.currentTarget.closest<HTMLElement>('.reader-inspector');
@@ -324,12 +338,21 @@ export function Reader({
     const start = panel.getBoundingClientRect();
     const startX = event.clientX;
     const startY = event.clientY;
-    let next = { width: start.width, height: start.height };
+    let next: AssistantSize = { width: start.width, height: assistantSize?.height };
     const move = (pointer: PointerEvent) => {
       const maximumWidth = window.innerWidth <= 720 ? window.innerWidth - 16 : window.innerWidth - 82;
+      const width = direction === 'height' ? start.width : start.width - (pointer.clientX - startX);
       next = {
-        width: Math.round(Math.min(maximumWidth, Math.max(280, start.width - (pointer.clientX - startX)))),
-        height: Math.round(Math.min(window.innerHeight - 76, Math.max(240, start.height + (pointer.clientY - startY)))),
+        width: Math.round(Math.min(maximumWidth, Math.max(assistantMinWidth, width))),
+        height:
+          direction === 'width'
+            ? assistantSize?.height
+            : Math.round(
+                Math.min(
+                  window.innerHeight - 76,
+                  Math.max(assistantMinHeight, start.height + (pointer.clientY - startY)),
+                ),
+              ),
       };
       setAssistantSize(next);
     };
@@ -337,10 +360,10 @@ export function Reader({
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', finish);
       window.removeEventListener('pointercancel', finish);
-      document.body.classList.remove('assistant-resizing');
+      delete document.body.dataset.assistantResizing;
       writeStorage(assistantSizeKey, JSON.stringify(next));
     };
-    document.body.classList.add('assistant-resizing');
+    document.body.dataset.assistantResizing = direction;
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', finish, { once: true });
     window.addEventListener('pointercancel', finish, { once: true });
@@ -814,47 +837,59 @@ export function Reader({
                 ×
               </button>
             </div>
-            {node ? (
-              <NodeInspector
-                key={`${edition}:${node.id}`}
-                paper={paper}
-                node={node}
-                originalNode={audit.nodes.find((item) => item.id === node.id)}
-                plainSource={node.id.startsWith('source-block:')}
-                edition={edition}
-                patches={patches}
-                savePatches={savePatches}
-                suggestEdit={suggestEdit}
-                expanded={expanded[node.id] !== false}
-                setExpanded={(value) => setExpanded(node.id, value)}
-                expandProof={expandProofRequest}
-                notes={notes.filter((item) => item.nodeId === node.id).slice(0, 1)}
-                answer={answers[node.id]}
-                question={question}
-                setQuestion={setQuestion}
-                asking={askingId === node.id}
-                ask={() => void askNode(node, question)}
-                saveNote={saveNote}
-                updateNote={updateNote}
-                deleteNote={deleteNote}
-                graph={graph}
-                addLink={addLink}
-                removeLink={removeLink}
-                openUnit={openUnit}
-                openOriginalPaper={openOriginalPaper}
-                assistantRequest={assistantRequest}
-                clearAssistantRequest={() => setAssistantRequest(null)}
-                isUnderstood={isUnderstood}
-                studyAnswers={answers}
-                saveAnswer={saveAnswer}
-                askAboutUnit={askAboutUnit}
-              />
-            ) : (
-              <p className="p-4 text-xs text-[#6e6a64]">Select a document unit.</p>
-            )}
+            <div ref={assistantBodyRef} className="assistant-body">
+              {node ? (
+                <NodeInspector
+                  key={`${edition}:${node.id}`}
+                  paper={paper}
+                  node={node}
+                  originalNode={audit.nodes.find((item) => item.id === node.id)}
+                  plainSource={node.id.startsWith('source-block:')}
+                  edition={edition}
+                  patches={patches}
+                  savePatches={savePatches}
+                  suggestEdit={suggestEdit}
+                  expanded={expanded[node.id] !== false}
+                  setExpanded={(value) => setExpanded(node.id, value)}
+                  expandProof={expandProofRequest}
+                  notes={notes.filter((item) => item.nodeId === node.id).slice(0, 1)}
+                  answer={answers[node.id]}
+                  question={question}
+                  setQuestion={setQuestion}
+                  asking={askingId === node.id}
+                  ask={() => void askNode(node, question)}
+                  saveNote={saveNote}
+                  updateNote={updateNote}
+                  deleteNote={deleteNote}
+                  graph={graph}
+                  addLink={addLink}
+                  removeLink={removeLink}
+                  openUnit={openUnit}
+                  openOriginalPaper={openOriginalPaper}
+                  assistantRequest={assistantRequest}
+                  clearAssistantRequest={() => setAssistantRequest(null)}
+                  isUnderstood={isUnderstood}
+                  studyAnswers={answers}
+                  saveAnswer={saveAnswer}
+                  askAboutUnit={askAboutUnit}
+                />
+              ) : (
+                <p className="p-4 text-xs text-[#6e6a64]">Select a document unit.</p>
+              )}
+            </div>
+            <div
+              className="assistant-resize-edge assistant-resize-left"
+              onPointerDown={(event) => beginAssistantResize(event, 'width')}
+              aria-hidden="true"
+            />
+            <div
+              className="assistant-resize-edge assistant-resize-bottom"
+              onPointerDown={(event) => beginAssistantResize(event, 'height')}
+              aria-hidden="true"
+            />
             <button
               className="assistant-resize-handle"
-              onPointerDown={beginAssistantResize}
+              onPointerDown={(event) => beginAssistantResize(event, 'both')}
               aria-label="Resize assistant panel"
               title="Drag to resize"
             />
