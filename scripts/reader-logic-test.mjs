@@ -24,6 +24,39 @@ assert.notEqual(
   'Display and inline math are cached separately.',
 );
 
+// Package commands KaTeX lacks must not fall back to operator names such as
+// "abs x" or "mathbbm 1". Compare what a reader sees and hears: the rendered
+// HTML and MathML text, without the TeX source annotation.
+const renderedText = (expression, display = false) =>
+  (renderMath(expression, display) ?? 'did not typeset')
+    .replace(/<annotation[\s\S]*?<\/annotation>/g, '')
+    .replace(/<[^>]+>/g, '');
+for (const [command, definition] of [
+  [String.raw`\abs{x}`, String.raw`\left\lvert x\right\rvert`],
+  [String.raw`\abs*{x}`, String.raw`\left\lvert x\right\rvert`],
+  [String.raw`\abs[\big]{x}`, String.raw`\bigl\lvert x\bigr\rvert`],
+  [String.raw`\norm{x}`, String.raw`\left\lVert x\right\rVert`],
+  [String.raw`\ceil{x}`, String.raw`\left\lceil x\right\rceil`],
+  [String.raw`\floor{x}`, String.raw`\left\lfloor x\right\rfloor`],
+  [String.raw`\mathds{R}`, String.raw`\mathbb{R}`],
+])
+  assert.equal(renderedText(command), renderedText(definition), `${command} must render as ${definition}.`);
+assert.equal(renderedText(String.raw`\abs{x}`), '∣x∣∣x∣', 'MathML and HTML both show the bars, never "abs".');
+// KaTeX's \mathbb has no digits, so every spelling of the indicator 1 draws it
+// and gives MathML the double-struck character.
+for (const indicator of [
+  String.raw`\mathbbm{1}_A`,
+  String.raw`\mathds{1}_A`,
+  String.raw`\mathbb{1}_A`,
+  String.raw`\mathbb 1_A`,
+  String.raw`\1_A`,
+  String.raw`\bbone_A`,
+]) {
+  assert.match(renderMath(indicator, false) ?? '', /<mi mathvariant="normal">𝟙<\/mi>/, indicator);
+  assert.equal(renderedText(indicator), renderedText(String.raw`\bbone_A`), indicator);
+}
+assert.equal(renderedText(String.raw`\mathbb{1}x`), renderedText(String.raw`\bbone x`));
+
 // Reader state is saved for every paper whose slice changed, and only for those.
 const note = (paperId, id) => ({ id, paperId, nodeId: 'n', anchor: '', text: id, latex: '', createdAt: '' });
 const a1 = note('A', 'a1');

@@ -1,11 +1,34 @@
 import katex from 'katex';
 import type { CitationReference } from './types';
 
+// A mathtools-style delimiter pair: `\abs{x}` and `\abs*{x}` scale, and
+// `\abs[\big]{x}` takes a fixed size.
+function pairedDelimiter(left: string, right: string) {
+  const scaled = `\\@readerpaired${left}${right}`;
+  return `\\@ifstar{${scaled}}{\\@ifnextchar[{\\@readersized${left}${right}}{${scaled}}}`;
+}
+
+// Defaults for commands from common packages that KaTeX lacks. The TeX pipeline
+// expands an author's own definitions first, so these apply only to commands
+// the author took from a package or never defined, and to AI-written math.
 const readerKatexMacros = {
   '\\qed': '\\square',
   '\\qedsymbol': '\\square',
   '\\qedhere': '\\square',
   '\\mbox': '\\text{#1}',
+  '\\@readerpaired': '\\left#1#3\\right#2',
+  // KaTeX's \def reads the delimited `[size]` argument; `##` defers its parameters.
+  '\\@readersized': '\\def\\@readerbody[##1]##2{\\mathopen{##1#1}##2\\mathclose{##1#2}}\\@readerbody',
+  '\\abs': pairedDelimiter('\\lvert', '\\rvert'),
+  '\\norm': pairedDelimiter('\\lVert', '\\rVert'),
+  '\\ceil': pairedDelimiter('\\lceil', '\\rceil'),
+  '\\floor': pairedDelimiter('\\lfloor', '\\rfloor'),
+  // KaTeX's blackboard font has no digits: \mathbb{1} prints a plain 1. Draw the
+  // indicator 1 as an overlapping 1 and l, and give MathML the real character.
+  '\\bbone': '\\html@mathml{\\mathrm{1}\\mkern-4mu\\mathrm{l}}{\\char"1D7D9}',
+  '\\1': '\\bbone',
+  '\\mathbbm': '\\mathbb{#1}',
+  '\\mathds': '\\mathbb{#1}',
 };
 
 function unknownMathMacroFallback(command: string) {
@@ -47,7 +70,10 @@ export function renderMath(expression: string, displayMode: boolean) {
 }
 
 function typesetMath(expression: string, displayMode: boolean) {
-  const normalized = expression.replace(/\uE000/g, '\\text{\\$}').replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}');
+  const normalized = expression
+    .replace(/\uE000/g, '\\text{\\$}')
+    .replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}')
+    .replace(/\\(?:mathbb|mathbbm|mathds)\s*(?:\{\s*1\s*\}|1)/g, '\\bbone ');
   let candidate = normalized;
   for (let attempt = 0; attempt < 16; attempt += 1) {
     try {
