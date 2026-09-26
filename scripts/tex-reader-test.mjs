@@ -460,6 +460,178 @@ assert.match(
   'Book-style chapter, section, theorem, and equation references must retain their full structural number.',
 );
 
+// \ref and \eqref must print what LaTeX prints. `resolvedRefs` returns the
+// resolution of everything after "REFS:".
+const resolvedRefs = (tex) =>
+  /REFS:([\s\S]*?)(?:\\end\{document\}|$)/.exec(resolveLatexReferences(tex, extractSourceUnits(tex)))?.[1].trim();
+
+assert.equal(
+  resolvedRefs(String.raw`\documentclass{article}\begin{document}
+\begin{equation}\label{eq:one} x=1 \end{equation}
+\begin{align}
+  a &= b \label{eq:two} \\
+  c &= \begin{cases} 1 & x>0 \\ 0 & x\le 0 \end{cases} \\
+  d &= \begin{aligned} e \\ f \end{aligned} \label{eq:four}
+\end{align}
+\begin{align}
+  g &= h \nonumber \\
+  i &= j \tag{T} \label{eq:tagged} \\
+  k &= l \notag \\
+  m &= n \label{eq:five} % \label{eq:ghost} \\
+\end{align}
+\begin{align*} p &= q \\ r &= s \tag{S}\label{eq:star-tag} \end{align*}
+\begin{gather} u \\ v \label{eq:seven} \end{gather}
+\begin{multline} w \\ x \\ y \label{eq:multline} \end{multline}
+\begin{equation} z \nonumber \end{equation}
+\begin{equation} z \tag{Z}\label{eq:z} \end{equation}
+\begin{flalign} a \\ b \label{eq:ten} \end{flalign}
+\begin{alignat}{2} a &= b \label{eq:eleven} \end{alignat}
+\begin{eqnarray} \label{eq:carried}\nonumber a &=& b \\ c &=& d \end{eqnarray}
+\begin{equation}\label{eq:last} q \end{equation}
+REFS: \eqref{eq:one} \eqref{eq:two} \eqref{eq:four} \eqref{eq:tagged} \eqref{eq:five} \ref{eq:ghost} \eqref{eq:star-tag} \eqref{eq:seven} \eqref{eq:multline} \eqref{eq:z} \eqref{eq:ten} \eqref{eq:eleven} \eqref{eq:carried} \eqref{eq:last}
+\end{document}`),
+  String.raw`(1) (2) (4) (T) (5) \ref{eq:ghost} (S) (7) (8) (Z) (10) (11) (12) (13)`,
+  'Every top-level row of an alignment is numbered unless it is starred, \\nonumber, \\notag, or \\tag; nested rows are not.',
+);
+assert.equal(
+  resolvedRefs(
+    String.raw`\begin{align} a \label{row:1} \\ b \\ c \label{row:3} \end{align} REFS: \eqref{row:1} \eqref{row:3}`,
+  ),
+  '(1) (3)',
+  'An unlabelled numbered row must still advance the equation counter.',
+);
+assert.equal(
+  resolvedRefs(String.raw`\begin{equation}\label{eq:before}x\end{equation}
+\begin{subequations}\label{eq:group}
+\begin{equation}\label{eq:sub-a}a\end{equation}
+\begin{align} b \label{eq:sub-b} \\ c \label{eq:sub-c} \end{align}
+\end{subequations}
+\begin{equation}\label{eq:after}y\end{equation}
+REFS: \eqref{eq:before} \eqref{eq:group} \eqref{eq:sub-a} \eqref{eq:sub-b} \eqref{eq:sub-c} \eqref{eq:after}`),
+  '(1) (2) (2a) (2b) (2c) (3)',
+  'Subequations number their equations 2a, 2b, ... and a label directly inside names the group.',
+);
+
+const appendixSource = String.raw`\documentclass{article}
+\newtheorem{theorem}{Theorem}[section]
+\numberwithin{equation}{section}
+\begin{document}
+\section{Intro}\label{sec:intro}
+\begin{theorem}\label{thm:intro}Intro.\end{theorem}
+\begin{equation}\label{eq:intro}x\end{equation}
+\appendix
+\section{Proofs}\label{sec:proofs}
+\subsection{Details}\label{sec:details}
+\begin{theorem}\label{thm:appendix}Appendix.\end{theorem}
+\begin{equation}\label{eq:appendix}y\end{equation}
+\section{More}\label{sec:more}
+\begin{theorem}\label{thm:more}More.\end{theorem}
+REFS: \ref{sec:intro} \ref{thm:intro} \eqref{eq:intro} \ref{sec:proofs} \ref{sec:details} \ref{thm:appendix} \eqref{eq:appendix} \ref{sec:more} \ref{thm:more}
+\end{document}`;
+assert.equal(resolvedRefs(appendixSource), '1 1.1 (1.1) A A.1 A.1 (A.1) B B.1');
+assert.deepEqual(
+  extractSourceUnits(appendixSource).map((unit) => unit.printedNumber),
+  ['1.1', 'A.1', 'B.1'],
+  'Sections after \\appendix are lettered, and results numbered within them use the letter.',
+);
+
+assert.equal(
+  resolvedRefs(String.raw`\documentclass{article}
+% \numberwithin{equation}{section}
+\counterwithin{equation}{subsection}
+\begin{document}
+\section{A}\subsection{B}\begin{equation}\label{eq:ab}x\end{equation}\begin{equation}\label{eq:ab2}x\end{equation}
+\subsection{C}\begin{equation}\label{eq:ac}x\end{equation}
+\section{D}\subsection{E}\begin{equation}\label{eq:de}x\end{equation}
+REFS: \eqref{eq:ab} \eqref{eq:ab2} \eqref{eq:ac} \eqref{eq:de}
+\end{document}`),
+  '(1.1.1) (1.1.2) (1.2.1) (2.1.1)',
+  'Equations numbered within subsections must reset at every subsection and section.',
+);
+assert.equal(
+  resolvedRefs(String.raw`\documentclass{article}
+% \numberwithin{equation}{section}
+\begin{document}
+\section{A}\begin{equation}\label{eq:plain}x\end{equation}
+\section{B}\begin{equation}\label{eq:plain2}x\end{equation}
+REFS: \eqref{eq:plain} \eqref{eq:plain2}
+\end{document}`),
+  '(1) (2)',
+  'A commented-out \\numberwithin must not change equation numbers.',
+);
+assert.equal(
+  resolvedRefs(String.raw`\documentclass{book}
+\begin{document}
+\chapter{One}\label{ch:one}
+\begin{equation}\label{eq:c1}x\end{equation}
+\begin{figure}\caption{F}\label{fig:c1}\end{figure}
+\chapter{Two}
+\section{S}\label{sec:two}
+\begin{equation}\label{eq:c2}x\end{equation}
+\begin{table}\caption{T}\label{tab:c2}\end{table}
+\appendix
+\chapter{Extra}\label{ch:extra}
+\section{Extra section}\label{sec:extra}
+\begin{equation}\label{eq:extra}x\end{equation}
+REFS: \ref{ch:one} \eqref{eq:c1} \ref{fig:c1} \ref{sec:two} \eqref{eq:c2} \ref{tab:c2} \ref{ch:extra} \ref{sec:extra} \eqref{eq:extra}
+\end{document}`),
+  '1 (1.1) 1.1 2.1 (2.1) 2.1 A A.1 (A.1)',
+  'Book classes number equations, figures, and tables by chapter, and \\appendix letters chapters.',
+);
+
+const sharedEquationSource = String.raw`\documentclass{amsart}
+\newtheorem{theorem}[equation]{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\numberwithin{equation}{section}
+\begin{document}
+\section{A}
+\begin{equation}\label{eq:first}x\end{equation}
+\begin{theorem}\label{thm:shared}T.\end{theorem}
+\begin{equation}\label{eq:second}y\end{equation}
+\begin{lemma}\label{lem:shared}L.\end{lemma}
+REFS: \eqref{eq:first} \ref{thm:shared} \eqref{eq:second} \ref{lem:shared}
+\end{document}`;
+assert.equal(resolvedRefs(sharedEquationSource), '(1.1) 1.2 (1.3) 1.4');
+assert.deepEqual(
+  extractSourceUnits(sharedEquationSource).map((unit) => unit.printedNumber),
+  ['1.2', '1.4'],
+  'A theorem declared with [equation] must share the equation counter.',
+);
+
+const letteredSource = String.raw`\documentclass{amsart}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{maintheorem}{Theorem}
+\renewcommand{\themaintheorem}{\Alph{maintheorem}}
+\makeatletter
+\@addtoreset{equation}{section}
+\renewcommand\theequation{\thesection.\arabic{equation}}
+\makeatother
+\begin{document}
+\begin{maintheorem}\label{thm:A}A.\end{maintheorem}
+\begin{maintheorem}\label{thm:B}B.\end{maintheorem}
+\section{S}
+\begin{theorem}\label{thm:s}S.\end{theorem}
+\begin{equation}\label{eq:s}x\end{equation}
+\section{T}
+\begin{equation}\label{eq:t}x\end{equation}
+REFS: \ref{thm:A} \ref{thm:B} \ref{thm:s} \eqref{eq:s} \eqref{eq:t}
+\end{document}`;
+assert.equal(resolvedRefs(letteredSource), 'A B 1.1 (1.1) (2.1)');
+assert.deepEqual(
+  extractSourceUnits(letteredSource).map((unit) => unit.printedNumber),
+  ['A', 'B', '1.1'],
+  'Preamble \\the<counter> redefinitions and \\@addtoreset must shape printed numbers.',
+);
+assert.equal(
+  resolvedRefs(String.raw`\begin{figure}\includegraphics{a}\end{figure}
+\begin{figure}\caption{First}\label{fig:first}\end{figure}
+\begin{figure}\begin{minipage}{.5\textwidth}\caption{Left}\label{fig:left}\end{minipage}\begin{minipage}{.5\textwidth}\caption{Right}\label{fig:right}\end{minipage}\end{figure}
+\begin{table}\label{tab:early}\caption{Tab}\end{table}
+REFS: \ref{fig:first} \ref{fig:left} \ref{fig:right} \ref{tab:early}`),
+  '1 2 3 1',
+  'Floats step their counter at each \\caption, not at \\begin.',
+);
+
 const unsectionedBlocks = buildSourceBlocks(
   String.raw`\documentclass{article}\begin{document}\begin{abstract}Header abstract.\end{abstract}Unsectioned opening paragraph.
 

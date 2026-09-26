@@ -963,66 +963,416 @@ function sourceProofEvents(source, units = [], declarationSource = source) {
   return events;
 }
 
+const defaultTheoremEnvironments = [
+  ['theorem', 'theorem', 'Theorem'],
+  ['thm', 'theorem', 'Theorem'],
+  ['lemma', 'lemma', 'Lemma'],
+  ['lem', 'lemma', 'Lemma'],
+  ['proposition', 'proposition', 'Proposition'],
+  ['prop', 'proposition', 'Proposition'],
+  ['corollary', 'corollary', 'Corollary'],
+  ['cor', 'corollary', 'Corollary'],
+  ['conjecture', 'conjecture', 'Conjecture'],
+  ['conj', 'conjecture', 'Conjecture'],
+  ['definition', 'definition', 'Definition'],
+  ['defn', 'definition', 'Definition'],
+  ['assumption', 'assumption', 'Assumption'],
+  ['notation', 'notation', 'Notation'],
+  ['remark', 'remark', 'Remark'],
+  ['rem', 'remark', 'Remark'],
+  ['example', 'example', 'Example'],
+];
+
+function theoremDeclarations(source) {
+  const text = String(source || '');
+  const literalRanges = literalSourceRanges(text);
+  const environments = new Map(defaultTheoremEnvironments.map(([name, kind]) => [name, kind]));
+  const displayNames = new Map(defaultTheoremEnvironments.map(([name, , displayName]) => [name, displayName]));
+  const counters = new Map();
+  const declarations = /\\newtheorem(\*)?\s*\{([^}]+)\}(?:\[([^\]]+)\])?\s*\{([^}]+)\}(?:\[([^\]]+)\])?/g;
+  for (const match of text.matchAll(declarations)) {
+    const start = match.index ?? 0;
+    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(text, start)) continue;
+    const environment = match[2];
+    const displayName = readableLatex(match[4]);
+    environments.set(environment, theoremKind(displayName, environment));
+    displayNames.set(environment, displayName);
+    const root = String(match[3] || '').trim() || environment;
+    counters.set(environment, { start, root, within: String(match[5] || '').trim(), numbered: !match[1] });
+  }
+  return { environments, displayNames, counters };
+}
+
+const nestedNumberedEnvironments =
+  /\\begin\{(equation|align|gather|multline|flalign|alignat|eqnarray|subequations|figure|table)(\*?)\}[\s\S]*?\\end\{\1\2\}/g;
+const bookLikeClasses = /^(?:book|report|amsbook|scrbook|scrreprt|memoir)$/;
+const sectionDepths = {
+  part: -1,
+  chapter: 0,
+  section: 1,
+  subsection: 2,
+  subsubsection: 3,
+  paragraph: 4,
+  subparagraph: 5,
+};
+const equationEnvironments = /^(?:equation|align|gather|multline|flalign|alignat|xalignat|xxalignat|eqnarray)\*?$/;
+const floatCounters = new Map([
+  ['figure', 'figure'],
+  ['figure*', 'figure'],
+  ['wrapfigure', 'figure'],
+  ['sidewaysfigure', 'figure'],
+  ['table', 'table'],
+  ['table*', 'table'],
+  ['wraptable', 'table'],
+  ['sidewaystable', 'table'],
+]);
+
+function romanNumeral(value) {
+  let rest = Math.min(Math.max(0, Math.floor(value)), 9999);
+  let output = '';
+  for (const [amount, digits] of [
+    [1000, 'm'],
+    [900, 'cm'],
+    [500, 'd'],
+    [400, 'cd'],
+    [100, 'c'],
+    [90, 'xc'],
+    [50, 'l'],
+    [40, 'xl'],
+    [10, 'x'],
+    [9, 'ix'],
+    [5, 'v'],
+    [4, 'iv'],
+    [1, 'i'],
+  ])
+    for (; rest >= amount; rest -= amount) output += digits;
+  return output;
+}
+
+const counterFormats = {
+  arabic: (value) => String(value),
+  alph: (value) => (value > 0 && value <= 26 ? String.fromCharCode(96 + value) : String(value)),
+  Alph: (value) => (value > 0 && value <= 26 ? String.fromCharCode(64 + value) : String(value)),
+  roman: (value) => romanNumeral(value),
+  Roman: (value) => romanNumeral(value).toUpperCase(),
+};
+
+// Parses a printed form such as \renewcommand{\theequation}{\thesection.\arabic{equation}}.
+// Anything beyond \the<counter>, the counter formats, and plain text is ignored.
+function counterTemplate(replacement) {
+  const parts = [];
+  let cursor = 0;
+  const pattern =
+    /\\the([A-Za-z]+)|\\@?(arabic|alph|Alph|roman|Roman)\s*(?:\{\s*([A-Za-z*]+)\s*\}|\\c@([A-Za-z]+))|([^\\{}]+)|[{}]/g;
+  for (const match of replacement.matchAll(pattern)) {
+    if (match.index !== cursor) return null;
+    cursor += match[0].length;
+    if (match[1]) parts.push({ the: match[1] });
+    else if (match[2]) parts.push({ format: match[2], counter: match[3] || match[4] });
+    else if (match[5]) parts.push({ text: match[5] });
+  }
+  return cursor === replacement.length && parts.length ? parts : null;
+}
+
+// Splits an align-like body into its rows at `\\` outside nested groups and
+// environments, so `cases`, `aligned`, or `\substack` rows never add numbers.
+function topLevelRows(text) {
+  const rows = [];
+  let start = 0;
+  let braces = 0;
+  let environments = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\\') {
+      if (text[index + 1] === '\\' && !braces && !environments) {
+        rows.push(text.slice(start, index));
+        start = index + 2;
+      } else if (text.startsWith('begin{', index + 1)) environments += 1;
+      else if (text.startsWith('end{', index + 1)) environments = Math.max(0, environments - 1);
+      index += 1;
+    } else if (text[index] === '{') braces += 1;
+    else if (text[index] === '}') braces = Math.max(0, braces - 1);
+  }
+  rows.push(text.slice(start));
+  return rows;
+}
+
+// Replays the LaTeX counters that \ref prints, in document order: sectioning
+// (with \appendix letters and secnumdepth), theorem counters, equation rows,
+// subequations, and float captions. Declarations come from the author source;
+// the walk runs on the macro-expanded body so macro-built displays count too.
+function latexNumbering(declarationSource, body, declarations = theoremDeclarations(declarationSource)) {
+  const config = String(declarationSource || '');
+  const text = String(body || '');
+  const configRanges = literalSourceRanges(config);
+  const literalRanges = literalSourceRanges(text);
+  const activeMatches = (source, ranges, pattern) =>
+    [...source.matchAll(pattern)].filter(
+      (match) => !insideSourceRanges(match.index ?? 0, ranges) && !isLatexCommentedAt(source, match.index ?? 0),
+    );
+  const documentClass = activeMatches(
+    config,
+    configRanges,
+    /\\documentclass\s*(?:\[[^\]]*\])?\s*\{\s*([^}\s]+)\s*\}/g,
+  )[0];
+  const className = documentClass?.[1] || '';
+  const hasChapters =
+    bookLikeClasses.test(className) ||
+    activeMatches(text, literalRanges, /\\chapter\*?(?:\[[^\]]*\])?\s*\{/g).length > 0;
+  let secnumdepth = hasChapters && className !== 'amsbook' ? 2 : 3;
+
+  const counters = new Map();
+  const counter = (name) => {
+    if (!counters.has(name))
+      counters.set(name, { value: 0, format: 'arabic', within: '', resets: new Set(), template: null });
+    return counters.get(name);
+  };
+  const numberWithin = (name, parent, printed = true) => {
+    const state = counter(name);
+    state.resets.add(parent);
+    if (printed) Object.assign(state, { within: parent, template: null });
+  };
+  const the = (name, depth = 0) => {
+    const state = counter(name);
+    if (depth > 8) return '';
+    if (state.template)
+      return state.template
+        .map((part) =>
+          part.the
+            ? the(part.the, depth + 1)
+            : part.format
+              ? counterFormats[part.format](counter(part.counter).value)
+              : part.text,
+        )
+        .join('')
+        .trim();
+    const own = counterFormats[state.format](state.value);
+    return state.within ? `${the(state.within, depth + 1)}.${own}` : own;
+  };
+  const resetWithin = (parent, depth = 0) => {
+    for (const [name, state] of counters)
+      if (state.resets.has(parent) && depth < 8) {
+        state.value = 0;
+        resetWithin(name, depth + 1);
+      }
+  };
+  const step = (name) => {
+    counter(name).value += 1;
+    resetWithin(name);
+  };
+
+  counter('part').format = 'Roman';
+  if (hasChapters) for (const name of ['section', 'equation', 'figure', 'table']) numberWithin(name, 'chapter');
+  numberWithin('subsection', 'section');
+  numberWithin('subsubsection', 'subsection');
+  numberWithin('paragraph', 'subsubsection');
+  numberWithin('subparagraph', 'paragraph');
+
+  // Counter declarations apply in source order, so a later \numberwithin or
+  // \renewcommand\thetheorem overrides a \newtheorem's [within] argument.
+  const setup = [];
+  for (const [environment, declared] of declarations.counters)
+    if (declared.root === environment && declared.within)
+      setup.push([declared.start, () => numberWithin(environment, declared.within)]);
+  const withinPattern =
+    /\\(numberwithin|counterwithin|counterwithout)(\*?)\s*(?:\[[^\]]*\])?\s*\{\s*([^}\s]+)\s*\}\s*\{\s*([^}\s]+)\s*\}/g;
+  for (const match of activeMatches(config, configRanges, withinPattern)) {
+    const [, command, star, name, parent] = match;
+    setup.push([
+      match.index ?? 0,
+      () => {
+        if (command !== 'counterwithout') return numberWithin(name, parent, command === 'numberwithin' || !star);
+        counter(name).resets.delete(parent);
+        if (!star) Object.assign(counter(name), { within: '', template: null });
+      },
+    ]);
+  }
+  for (const match of activeMatches(
+    config,
+    configRanges,
+    /\\@(addtoreset|removefromreset)\s*\{([^}]+)\}\s*\{([^}]+)\}/g,
+  ))
+    setup.push([
+      match.index ?? 0,
+      () => counter(match[2].trim()).resets[match[1] === 'addtoreset' ? 'add' : 'delete'](match[3].trim()),
+    ]);
+  // Printed-form redefinitions count only in the preamble; one made inside a
+  // group in the body would otherwise leak past its closing brace.
+  const documentStart = activeMatches(config, configRanges, /\\begin\{document\}/g)[0]?.index ?? config.length;
+  const redefinition =
+    /\\(?:renewcommand|newcommand|providecommand|def|gdef|edef|xdef)\*?\s*(?:\{\s*\\the([A-Za-z]+)\s*\}|\\the([A-Za-z]+))\s*\{/g;
+  for (const match of activeMatches(config, configRanges, redefinition)) {
+    if ((match.index ?? 0) > documentStart) continue;
+    const template = counterTemplate(balancedGroup(config, (match.index ?? 0) + match[0].length - 1)?.content || '');
+    if (template) setup.push([match.index ?? 0, () => (counter(match[1] || match[2]).template = template)]);
+  }
+  for (const [, apply] of setup.sort((left, right) => left[0] - right[0])) apply();
+
+  const events = [];
+  const headingPattern =
+    /\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)(\*)?\s*(?:\[[^\]]*\])?\s*\{/g;
+  for (const match of activeMatches(text, literalRanges, headingPattern))
+    events.push({ type: 'heading', start: match.index ?? 0, name: match[1], starred: Boolean(match[2]), match });
+  for (const match of activeMatches(text, literalRanges, /\\appendix(?![A-Za-z@])/g))
+    events.push({ type: 'appendix', start: match.index ?? 0 });
+  const counterPattern =
+    /\\(setcounter|addtocounter)\s*\{\s*([^}\s]+)\s*\}\s*\{\s*(-?\d+)\s*\}|\\(stepcounter|refstepcounter)\s*\{\s*([^}\s]+)\s*\}/g;
+  for (const match of activeMatches(text, literalRanges, counterPattern))
+    events.push({
+      type: 'counter',
+      start: match.index ?? 0,
+      command: match[1] || match[4],
+      name: match[2] || match[5],
+      value: Number(match[3] || 0),
+    });
+  // Once an environment has no \end after some \begin, no later one has either.
+  const unclosed = new Set();
+  for (const match of activeMatches(text, literalRanges, /\\begin\s*\{([^}]+)\}/g)) {
+    const start = match.index ?? 0;
+    const environment = match[1];
+    const closing = (name) => {
+      const end = unclosed.has(name) ? -1 : text.indexOf(`\\end{${name}}`, start + match[0].length);
+      if (end < 0) unclosed.add(name);
+      return end < 0 ? null : { end: end + `\\end{${name}}`.length, content: text.slice(start + match[0].length, end) };
+    };
+    if (declarations.environments.has(environment)) events.push({ type: 'theorem', start, environment });
+    else if (environment === 'appendix' || environment === 'appendices') events.push({ type: 'appendix', start });
+    else if (
+      equationEnvironments.test(environment) ||
+      environment === 'subequations' ||
+      floatCounters.has(environment)
+    ) {
+      const range = closing(environment);
+      const type = equationEnvironments.test(environment)
+        ? 'equation'
+        : floatCounters.has(environment)
+          ? 'float'
+          : 'group';
+      if (range) events.push({ type, start, environment, ...range });
+      if (range && type === 'group') events.push({ type: 'group-end', start: range.end - 1 });
+    } else if (/^longtable\*?$/.test(environment)) {
+      const range = closing(environment);
+      if (range) events.push({ type: 'longtable', start, environment, ...range });
+    }
+  }
+  events.sort((left, right) => left.start - right.start);
+
+  const labels = new Map();
+  const theoremNumbers = new Map();
+  const labelKeys = (fragment) => [...fragment.matchAll(/\\label\s*\{([^}]+)\}/g)].map((match) => match[1].trim());
+  const setLabels = (keys, number) => {
+    if (number) for (const key of keys) labels.set(key, number);
+  };
+  const equationRanges = [];
+  const groups = [];
+  let group = null;
+  let skipUntil = -1;
+  for (const event of events) {
+    if (event.type === 'heading') {
+      if (event.starred || sectionDepths[event.name] > secnumdepth) continue;
+      step(event.name);
+      const title = balancedGroup(text, event.start + event.match[0].length - 1);
+      const immediate = title ? /^\s*\\label\s*\{([^}]+)\}/.exec(text.slice(title.end, title.end + 240)) : null;
+      setLabels([...labelKeys(title?.content || ''), ...(immediate ? [immediate[1].trim()] : [])], the(event.name));
+    } else if (event.type === 'appendix') {
+      // \appendix restarts the top sectioning counter and prints it as A, B, ...
+      const [top, next] = hasChapters ? ['chapter', 'section'] : ['section', 'subsection'];
+      Object.assign(counter(top), { value: 0, format: 'Alph', template: null });
+      counter(next).value = 0;
+    } else if (event.type === 'counter') {
+      if (event.name === 'secnumdepth') {
+        if (event.command === 'setcounter') secnumdepth = event.value;
+        else if (event.command === 'addtocounter') secnumdepth += event.value;
+      } else if (event.command === 'setcounter') counter(event.name).value = event.value;
+      else if (event.command === 'addtocounter') counter(event.name).value += event.value;
+      else step(event.name);
+    } else if (event.type === 'theorem') {
+      const declared = declarations.counters.get(event.environment);
+      if (declared?.numbered === false) {
+        theoremNumbers.set(event.start, '');
+        continue;
+      }
+      let root = declared?.root || event.environment;
+      for (let depth = 0; depth < 8; depth += 1) {
+        const shared = declarations.counters.get(root)?.root;
+        if (!shared || shared === root) break;
+        root = shared;
+      }
+      // A theorem that shares a sectioning counter shows the current number
+      // without stepping it, so results never renumber the paper's sections.
+      if (sectionDepths[root] === undefined) step(root);
+      theoremNumbers.set(event.start, the(root));
+    } else if (event.type === 'equation') {
+      // A display nested in another one is malformed; count the outer one only.
+      if (event.start < skipUntil) continue;
+      skipUntil = event.end;
+      equationRanges.push([event.start, event.end]);
+      const starred = event.environment.endsWith('*');
+      const content = stripLatexComments(event.content);
+      // equation and multline print one number; the others number every row.
+      // A label in an unnumbered row takes the next numbered row's number, as
+      // eqnarray's pre-stepped counter and amsmath's deferred \label both do.
+      let pending = [];
+      for (const row of /^(?:equation|multline)\*?$/.test(event.environment) ? [content] : topLevelRows(content)) {
+        const tag = /\\tag\*?\s*\{/.exec(row);
+        let number = tag ? balancedGroup(row, tag.index + tag[0].length - 1)?.content.trim() || '' : '';
+        if (!tag && !starred && !/\\(?:nonumber|notag)(?![A-Za-z@])/.test(row)) {
+          step('equation');
+          number = the('equation');
+        }
+        pending.push(...labelKeys(row));
+        if (!number) continue;
+        setLabels(pending, number);
+        pending = [];
+      }
+    } else if (event.type === 'group') {
+      // subequations steps equation once, then prints (Na), (Nb), ... inside.
+      step('equation');
+      const state = counter('equation');
+      const number = the('equation');
+      group = { value: state.value, template: state.template };
+      groups.push({ start: event.start, end: event.end, number });
+      Object.assign(state, { value: 0, template: [{ text: number }, { format: 'alph', counter: 'equation' }] });
+    } else if (event.type === 'group-end' && group) {
+      Object.assign(counter('equation'), group);
+      group = null;
+    } else if (event.type === 'float') {
+      // Floats step their counter at each \caption; a label takes the caption
+      // before it, or the first caption when it precedes all of them.
+      const name = floatCounters.get(event.environment);
+      const content = stripLatexComments(event.content);
+      const captions = [...content.matchAll(/\\caption(?![A-Za-z@])\s*(\*)?/g)]
+        .filter((match) => !match[1])
+        .map((match) => {
+          step(name);
+          return { index: match.index ?? 0, number: the(name) };
+        });
+      for (const match of content.matchAll(/\\label\s*\{([^}]+)\}/g))
+        setLabels(
+          [match[1].trim()],
+          captions.filter((caption) => caption.index < (match.index ?? 0)).at(-1)?.number || captions[0]?.number,
+        );
+    } else if (event.type === 'longtable' && !event.environment.endsWith('*')) {
+      step('table');
+      setLabels(labelKeys(stripLatexComments(event.content)), the('table'));
+    }
+  }
+  // A \label directly inside subequations, outside its equations, names the group.
+  for (const { start, end, number } of groups)
+    for (const match of text.slice(start, end).matchAll(/\\label\s*\{([^}]+)\}/g)) {
+      const index = start + (match.index ?? 0);
+      if (insideSourceRanges(index, equationRanges) || insideSourceRanges(index, literalRanges)) continue;
+      if (!isLatexCommentedAt(text, index)) labels.set(match[1].trim(), number);
+    }
+  return { labels, theoremNumbers };
+}
+
 function extractSourceUnits(source) {
   const originalSource = String(source || '');
   const normalizedSource = expandAuthorMacros(originalSource);
   const originalLiteralRanges = literalSourceRanges(originalSource);
   const literalRanges = literalSourceRanges(normalizedSource);
-  const environments = new Map([
-    ['theorem', 'theorem'],
-    ['thm', 'theorem'],
-    ['lemma', 'lemma'],
-    ['lem', 'lemma'],
-    ['proposition', 'proposition'],
-    ['prop', 'proposition'],
-    ['corollary', 'corollary'],
-    ['cor', 'corollary'],
-    ['conjecture', 'conjecture'],
-    ['conj', 'conjecture'],
-    ['definition', 'definition'],
-    ['defn', 'definition'],
-    ['assumption', 'assumption'],
-    ['notation', 'notation'],
-    ['remark', 'remark'],
-    ['rem', 'remark'],
-    ['example', 'example'],
-  ]);
-  const displayNames = new Map([
-    ['theorem', 'Theorem'],
-    ['thm', 'Theorem'],
-    ['lemma', 'Lemma'],
-    ['lem', 'Lemma'],
-    ['proposition', 'Proposition'],
-    ['prop', 'Proposition'],
-    ['corollary', 'Corollary'],
-    ['cor', 'Corollary'],
-    ['conjecture', 'Conjecture'],
-    ['conj', 'Conjecture'],
-    ['definition', 'Definition'],
-    ['defn', 'Definition'],
-    ['assumption', 'Assumption'],
-    ['notation', 'Notation'],
-    ['remark', 'Remark'],
-    ['rem', 'Remark'],
-    ['example', 'Example'],
-  ]);
-  const theoremCounters = new Map();
-  const declarations = /\\newtheorem(\*)?\s*\{([^}]+)\}(?:\[([^\]]+)\])?\s*\{([^}]+)\}(?:\[([^\]]+)\])?/g;
-  for (const match of originalSource.matchAll(declarations)) {
-    if (
-      insideSourceRanges(match.index ?? 0, originalLiteralRanges) ||
-      isLatexCommentedAt(originalSource, match.index ?? 0)
-    )
-      continue;
-    const environment = match[2];
-    const sharedCounter = String(match[3] || '').trim();
-    const displayName = readableLatex(match[4]);
-    const within = String(match[5] || '').trim();
-    const kind = theoremKind(displayName, environment);
-    environments.set(environment, kind);
-    displayNames.set(environment, displayName);
-    theoremCounters.set(environment, { root: sharedCounter || environment, within, numbered: !match[1] });
-  }
+  const declarations = theoremDeclarations(originalSource);
+  const { environments, displayNames } = declarations;
   const proofEnvironments = new Set(['proof']);
   for (const match of originalSource.matchAll(/\\newenvironment\s*\{([^}]+)\}(?:\[(\d+)\])?(?:\[([^\]]*)\])?/g)) {
     if (
@@ -1043,63 +1393,21 @@ function extractSourceUnits(source) {
     `\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`,
     'g',
   );
-  const headingLevels = { part: 0, chapter: 1, section: 2, subsection: 3, subsubsection: 4 };
-  const headingEvents = [];
-  const headingCounters = [0, 0, 0, 0, 0];
-  const headingPattern = /\\(part|chapter|section|subsection|subsubsection)(?!\*)\s*(?:\[[^\]]*\])?\s*\{/g;
-  for (const match of normalizedSource.matchAll(headingPattern)) {
-    const start = match.index ?? 0;
-    if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(normalizedSource, start)) continue;
-    const level = headingLevels[match[1]];
-    headingCounters[level] += 1;
-    for (let index = level + 1; index < headingCounters.length; index += 1) headingCounters[index] = 0;
-    headingEvents.push({ start, counters: [...headingCounters] });
-  }
-  const structuralCounterNumber = (counterName, position) => {
-    const level = headingLevels[counterName];
-    if (level === undefined) return '';
-    const state =
-      headingEvents.filter((event) => event.start < position).at(-1)?.counters || headingCounters.map(() => 0);
-    if (!state[level]) return '0';
-    if (counterName === 'part' || counterName === 'chapter') return String(state[level]);
-    const first = state[1] ? 1 : 2;
-    return (
-      state
-        .slice(first, level + 1)
-        .filter(Boolean)
-        .join('.') || '0'
-    );
-  };
-  const counterValues = new Map();
+  const { theoremNumbers } = latexNumbering(originalSource, normalizedSource, declarations);
   const units = [];
   for (const match of normalizedSource.matchAll(unitPattern)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
     if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(normalizedSource, start)) continue;
-    const label = /\\label\s*\{([^}]+)\}/.exec(match[3])?.[1] || '';
+    // A \label inside a nested equation or float names that display, not the result.
+    const label = /\\label\s*\{([^}]+)\}/.exec(match[3].replace(nestedNumberedEnvironments, ''))?.[1] || '';
     const embeddedProofs = [...match[3].matchAll(embeddedProofPattern)];
     const statementSource = match[3].replace(embeddedProofPattern, '');
-    const counter = theoremCounters.get(match[1]);
-    const owner = theoremCounters.get(counter?.root) || counter;
-    const sharedStructuralCounter = counter?.root && headingLevels[counter.root] !== undefined ? counter.root : '';
-    const withinStructuralCounter = owner?.within && headingLevels[owner.within] !== undefined ? owner.within : '';
-    const scopeNumber = withinStructuralCounter ? structuralCounterNumber(withinStructuralCounter, start) : '';
-    const counterKey = `${counter?.root || match[1]}:${scopeNumber || 'global'}`;
-    const nextNumber = (counterValues.get(counterKey) || 0) + 1;
-    if (counter?.numbered !== false && !sharedStructuralCounter) counterValues.set(counterKey, nextNumber);
-    const printedNumber =
-      counter?.numbered === false
-        ? ''
-        : sharedStructuralCounter
-          ? structuralCounterNumber(sharedStructuralCounter, start)
-          : withinStructuralCounter
-            ? `${scopeNumber}.${nextNumber}`
-            : `${nextNumber}`;
     units.push({
       environment: match[1],
       kind: environments.get(match[1]),
       displayName: displayNames.get(match[1]) || readableLatex(match[1]),
-      printedNumber,
+      printedNumber: theoremNumbers.get(start) ?? '',
       title: match[2] || '',
       texLabel: label,
       start,
@@ -1198,75 +1506,10 @@ function resolveLatexReferences(source, sourceUnits = []) {
     const group = balancedGroup(value, (match.index ?? 0) + match[0].length - 1, '[', ']');
     if (group) proofHeaderRanges.push([match.index ?? 0, group.end]);
   }
-  const sectionAt = [];
-  const sectionCounters = [0, 0, 0, 0, 0];
-  const sectionPattern = /\\(part|chapter|section|subsection|subsubsection)(\*)?(?:\[[^\]]*\])?\s*\{/g;
-  const hasChapters = [...value.matchAll(/\\chapter\*?(?:\[[^\]]*\])?\s*\{/g)].some(
-    (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(value, match.index ?? 0),
-  );
-  const sectionLevels = {
-    part: 0,
-    chapter: 1,
-    section: hasChapters ? 2 : 1,
-    subsection: hasChapters ? 3 : 2,
-    subsubsection: hasChapters ? 4 : 3,
-  };
-  for (const match of value.matchAll(sectionPattern)) {
-    const start = match.index ?? 0;
-    if (match[2] || insideSourceRanges(start, literalRanges) || isLatexCommentedAt(value, start)) continue;
-    const level = sectionLevels[match[1]] ?? 1;
-    sectionCounters[level] += 1;
-    for (let index = level + 1; index < sectionCounters.length; index += 1) sectionCounters[index] = 0;
-    const number = sectionCounters
-      .slice(match[1] === 'part' ? 0 : 1, level + 1)
-      .filter(Boolean)
-      .join('.');
-    const title = balancedGroup(value, start + match[0].length - 1);
-    const immediateLabel = title ? /^\s*\\label\s*\{([^}]+)\}/.exec(value.slice(title.end, title.end + 240)) : null;
-    if (immediateLabel?.[1] && number) labels.set(immediateLabel[1], number);
-    if (match[1] === 'section') sectionAt.push({ start, number });
-  }
-
-  for (const environment of ['figure', 'table']) {
-    let counter = 0;
-    const pattern =
-      environment === 'table'
-        ? /\\begin\{(table\*?|longtable)\}([\s\S]*?)\\end\{\1\}/g
-        : /\\begin\{(figure\*?)\}([\s\S]*?)\\end\{\1\}/g;
-    for (const match of value.matchAll(pattern)) {
-      if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
-      counter += 1;
-      for (const label of match[2].matchAll(/\\label\s*\{([^}]+)\}/g)) labels.set(label[1], String(counter));
-    }
-  }
-
-  const sectionalEquations = /\\(?:numberwithin|counterwithin)\s*\{equation\}\s*\{section\}/.test(value);
-  let equationCounter = 0;
-  let equationSection = 0;
-  const equationPattern = /\\begin\{(equation|align|gather|multline|eqnarray)(\*)?\}([\s\S]*?)\\end\{\1\2\}/g;
-  for (const match of value.matchAll(equationPattern)) {
-    if (match[2] || insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0))
-      continue;
-    const currentSection = sectionAt.filter((section) => section.start < (match.index ?? 0)).at(-1)?.number || 0;
-    if (sectionalEquations && currentSection !== equationSection) {
-      equationSection = currentSection;
-      equationCounter = 0;
-    }
-    const equationLabels = [...match[3].matchAll(/\\label\s*\{([^}]+)\}/g)].map((item) => item[1]);
-    if (!equationLabels.length) {
-      equationCounter += 1;
-      continue;
-    }
-    const tag = /\\tag\*?\s*\{([^}]+)\}/.exec(match[3])?.[1];
-    for (const label of equationLabels) {
-      equationCounter += 1;
-      labels.set(
-        label,
-        tag ||
-          (sectionalEquations && currentSection ? `${currentSection}.${equationCounter}` : String(equationCounter)),
-      );
-    }
-  }
+  // Number displays on the macro-expanded text, the same text extractSourceUnits
+  // numbers theorems on, so a theorem sharing the equation counter and an
+  // equation built by an author macro both count exactly once.
+  for (const [key, number] of latexNumbering(value, expandAuthorMacros(value)).labels) labels.set(key, number);
 
   return value.replace(/\\(eqref|ref|autoref|cref|Cref)\s*\{([^}]+)\}/g, (match, command, key, offset) => {
     if (insideSourceRanges(offset, literalRanges) || insideSourceRanges(offset, proofHeaderRanges)) return match;
