@@ -923,6 +923,117 @@ function handWrittenBibliography(source) {
   return null;
 }
 
+// Sorted [start, end) ranges of math in raw TeX: $...$, $$...$$, \(...\),
+// \[...\], and display environments. Comments and literal source hold no math.
+function mathSourceRanges(source) {
+  const text = String(source || '');
+  const literalRanges = mergeSourceRanges(literalSourceRanges(text));
+  const ranges = [];
+  let open = '';
+  let start = 0;
+  let literal = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    while (literal < literalRanges.length && literalRanges[literal][1] <= index) literal += 1;
+    if (literal < literalRanges.length && literalRanges[literal][0] <= index) {
+      index = literalRanges[literal][1] - 1;
+      continue;
+    }
+    const character = text[index];
+    if (character === '%') {
+      while (index + 1 < text.length && text[index + 1] !== '\n') index += 1;
+    } else if (character === '\\') {
+      // A control symbol such as \$ or \\ is never a delimiter.
+      const next = text[index + 1];
+      if (!open && (next === '(' || next === '[')) {
+        open = next === '(' ? ')' : ']';
+        start = index;
+      } else if ((next === ')' || next === ']') && open === next) {
+        ranges.push([start, index + 2]);
+        open = '';
+      }
+      index += 1;
+    } else if (character === '$') {
+      if (!open) {
+        open = text[index + 1] === '$' ? '$$' : '$';
+        start = index;
+        index += open.length - 1;
+      } else if (open === '$' || (open === '$$' && text[index + 1] === '$')) {
+        ranges.push([start, index + open.length]);
+        index += open.length - 1;
+        open = '';
+      }
+    }
+  }
+  if (open) ranges.push([start, text.length]);
+  for (const match of text.matchAll(
+    /\\begin\{(equation|align|gather|multline|flalign|alignat|eqnarray|displaymath|math)(\*?)\}[\s\S]*?\\end\{\1\2\}/g,
+  )) {
+    const at = match.index ?? 0;
+    if (!insideSourceRanges(at, literalRanges) && !isLatexCommentedAt(text, at))
+      ranges.push([at, at + match[0].length]);
+  }
+  return mergeSourceRanges(ranges);
+}
+
+// A hand-written reference list is cited in plain text: [DP25], [Buc88, Kob82],
+// or [Kob82, Theorem 3]. Rewrites each such citation in the body's prose as
+// \cite, so results, proofs, and paragraphs carry it like any other citation.
+// Only brackets that name keys of the list count, a number only when the whole
+// list is numbered; math such as $[0,1]$ and a command's optional argument such
+// as \item[1] stay as written.
+function citeHandWrittenReferences(source) {
+  const text = String(source || '');
+  const list = handWrittenBibliography(text);
+  if (!list) return text;
+  const keys = new Set(list.entries.map((entry) => entry.key));
+  const numbered = [...keys].every((key) => /^\d+$/.test(key));
+  const cited = (key) => keys.has(key) && (numbered || !/^\d+$/.test(key));
+  const literalRanges = literalSourceRanges(text);
+  const mathRanges = mathSourceRanges(text);
+  const body =
+    [...text.matchAll(/\\begin\{document\}/g)].find(
+      (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(text, match.index ?? 0),
+    )?.index ?? 0;
+  const pieces = [];
+  let cursor = 0;
+  let math = 0;
+  for (const match of text.matchAll(/\[([^[\]]{1,200})\]/g)) {
+    const start = match.index ?? 0;
+    while (math < mathRanges.length && mathRanges[math][1] <= start) math += 1;
+    if (
+      start < body ||
+      (start >= list.start && start < list.end) ||
+      (math < mathRanges.length && mathRanges[math][0] <= start) ||
+      /(?:\\[A-Za-z@]+\*?\s*|[\\}\]])$/.test(text.slice(Math.max(0, start - 40), start)) ||
+      /\n[ \t]*\n/.test(match[1]) ||
+      insideSourceRanges(start, literalRanges) ||
+      isLatexCommentedAt(text, start)
+    )
+      continue;
+    const parts = match[1].split(',');
+    let count = 0;
+    while (count < parts.length && cited(parts[count].trim())) count += 1;
+    if (!count) continue;
+    // What follows the keys is a locator such as "Theorem 3.1", never a key
+    // missing from the list, as in [DP25, Foo99], nor, in a numbered list, a
+    // number alone, as in the interval [1, 2.5].
+    const locator = parts.slice(count).join(',').trim();
+    if (
+      locator &&
+      ((numbered && !/\p{L}/u.test(locator)) || /^\p{L}[\p{L}'+-]*\d{2,4}[a-z]?$/u.test(parts[count].trim()))
+    )
+      continue;
+    // A locator renders as plain text, so print a section sign such as
+    // [Dem97, V-$\S14$] rather than show its TeX.
+    const printed = locator.replace(/\\S(?![A-Za-z@])\s*/g, '§').replace(/\$([^$\\]*)\$/g, '$1');
+    const citedKeys = parts.slice(0, count).map((key) => key.trim());
+    pieces.push(text.slice(cursor, start), `\\cite${printed ? `[${printed}]` : ''}{${citedKeys.join(',')}}`);
+    cursor = start + match[0].length;
+  }
+  pieces.push(text.slice(cursor));
+  return pieces.join('');
+}
+
 function bibtexField(entry, name) {
   const match = new RegExp(`(?:^|,)\\s*${name}\\s*=\\s*`, 'i').exec(entry);
   if (!match) return '';
@@ -3542,7 +3653,9 @@ async function enrichAuditFromTex(rawText, primarySource) {
     return rawText;
   }
   if (!Array.isArray(audit.nodes)) return rawText;
-  const unresolved = await readExpandedTex(primarySource.entryFile, primarySource.sourceDirectory);
+  const unresolved = citeHandWrittenReferences(
+    await readExpandedTex(primarySource.entryFile, primarySource.sourceDirectory),
+  );
   const expanded = resolveLatexReferences(unresolved, extractSourceUnits(unresolved));
   const sourceUnits = extractSourceUnits(expanded);
   const bibliography = await extractBibliographyTree(expanded, primarySource.sourceDirectory, primarySource.entryFile);

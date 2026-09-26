@@ -344,6 +344,101 @@ After the subfile document.`,
     'A source record that cannot cross to a worker must be enriched on this thread.',
   );
 
+  // A hand-written list is cited in plain text. Each bracket in prose that names
+  // only its keys becomes a citation; math, command arguments, and other
+  // brackets stay text.
+  const readerAudit = async (name, tex) => {
+    const root = path.join(sourceRoot, name);
+    await mkdir(root);
+    await writeFile(path.join(root, 'main.tex'), tex);
+    return JSON.parse(
+      await enrichAuditFromTex(JSON.stringify({ nodes: [] }), {
+        entryFile: path.join(root, 'main.tex'),
+        sourceDirectory: root,
+      }),
+    );
+  };
+  const mentionsOf = (citations) => citations.map(({ key, locator }) => (locator ? `${key}|${locator}` : key));
+  const paragraphsOf = (audit) => audit.sourceBlocks.filter((block) => block.kind === 'paragraph');
+  const plainCited = await readerAudit(
+    'plain-cited',
+    String.raw`\documentclass{article}
+\newtheorem{theorem}{Theorem}
+\begin{document}
+\section{Introduction}
+As in [DP25] and [Buc88, Kob82], see [LT95, 4.3.2], [DP25, Theorem 3.1], [LT95, Remark 1.1.20., (i)], and [Kob82,
+Theorem 3]. Math stays: $[DP25]$, \[ f([Kob82]) \], and \begin{equation} x = [Buc88] \end{equation}
+Other brackets stay: [Foo99], [DP25, Foo99], [Theorem 2], [1]. % and a commented [DP25].
+
+\begin{itemize}\item[Kob82] An item label stays.\end{itemize}
+\begin{theorem}[Kob82]By [Kob82, Theorem 3], every bundle is stable.\end{theorem}
+
+\noindent {\bf References.}
+
+\noindent [Buc88] N. P. Buchdahl --- {\it First} --- Math. Ann. (1988).
+
+\noindent [DP25] S. Dinew, D. Popovici --- {\it Second} --- arXiv:2510.27362v1 [math.DG].
+
+\noindent [Kob82] S. Kobayashi --- {\it Third} --- Proc. Jap. Acad. (1982).
+
+\noindent [LT95] M. L\"ubke, A. Teleman --- {\it Fourth} --- World Scientific, 1995.
+\end{document}`,
+  );
+  const plainCitations = paragraphsOf(plainCited).flatMap((block) => block.citations);
+  assert.deepEqual(
+    mentionsOf(plainCitations),
+    ['DP25', 'Buc88', 'Kob82', 'LT95|4.3.2', 'DP25|Theorem 3.1', 'LT95|Remark 1.1.20., (i)', 'Kob82|Theorem 3'],
+    'Plain-text citations of a hand-written list must become citations in prose.',
+  );
+  assert.equal(plainCitations[0].arxivId, '2510.27362');
+  const plainText = paragraphsOf(plainCited)
+    .map((block) => block.content)
+    .join('\n');
+  for (const kept of ['$[DP25]$', '\\[ f([Kob82]) \\]', 'x = [Buc88]', '[Foo99], [DP25, Foo99], [Theorem 2], [1].'])
+    assert.ok(plainText.includes(kept), `${kept} must stay as written.`);
+  assert.doesNotMatch(plainText, /commented|\[\[cite:[^\]]*\]\] An item/);
+  const plainTheorem = plainCited.nodes.find((node) => node.id === 'source-unit-1');
+  assert.equal(plainTheorem.title, 'Kob82', 'A theorem note in brackets must stay its title.');
+  assert.deepEqual(mentionsOf(plainTheorem.citations), ['Kob82|Theorem 3']);
+  assert.deepEqual(
+    plainCited.sourceBlocks.filter((block) => block.kind === 'bibliography').map((block) => block.title),
+    ['Buc88', 'DP25', 'Kob82', 'LT95'],
+    'The entries of the list itself must not become citations.',
+  );
+
+  const numberCited = await readerAudit(
+    'number-cited',
+    String.raw`\begin{document}
+\section{Introduction}
+By [1] and [2, Theorem 4], and by [1, 2]. Math stays: $[1,2]$ and \[ [1] \].
+Other brackets stay: [0, 1], [1, 2.5], [3], and [1-2].
+\section*{References}
+[1] A. Author, {\it One}, J. (2001).
+
+[2] B. Author, {\it Two}, J. (2002).
+\end{document}`,
+  );
+  const numberParagraph = paragraphsOf(numberCited)[0];
+  assert.deepEqual(mentionsOf(numberParagraph.citations), ['1', '2|Theorem 4', '1', '2']);
+  for (const kept of ['$[1,2]$', '\\[ [1] \\]', '[0, 1], [1, 2.5], [3], and [1-2].'])
+    assert.ok(numberParagraph.content.includes(kept), `${kept} must stay as written.`);
+  const mixedCited = await readerAudit(
+    'mixed-cited',
+    String.raw`\begin{document}
+\section{Introduction}
+By [Kob82] but not [7].
+\section*{References}
+[Kob82] S. Kobayashi, {\it Third}, Proc. Jap. Acad. (1982).
+
+[7] A numbered entry in a list keyed by names.
+\end{document}`,
+  );
+  assert.deepEqual(
+    mentionsOf(paragraphsOf(mixedCited)[0].citations),
+    ['Kob82'],
+    'A bracketed number is a citation only when the whole list is numbered.',
+  );
+
   // A symbolic link inside the source tree must not pull in a file outside it.
   const outsideRoot = await mkdtemp(path.join(tmpdir(), 'arxivpecker-outside-'));
   try {
@@ -364,6 +459,29 @@ After the subfile document.`,
 } finally {
   await rm(sourceRoot, { recursive: true, force: true });
 }
+
+// The bundled m-positive paper writes its references by hand and cites them
+// in plain text, as [DP25] and [Kob87, Corollary 7.1.15].
+const mPositiveSource = path.resolve(
+  import.meta.dirname,
+  '../examples/starter-library/arxiv-2607.17203--m-positive-stability-of-holomorphic-vector-bundles-and-m/attachments/source',
+);
+const mPositive = JSON.parse(
+  await enrichAuditFromTex(JSON.stringify({ nodes: [] }), {
+    entryFile: path.join(mPositiveSource, 'm-pos-stability.tex'),
+    sourceDirectory: mPositiveSource,
+  }),
+);
+const mPositiveCitations = mPositive.sourceBlocks
+  .filter((block) => block.kind !== 'bibliography')
+  .flatMap((block) => block.citations);
+assert.equal(mPositiveCitations.find((citation) => citation.key === 'DP25')?.arxivId, '2510.27362');
+assert.ok(mPositiveCitations.some((citation) => citation.key === 'Kob87' && citation.locator === 'Corollary 7.1.15'));
+assert.ok(
+  mPositiveCitations.some((citation) => citation.key === 'Dem97' && citation.locator === 'V-§14'),
+  'A locator written as [Dem97, V-$\\S14$] must read as printed.',
+);
+assert.equal(mPositive.sourceBlocks.filter((block) => block.kind === 'bibliography').length, 12);
 
 const figureUnit =
   extractSourceUnits(String.raw`\newtheorem{example}{Example}\begin{example}% \includegraphics{discarded.png}
