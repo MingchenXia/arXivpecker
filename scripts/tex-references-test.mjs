@@ -92,6 +92,11 @@ REFS: \ref{sec:ack}; \ref{thm:main}; \cref{thm:main}; \eqref{eq:star}; \ref{fn:t
   'Acknowledgements; Main Theorem; Main Theorem; (1); 2; 9; ??',
 );
 assert.doesNotMatch(readableLatex(String.raw`See \cref{nowhere} and \ref{nowhere}.`), /referenced result/);
+assert.equal(
+  readableLatex(String.raw`Type \verb|\label{a}| and \verb+Section~\ref{a}+ in 50\verb|%| of cases.`),
+  String.raw`Type \verb|\label{a}| and \verb+Section~\ref{a}+ in 50\verb|%| of cases.`,
+  'Commands inside a \verb example are literal text.',
+);
 
 // Enumerate items: the class default labels and references, enumitem's keys
 // and \setlist, enumerate's short form, \newlist, and nested numbering.

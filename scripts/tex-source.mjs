@@ -649,7 +649,11 @@ function citeCommandMentions(globalNotes = '', groups = '') {
 }
 
 function readableLatex(source) {
-  const withoutCommentEnvironments = String(source || '').replace(/\\begin\{comment\}[\s\S]*?\\end\{comment\}/g, '');
+  // A \verb example is literal: no command inside it (\ref, \label, %) is interpreted.
+  const literals = [];
+  const withoutCommentEnvironments = String(source || '')
+    .replace(/\\begin\{comment\}[\s\S]*?\\end\{comment\}/g, '')
+    .replace(/\\verb\*?([^A-Za-z0-9\s])[^\n]*?\1/g, (match) => `\u0001${literals.push(match) - 1}\u0001`);
   const prepared = stripDocumentDeclarations(
     stripLatexComments(normalizeXyMatrices(normalizePrescriptCommands(withoutCommentEnvironments))),
   );
@@ -775,7 +779,8 @@ function readableLatex(source) {
         .trim(),
     )
     .filter(Boolean)
-    .join('\n\n');
+    .join('\n\n')
+    .replace(/\u0001(\d+)\u0001/g, (_match, index) => literals[Number(index)]);
 }
 
 function citationKeys(source) {
