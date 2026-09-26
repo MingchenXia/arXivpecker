@@ -7761,15 +7761,92 @@ main > aside > button {
   display: none !important;
 }
 
-/* The assistant uses a deliberate corner handle; its saved dimensions return next time. */
+/*
+ * The assistant resizes from its left edge, its bottom edge, or the corner
+ * between them, and its saved size returns next time. Only its body scrolls,
+ * and only vertically: text wraps at the panel's width, formulas break at
+ * relations and operators, and a piece that cannot break is shrunk to fit
+ * (useFitWideMath). The minimum width keeps every control's label whole; it
+ * matches assistantMinWidth in reader.tsx.
+ */
 .reader-inspector {
-  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  min-width: min(320px, calc(100vw - 16px));
   min-height: 240px;
   max-width: calc(100vw - 82px);
-  overflow: auto;
+  overflow: hidden;
+  padding: 0;
 }
 .reader-inspector:has(.inspector-minimal.advanced) {
   bottom: auto;
+}
+.reader-inspector > .drawer-head {
+  flex: none;
+  margin: 12px 12px 8px;
+}
+.assistant-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 12px 12px;
+  overflow-wrap: anywhere;
+}
+/* Grid and flex items may shrink below their content, so nothing wide (a long
+   word, a matrix) can stretch its box past the panel and escape being wrapped
+   or fitted. Zero specificity keeps any explicit minimum. */
+:where(.assistant-body *:not(.katex *)) {
+  min-width: 0;
+}
+.assistant-body input,
+.assistant-body textarea,
+.assistant-body select {
+  max-width: 100%;
+}
+.assistant-body pre,
+.assistant-body code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.assistant-body img,
+.assistant-body svg,
+.assistant-body video {
+  max-width: 100%;
+}
+.assistant-body .math-inline {
+  display: inline;
+}
+.assistant-body .math-display {
+  overflow-x: hidden;
+}
+.assistant-body .katex-display > .katex {
+  white-space: normal;
+}
+.assistant-resize-edge {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+}
+.assistant-resize-left {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+.assistant-resize-bottom {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 6px;
+  cursor: ns-resize;
+}
+.assistant-resize-edge:hover,
+body[data-assistant-resizing='width'] .assistant-resize-left,
+body[data-assistant-resizing='height'] .assistant-resize-bottom {
+  background: rgb(143 29 44 / 14%);
 }
 .assistant-resize-handle {
   position: absolute;
@@ -7793,15 +7870,32 @@ main > aside > button {
   );
   cursor: nesw-resize;
   opacity: 0.72;
+  touch-action: none;
 }
 .assistant-resize-handle:hover,
 .assistant-resize-handle:focus-visible {
   background-color: rgb(143 29 44 / 5%);
   opacity: 1;
 }
-body.assistant-resizing {
-  cursor: nesw-resize !important;
+body[data-assistant-resizing],
+body[data-assistant-resizing] * {
   user-select: none !important;
+}
+body[data-assistant-resizing='both'],
+body[data-assistant-resizing='both'] * {
+  cursor: nesw-resize !important;
+}
+body[data-assistant-resizing='width'],
+body[data-assistant-resizing='width'] * {
+  cursor: ew-resize !important;
+}
+body[data-assistant-resizing='height'],
+body[data-assistant-resizing='height'] * {
+  cursor: ns-resize !important;
+}
+/* A drag that passes over the PDF beside the paper would otherwise stop there. */
+body[data-assistant-resizing] iframe {
+  pointer-events: none;
 }
 
 @media (max-width: 720px) {

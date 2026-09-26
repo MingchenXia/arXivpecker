@@ -261,7 +261,8 @@ export type ReaderProcessUpdate = {
 export type ReaderNavigationRequest = ReaderProcessTarget & { nonce: number };
 export type PaperJobKind = 'audit' | 'update';
 export type ReferenceTarget = { title: string; url?: string; arxivId?: string; paperId?: string };
-export type AssistantSize = { width: number; height: number };
+/** Without a height, the assistant grows with its content up to the window's height. */
+export type AssistantSize = { width: number; height?: number };
 export type CloudProviderStatus = { id: string; label: string; available: boolean; connectUrl: string; detail: string };
 export type CloudShareRecord = {
   id: string;
