@@ -56,6 +56,11 @@ const paperScaleKey = 'proofroom-paper-scale-v1';
 const assistantSizeKey = 'arxivpecker-assistant-size-v1';
 const selectedPaperKey = 'arxivpecker-selected-paper-v1';
 
+// Storage access throws when site data is blocked (or the quota is full). Reader
+// preferences are conveniences, so fall back to defaults instead of failing.
+function readStorage(key: string) { try { return window.localStorage.getItem(key); } catch { return null; } }
+function writeStorage(key: string, value: string) { try { window.localStorage.setItem(key, value); } catch { /* Not remembered this session. */ } }
+
 type PaperPdfRecord = Pick<Paper, 'id' | 'arxivId'> & { source?: Paper['source'] };
 function hasOriginalPaper(paper: PaperPdfRecord) { return !paper.arxivId.startsWith('local-') || Boolean(paper.source?.localPdf); }
 function originalPaperUrl(paper: PaperPdfRecord, page?: number) {
@@ -92,6 +97,10 @@ function parsePaperChat(value: string | undefined): PaperChatMessage[] {
   } catch { return []; }
 }
 const emptyGraph: Graph = { version: 1, updatedAt: null, nodes: [], edges: [] };
+// Shared empty values keep props stable for papers without saved reader state,
+// so the memoized document is not re-rendered on every Home render.
+const emptyRecord: Record<string, never> = {};
+const emptyPatches: WorkingPatch[] = [];
 const fallbackDiscoveries: Paper[] = [
   { id: 'd-1', title: 'Stability estimates for degenerate elliptic equations', authors: 'E. Moreno', category: 'math.AP', arxivId: '2608.05192', abstract: 'New stability estimates that extend compactness methods to a degenerate setting.', state: 'To read', tags: ['elliptic PDE', 'stability'] },
   { id: 'd-2', title: 'Geodesic convexity in spaces of probability measures', authors: 'N. Berg · K. Ito', category: 'math.OC', arxivId: '2608.05014', abstract: 'A concise treatment of geodesic convexity and its variational consequences.', state: 'To read', tags: ['optimal transport', 'convexity'] },
@@ -739,6 +748,7 @@ export default function Home() {
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [loadingDiscoveries, setLoadingDiscoveries] = useState(false);
   const [notice, setNotice] = useState('');
+  const noticeTimerRef = useRef<number | undefined>(undefined);
 
   const paper = papers.find((item) => item.id === selectedPaperId) ?? papers[0];
   const audit = paper ? audits[paper.id] : undefined;
@@ -752,7 +762,7 @@ export default function Home() {
   const readerSaveTimerRef = useRef<number | undefined>(undefined);
   const flushReaderSavesRef = useRef(() => {});
 
-  function notify(message: string) { setNotice(message); window.setTimeout(() => setNotice(''), 8500); }
+  function notify(message: string) { setNotice(message); window.clearTimeout(noticeTimerRef.current); noticeTimerRef.current = window.setTimeout(() => setNotice(''), 8500); }
   function rememberAuditThread(paperId: string, threadId: string) {
     if (!threadId) return;
     setAudits((current) => {
@@ -766,31 +776,31 @@ export default function Home() {
   function applySnapshot(snapshot: VaultSnapshot) {
     readerSnapshotAppliedRef.current = true; dirtyReaderPapersRef.current.clear();
     setPapers(snapshot.papers); setAudits(Object.fromEntries(Object.entries(snapshot.audits).map(([paperId, paperAudit]) => [paperId, normalizeAuditCitations(paperAudit)]))); setNotes(normalizeNotes(snapshot.notes)); setNodeNotes(snapshot.nodeNotes); setNodeAnswers(snapshot.nodeAnswers); setExpanded(snapshot.expanded); setMarks(snapshot.marks ?? {}); setPatches(snapshot.patches ?? {}); setUpdates(snapshot.updates ?? {}); setAuditJobs(snapshot.auditJobs ?? {}); setLinks(snapshot.links); setGraph(snapshot.graph ?? emptyGraph);
-    if (snapshot.profile) { const next = normalizeReaderProfile(snapshot.profile); if (!window.localStorage.getItem(reasoningDefaultMigrationKey)) window.localStorage.setItem(reasoningDefaultMigrationKey, 'applied'); setProfile(next); }
+    if (snapshot.profile) { const next = normalizeReaderProfile(snapshot.profile); if (!readStorage(reasoningDefaultMigrationKey)) writeStorage(reasoningDefaultMigrationKey, 'applied'); setProfile(next); }
     setSelectedPaperId((current) => {
       if (snapshot.papers.some((item) => item.id === current)) return current;
-      const saved = window.localStorage.getItem(selectedPaperKey) ?? '';
+      const saved = readStorage(selectedPaperKey) ?? '';
       return snapshot.papers.some((item) => item.id === saved) ? saved : snapshot.papers[0]?.id ?? '';
     });
   }
   async function refreshBridge() { try { const response = await fetch(`${bridgeUrl}/status`); const data = await response.json() as Bridge; setBridge(data); if (data.models?.length) setProfile((current) => data.models.some((item) => item.id === current.model) ? current : { ...current, model: data.models.find((item) => item.isDefault)?.id ?? '' }); } catch { setBridge(null); } }
   async function loadVault() {
-    const locallySaved = localStorage.getItem(preferenceKey); const setupCompleted = localStorage.getItem(onboardingCompleteKey) === 'complete';
+    const locallySaved = readStorage(preferenceKey); const setupCompleted = readStorage(onboardingCompleteKey) === 'complete';
     function restoreLocalProfile() {
       if (!locallySaved) return false;
-      try { setProfile(normalizeReaderProfile(JSON.parse(locallySaved))); localStorage.setItem(onboardingCompleteKey, 'complete'); return true; }
+      try { setProfile(normalizeReaderProfile(JSON.parse(locallySaved))); writeStorage(onboardingCompleteKey, 'complete'); return true; }
       catch { return false; }
     }
     try {
       const response = await fetch(`${bridgeUrl}/vault`); if (!response.ok) throw new Error(); const snapshot = await response.json() as VaultSnapshot; applySnapshot(snapshot);
-      if (snapshot.profile) localStorage.setItem(onboardingCompleteKey, 'complete');
+      if (snapshot.profile) writeStorage(onboardingCompleteKey, 'complete');
       else if (!restoreLocalProfile() && !setupCompleted) setOnboardingOpen(true);
     } catch { if (!restoreLocalProfile() && !setupCompleted) setOnboardingOpen(true); }
     finally { setVaultReady(true); }
   }
   function completeOnboarding() {
     const completedProfile = { ...profile, reasoningConfigured: true };
-    setProfile(completedProfile); localStorage.setItem(preferenceKey, JSON.stringify(completedProfile)); localStorage.setItem(onboardingCompleteKey, 'complete'); setOnboardingOpen(false);
+    setProfile(completedProfile); writeStorage(preferenceKey, JSON.stringify(completedProfile)); writeStorage(onboardingCompleteKey, 'complete'); setOnboardingOpen(false);
     void fetch(`${bridgeUrl}/vault/profile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile: completedProfile }) });
   }
   useEffect(() => {
@@ -799,8 +809,8 @@ export default function Home() {
     // The bridge functions intentionally run once when this local reader mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => { if (!vaultReady || onboardingOpen) return; localStorage.setItem(preferenceKey, JSON.stringify(profile)); void fetch(`${bridgeUrl}/vault/profile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }) }); }, [profile, vaultReady, onboardingOpen]);
-  useEffect(() => { if (vaultReady && selectedPaperId) window.localStorage.setItem(selectedPaperKey, selectedPaperId); }, [selectedPaperId, vaultReady]);
+  useEffect(() => { if (!vaultReady || onboardingOpen) return; writeStorage(preferenceKey, JSON.stringify(profile)); void fetch(`${bridgeUrl}/vault/profile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }) }); }, [profile, vaultReady, onboardingOpen]);
+  useEffect(() => { if (vaultReady && selectedPaperId) writeStorage(selectedPaperKey, selectedPaperId); }, [selectedPaperId, vaultReady]);
   // Reader state is saved per paper. Every paper whose slice changed is saved
   // after a short pause, so an AI answer that lands after switching papers, or an
   // edit made just before a switch, reaches the vault. Papers with a running
@@ -978,7 +988,7 @@ export default function Home() {
     <nav className="mobile-app-nav lg:hidden" aria-label="Main navigation"><div title="arXivpecker"><BrandMascot compact /></div>{([['reader', 'Read'], ['library', 'Library'], ['discover', 'Discover'], ['settings', 'Settings']] as const).map(([target, label]) => <button key={target} onClick={() => setView(target)} aria-label={label} className={view === target ? 'active' : ''}><RailIcon name={target} /><span>{label}</span></button>)}<button onClick={() => window.dispatchEvent(new Event('proofroom:toggle-process-tray'))} aria-label="AI activity" className="mobile-activity-button"><i className={`bridge-status-light ${bridge?.account ? 'bridge-ready' : 'bridge-unavailable'}`} /><span>AI</span></button></nav>
     {view === 'discover' && <aside className={`local-vault-sidebar hidden min-h-screen flex-col border-r border-[#e2e6e0] bg-[#f0f2ed] p-4 lg:flex ${vaultSidebarOpen ? '' : 'collapsed'}`}><div className="flex items-start justify-between"><div><h1 className="text-lg font-bold tracking-[-.04em]">Papers</h1></div><div className="vault-head-actions"><button onClick={() => setVaultSidebarOpen(false)} title="Collapse papers" aria-label="Collapse papers">‹</button><button onClick={() => setImporting(true)} title="Import paper" aria-label="Import paper">+</button></div></div><button onClick={() => setImporting(true)} className="my-4 rounded-md bg-[#deebe1] px-3 py-2 text-left text-[11px] font-bold text-[#2d604b]">+ Import paper</button><div className="mb-2 flex justify-between text-[10px] font-bold text-[#677068]"><span>YOUR LIBRARY</span><span>{papers.length}</span></div><div className="min-h-0 flex-1 space-y-1 overflow-y-auto">{papers.length ? papers.map((item) => <button key={item.id} onClick={() => { setSelectedPaperId(item.id); setView('reader'); }} className="w-full rounded-lg p-2 text-left hover:bg-[#e7ebe6]"><span className="flex items-start gap-2"><i className={`mt-1 h-1.5 w-1.5 flex-none rounded-full ${audits[item.id] ? 'bg-[#499b70]' : 'bg-[#d6b756]'}`} /><span><b className="block text-[11px] leading-[1.35]"><MathText value={item.title} /></b><small className="mt-1 block text-[9px] text-[#788178]">{item.arxivId}</small></span></span></button>) : <p className="rounded-lg border border-dashed border-[#d5ddd5] p-3 text-[11px] leading-5 text-[#788178]">Import a paper to begin.</p>}</div></aside>}{!vaultSidebarOpen && view === 'discover' && <button className="vault-reopen hidden lg:grid" onClick={() => setVaultSidebarOpen(true)} title="Expand papers" aria-label="Expand papers">›</button>}
     <section className="min-w-0"><header className="app-header"><div className="app-header-title">{view === 'reader' && paper ? <><span /><MathText value={paper.title} /></> : view === 'graph' ? 'Local dependency graph' : view[0].toUpperCase() + view.slice(1)}</div><div className="app-header-actions"><ModelControls profile={profile} setProfile={setProfile} bridge={bridge} compact /><button onClick={() => setImporting(true)} className="header-import">+ Import</button></div></header>{notice && <div className="notice-banner">{notice}</div>}
-      {view === 'reader' && <Reader paper={paper} audit={audit} openImport={() => setImporting(true)} selectedNodeId={selectedNodeId} setSelectedNodeId={setSelectedNodeId} expanded={paper ? expanded[paper.id] ?? {} : {}} setExpanded={(id, value) => paper && setExpanded((current) => ({ ...current, [paper.id]: { ...current[paper.id], [id]: value } }))} marks={paper ? marks[paper.id] ?? {} : {}} setMark={(id, value) => paper && setMarks((current) => { const paperMarks = { ...(current[paper.id] ?? {}) }; if (value) paperMarks[id] = value; else delete paperMarks[id]; return { ...current, [paper.id]: paperMarks }; })} readerNotes={paper ? nodeNotes[paper.id] ?? {} : {}} notes={activePaperNotes} answers={paper ? nodeAnswers[paper.id] ?? {} : {}} savePaperMessages={(messages) => paper && setNodeAnswers((current) => ({ ...current, [paper.id]: { ...(current[paper.id] ?? {}), [paperChatAnswerKey]: JSON.stringify(messages) } }))} patches={paper ? patches[paper.id] ?? [] : []} savePatches={(next) => paper ? saveWorkingPatches(paper.id, next) : Promise.resolve()} suggestEdit={suggestEditorialFix} graph={graph} analysing={Boolean(paper && (paperJobs[paper.id] || auditJob?.state === 'running'))} auditActionLabel={auditJob?.state === 'paused' || auditJob?.state === 'preparing' ? 'Continue audit' : undefined} askingId={askingId} analyze={() => paper && void analyzePaper(paper)} askNode={askNode} rememberAuditThread={(threadId) => paper && rememberAuditThread(paper.id, threadId)} saveNote={saveNote} updateNote={updateNote} deleteNote={deleteNote} addLink={addLink} removeLink={removeLink} openUnit={openUnit} profile={profile} navigationRequest={readerNavigationRequest} />}
+      {view === 'reader' && <Reader paper={paper} audit={audit} openImport={() => setImporting(true)} selectedNodeId={selectedNodeId} setSelectedNodeId={setSelectedNodeId} expanded={paper ? expanded[paper.id] ?? emptyRecord : emptyRecord} setExpanded={(id, value) => paper && setExpanded((current) => ({ ...current, [paper.id]: { ...current[paper.id], [id]: value } }))} marks={paper ? marks[paper.id] ?? emptyRecord : emptyRecord} setMark={(id, value) => paper && setMarks((current) => { const paperMarks = { ...(current[paper.id] ?? {}) }; if (value) paperMarks[id] = value; else delete paperMarks[id]; return { ...current, [paper.id]: paperMarks }; })} readerNotes={paper ? nodeNotes[paper.id] ?? emptyRecord : emptyRecord} notes={activePaperNotes} answers={paper ? nodeAnswers[paper.id] ?? emptyRecord : emptyRecord} savePaperMessages={(messages) => paper && setNodeAnswers((current) => ({ ...current, [paper.id]: { ...(current[paper.id] ?? {}), [paperChatAnswerKey]: JSON.stringify(messages) } }))} patches={paper ? patches[paper.id] ?? emptyPatches : emptyPatches} savePatches={(next) => paper ? saveWorkingPatches(paper.id, next) : Promise.resolve()} suggestEdit={suggestEditorialFix} graph={graph} analysing={Boolean(paper && (paperJobs[paper.id] || auditJob?.state === 'running'))} auditActionLabel={auditJob?.state === 'paused' || auditJob?.state === 'preparing' ? 'Continue audit' : undefined} askingId={askingId} analyze={() => paper && void analyzePaper(paper)} askNode={askNode} rememberAuditThread={(threadId) => paper && rememberAuditThread(paper.id, threadId)} saveNote={saveNote} updateNote={updateNote} deleteNote={deleteNote} addLink={addLink} removeLink={removeLink} openUnit={openUnit} profile={profile} navigationRequest={readerNavigationRequest} />}
       {view === 'library' && <Library papers={papers} audits={audits} patches={patches} updates={updates} jobs={paperJobs} auditJobs={auditJobs} analyze={analyzePaper} refreshPaper={refreshArxivPaper} showUpdate={setUpdatePanel} updatePaper={updatePaperInfo} removePaper={removePaperFromVault} reorderPapers={reorderLibrary} openUnit={openUnit} openImport={() => setImporting(true)} />}
       {view === 'graph' && <GraphView graph={graph} papers={papers} openUnit={openUnit} />}
       {view === 'discover' && <Discover papers={discoveries} saved={papers} save={saveDiscovery} refresh={refreshDiscoveries} loading={loadingDiscoveries} selectedAreas={profile.areas} />}
@@ -1034,8 +1044,8 @@ function Reader({ paper, audit, openImport, selectedNodeId, setSelectedNodeId, e
     selectedDocumentElementRef.current = target;
   }, [audit, edition, expanded, marks, mode, notes, patches, selectedNodeId, units]);
   useEffect(() => { const update = () => setIsFullscreen(Boolean(document.fullscreenElement)); document.addEventListener('fullscreenchange', update); return () => document.removeEventListener('fullscreenchange', update); }, []);
-  useEffect(() => { const saved = Number(window.localStorage.getItem(paperScaleKey)); const frame = window.requestAnimationFrame(() => { if (Number.isFinite(saved) && saved >= .8 && saved <= 1.4) setPaperScale(saved); setPaperScaleReady(true); }); return () => window.cancelAnimationFrame(frame); }, []);
-  useEffect(() => { if (paperScaleReady) window.localStorage.setItem(paperScaleKey, String(paperScale)); }, [paperScale, paperScaleReady]);
+  useEffect(() => { const saved = Number(readStorage(paperScaleKey)); const frame = window.requestAnimationFrame(() => { if (Number.isFinite(saved) && saved >= .8 && saved <= 1.4) setPaperScale(saved); setPaperScaleReady(true); }); return () => window.cancelAnimationFrame(frame); }, []);
+  useEffect(() => { if (paperScaleReady) writeStorage(paperScaleKey, String(paperScale)); }, [paperScale, paperScaleReady]);
   useEffect(() => {
     function dismissFloatingReaderPanels(event: PointerEvent) {
       const target = event.target;
@@ -1051,7 +1061,7 @@ function Reader({ paper, audit, openImport, selectedNodeId, setSelectedNodeId, e
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       try {
-        const saved = JSON.parse(window.localStorage.getItem(assistantSizeKey) ?? 'null') as AssistantSize | null;
+        const saved = JSON.parse(readStorage(assistantSizeKey) ?? 'null') as AssistantSize | null;
         if (saved && Number.isFinite(saved.width) && Number.isFinite(saved.height)) setAssistantSize({ width: Math.max(280, saved.width), height: Math.max(240, saved.height) });
       } catch { /* Use the compact default assistant size. */ }
     });
@@ -1066,8 +1076,8 @@ function Reader({ paper, audit, openImport, selectedNodeId, setSelectedNodeId, e
       next = { width: Math.round(Math.min(maximumWidth, Math.max(280, start.width - (pointer.clientX - startX)))), height: Math.round(Math.min(window.innerHeight - 76, Math.max(240, start.height + (pointer.clientY - startY)))) };
       setAssistantSize(next);
     };
-    const finish = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); document.body.classList.remove('assistant-resizing'); window.localStorage.setItem(assistantSizeKey, JSON.stringify(next)); };
-    document.body.classList.add('assistant-resizing'); window.addEventListener('pointermove', move); window.addEventListener('pointerup', finish, { once: true });
+    const finish = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); window.removeEventListener('pointercancel', finish); document.body.classList.remove('assistant-resizing'); writeStorage(assistantSizeKey, JSON.stringify(next)); };
+    document.body.classList.add('assistant-resizing'); window.addEventListener('pointermove', move); window.addEventListener('pointerup', finish, { once: true }); window.addEventListener('pointercancel', finish, { once: true });
   }
   async function toggleFullscreen() {
     if (document.fullscreenElement) await document.exitFullscreen();
@@ -1449,7 +1459,32 @@ function InteractiveDocumentComponent({ paper, audit, nodes, notes, saveNote, up
   </article>;
 }
 
-const InteractiveDocument = memo(InteractiveDocumentComponent, (previous, next) => previous.paper === next.paper && previous.audit === next.audit && previous.nodes === next.nodes && previous.notes === next.notes && previous.expanded === next.expanded && previous.marks === next.marks && previous.patches === next.patches);
+const MemoizedInteractiveDocument = memo(InteractiveDocumentComponent, (previous, next) => previous.paper === next.paper && previous.audit === next.audit && previous.nodes === next.nodes && previous.notes === next.notes && previous.expanded === next.expanded && previous.marks === next.marks && previous.patches === next.patches);
+
+// The memoized document ignores callback identity so typing or scrolling does not
+// re-render the whole paper. Give it stable callbacks that always call the latest
+// props; otherwise its actions kept using the model, reasoning effort, and thread
+// captured when the document last rendered.
+function InteractiveDocument(props: InteractiveDocumentProps) {
+  const latest = useRef(props);
+  useLayoutEffect(() => { latest.current = props; });
+  const callbacks = useMemo(() => ({
+    saveNote: (...args: Parameters<InteractiveDocumentProps['saveNote']>) => latest.current.saveNote(...args),
+    updateNote: (...args: Parameters<InteractiveDocumentProps['updateNote']>) => latest.current.updateNote(...args),
+    deleteNote: (...args: Parameters<InteractiveDocumentProps['deleteNote']>) => latest.current.deleteNote(...args),
+    setSelectedNodeId: (...args: Parameters<InteractiveDocumentProps['setSelectedNodeId']>) => latest.current.setSelectedNodeId(...args),
+    setExpanded: (...args: Parameters<InteractiveDocumentProps['setExpanded']>) => latest.current.setExpanded(...args),
+    setMark: (...args: Parameters<InteractiveDocumentProps['setMark']>) => latest.current.setMark(...args),
+    savePatches: (...args: Parameters<InteractiveDocumentProps['savePatches']>) => latest.current.savePatches(...args),
+    openAssistant: (...args: Parameters<InteractiveDocumentProps['openAssistant']>) => latest.current.openAssistant(...args),
+    openReference: (...args: Parameters<InteractiveDocumentProps['openReference']>) => latest.current.openReference(...args),
+    expandCitation: (...args: Parameters<InteractiveDocumentProps['expandCitation']>) => latest.current.expandCitation(...args),
+    attachCitation: (...args: Parameters<InteractiveDocumentProps['attachCitation']>) => latest.current.attachCitation(...args),
+    expandProofStep: (...args: Parameters<InteractiveDocumentProps['expandProofStep']>) => latest.current.expandProofStep(...args),
+    expandProofRequest: (...args: Parameters<InteractiveDocumentProps['expandProofRequest']>) => latest.current.expandProofRequest(...args),
+  }), []);
+  return <MemoizedInteractiveDocument {...props} {...callbacks} />;
+}
 
 function EditableSavedNote({ note, update, remove, autoEdit = false }: { note: Note; update: (noteId: string, text: string) => void; remove: (noteId: string) => void; autoEdit?: boolean }) {
   const [editing, setEditing] = useState(autoEdit); const [draft, setDraft] = useState(note.text);
@@ -1670,7 +1705,9 @@ function watchProofViewport(check: () => void) {
   };
 }
 
-function VisualLineNumbers({ children }: { children: ReactNode }) {
+// contentKey identifies the text being numbered. The children element is new on every
+// parent render, so depending on it rebuilt every proof's observers and re-measured.
+function VisualLineNumbers({ children, contentKey }: { children: ReactNode; contentKey: string }) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [lineTops, setLineTops] = useState<number[]>([]);
   useEffect(() => {
@@ -1757,7 +1794,7 @@ function VisualLineNumbers({ children }: { children: ReactNode }) {
     document.fonts.addEventListener('loadingdone', schedule);
     window.addEventListener('resize', schedule);
     return () => { visibilityObserver?.disconnect(); unwatchViewport(); deactivate(); visibilityTarget.removeEventListener('focusin', checkVisibility); visibilityTarget.removeEventListener('contentvisibilityautostatechange', schedule); document.fonts.removeEventListener('loadingdone', schedule); window.removeEventListener('resize', schedule); };
-  }, [children]);
+  }, [contentKey]);
   return <div className="proof-numbered-text"><div className="proof-line-gutter" aria-hidden="true">{lineTops.map((top, index) => <span key={`${index}:${top}`} style={{ top }}>{`L${index + 1}`}</span>)}</div><div className="proof-line-content" ref={contentRef}>{children}</div></div>;
 }
 
@@ -1769,7 +1806,7 @@ function EditableTexBlock({ label, value, originalValue, changeRationale, citati
     setSaving(true); try { await onSave(draft); setEditing(false); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save this TeX edit.'); } finally { setSaving(false); }
   }
   const changed = typeof originalValue === 'string' && originalValue !== value;
-  if (!editing) return <div className={`editable-tex-rendered ${changed ? 'tex-modified' : ''}`} role="button" tabIndex={0} title={`Click to edit ${label}`} onClick={begin} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') begin(event); }}><span className="tex-edit-hint">Click to edit</span>{value ? numbered ? <VisualLineNumbers><MathText value={value} block citations={citations} /></VisualLineNumbers> : <MathText value={value} block citations={citations} /> : <p>{emptyText}</p>}{changed && <aside className="tex-original-popover" role="tooltip"><b>Original text</b><MathText value={originalValue || 'This content was added by the reader.'} block citations={citations} />{changeRationale && <small>{changeRationale}</small>}</aside>}</div>;
+  if (!editing) return <div className={`editable-tex-rendered ${changed ? 'tex-modified' : ''}`} role="button" tabIndex={0} title={`Click to edit ${label}`} onClick={begin} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') begin(event); }}><span className="tex-edit-hint">Click to edit</span>{value ? numbered ? <VisualLineNumbers contentKey={value}><MathText value={value} block citations={citations} /></VisualLineNumbers> : <MathText value={value} block citations={citations} /> : <p>{emptyText}</p>}{changed && <aside className="tex-original-popover" role="tooltip"><b>Original text</b><MathText value={originalValue || 'This content was added by the reader.'} block citations={citations} />{changeRationale && <small>{changeRationale}</small>}</aside>}</div>;
   return <div className="editable-tex-source" onClick={(event) => event.stopPropagation()}><header><b>{label}</b><span>Expanded, portable LaTeX · original source preserved</span></header><textarea value={draft} onChange={(event) => { setDraft(event.target.value); setError(''); }} spellCheck={false} autoFocus />{error && <p className="tex-compile-error">Formula error: {error}</p>}<div className="tex-source-preview"><span>Live preview</span>{draft ? <MathText value={draft} block citations={citations} /> : <p>{emptyText}</p>}</div><footer><button onClick={(event) => { event.stopPropagation(); setEditing(false); setError(''); }}>Cancel</button><button onClick={(event) => void save(event)} disabled={saving}>{saving ? 'Saving…' : 'Save to working edition'}</button></footer></div>;
 }
 
@@ -2015,8 +2052,8 @@ function CloudSharing({ papers }: { papers: Paper[] }) {
     if (!selected.length || !provider) return;
     const processId = `cloud-share:${Date.now()}`; reportReaderProcess({ id: processId, label: 'Saving cloud share', detail: `${selected.length} paper${selected.length === 1 ? '' : 's'}`, status: 'running' }); setSharing(true); setError(''); setSaved(null);
     try {
-      const localJson = (key: string) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } };
-      const uiPreferences = { readerProfile: localJson(preferenceKey), paperScale: Number(localStorage.getItem(paperScaleKey) || 1), assistantSize: localJson(assistantSizeKey) };
+      const localJson = (key: string) => { try { return JSON.parse(readStorage(key) || 'null'); } catch { return null; } };
+      const uiPreferences = { readerProfile: localJson(preferenceKey), paperScale: Number(readStorage(paperScaleKey) || 1), assistantSize: localJson(assistantSizeKey) };
       const response = await fetch(`${bridgeUrl}/cloud/share`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, paperIds: selected, title, selection: parts, gitRemote, gitBranch, uiPreferences }) });
       const data = await response.json() as { share?: CloudShareRecord; error?: string }; if (!response.ok || !data.share) throw new Error(data.error || 'The cloud copy could not be created.'); setSaved(data.share); setRecent((current) => [data.share as CloudShareRecord, ...current.filter((item) => item.id !== data.share?.id)].slice(0, 20)); reportReaderProcess({ id: processId, label: 'Cloud share saved', detail: data.share.location, status: 'complete' });
     } catch (cause) { const message = cause instanceof Error ? cause.message : 'The cloud copy could not be created.'; setError(message); reportReaderProcess({ id: processId, label: 'Cloud share stopped', detail: message, status: 'error' }); } finally { setSharing(false); }
