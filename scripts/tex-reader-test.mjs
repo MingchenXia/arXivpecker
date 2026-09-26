@@ -899,6 +899,28 @@ assert.equal(
   'Paired-delimiter and document-command declarations must not leak into reader text.',
 );
 
+// KaTeX has no siunitx, so \SI{3}{\meter} would read as "SI 3 meter".
+const quantities = readableLatex(
+  String.raw`A speed of \SI{3}{\meter\per\second} and $v = \qty{3}{\meter}$, \si{\kilogram\per\meter\per\second\squared}, \si{\per\second}, \num{1e3}, \num{-1.5e-3}, \ang{30}, $\ang{1;2;3}$, \qty{9.81}{m/s^2}, \SI{30}{\degree}.\sisetup{per-mode=symbol}`,
+);
+assert.equal(
+  quantities,
+  String.raw`A speed of $3\,\mathrm{m/s}$ and $v = 3\,\mathrm{m}$, $\mathrm{kg/(m\,s^{2})}$, $\mathrm{s^{-1}}$, $1\times 10^{3}$, $-1.5\times 10^{-3}$, $30^{\circ}$, $1^{\circ}2'3''$, $9.81\,\mathrm{m/s^2}$, $30\mathrm{{}^{\circ}}$.`,
+);
+const units = readableLatex(
+  String.raw`$\si{\kilo\meter} \si{\milli\gram} \si{\micro\second} \si{\nano\meter} \si{\centi\metre} \si{\mega\hertz} \si{\giga\watt} \si{\newton\meter} \si{\joule\per\kelvin\per\mole} \si{\volt\ampere} \si{\pascal} \si{\meter\cubed}$`,
+);
+assert.equal(
+  units,
+  String.raw`$\mathrm{km} \mathrm{mg} \mathrm{\mu s} \mathrm{nm} \mathrm{cm} \mathrm{MHz} \mathrm{GW} \mathrm{N\,m} \mathrm{J/(K\,mol)} \mathrm{V\,A} \mathrm{Pa} \mathrm{m^{3}}$`,
+);
+assertTypesets([...`${quantities} ${units}`.matchAll(/\$([^$]*)\$/g)].map((match) => match[1]));
+assert.equal(
+  readableLatex(String.raw`$\qty{x}$ and $\qty(y)$ \begin{verbatim}\SI{3}{\meter}\end{verbatim}`),
+  String.raw`$\qty{x}$ and $\qty(y)$ \begin{verbatim}\SI{3}{\meter}\end{verbatim}`,
+  "The physics package's \\qty and literal source examples must stay as written.",
+);
+
 const horizontalFill = readableLatex(String.raw`Conclusion.\hfil Middle.\hfill $\Box$`);
 assert.doesNotMatch(
   horizontalFill,

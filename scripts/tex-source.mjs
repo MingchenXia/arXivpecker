@@ -96,8 +96,190 @@ function stripLegacyFontMarkup(source) {
   return text.replace(/\\(?:bf|it|rm|tt|sf|sl|sc)\b\s*/g, '');
 }
 
+const siunitxPrefixes = {
+  femto: 'f',
+  pico: 'p',
+  nano: 'n',
+  micro: '\\mu',
+  milli: 'm',
+  centi: 'c',
+  deci: 'd',
+  kilo: 'k',
+  mega: 'M',
+  giga: 'G',
+  tera: 'T',
+};
+const siunitxUnits = {
+  meter: 'm',
+  metre: 'm',
+  second: 's',
+  kilogram: 'kg',
+  gram: 'g',
+  kelvin: 'K',
+  ampere: 'A',
+  mole: 'mol',
+  candela: 'cd',
+  hertz: 'Hz',
+  newton: 'N',
+  joule: 'J',
+  watt: 'W',
+  volt: 'V',
+  pascal: 'Pa',
+  coulomb: 'C',
+  ohm: '\\Omega',
+  tesla: 'T',
+  liter: 'L',
+  litre: 'L',
+  minute: 'min',
+  hour: 'h',
+  electronvolt: 'eV',
+  radian: 'rad',
+  percent: '\\%',
+  degree: '{}^{\\circ}',
+  degreeCelsius: '{}^{\\circ}C',
+};
+
+// siunitx's interpreted units (\\kilo\\meter\\per\\second\\squared) or a literal
+// unit (m/s), as upright math. Several \\per units share one denominator.
+function siunitxUnit(unit) {
+  const numerator = [];
+  const denominator = [];
+  let prefix = '';
+  let power = '';
+  let per = false;
+  let last = null;
+  const add = (symbol) => {
+    last = { symbol: joinControlWords(prefix, symbol), power };
+    (per ? denominator : numerator).push(last);
+    prefix = '';
+    power = '';
+    per = false;
+  };
+  for (const match of unit.matchAll(/\\([A-Za-z]+)\s*(?:\{([^{}]*)\})?|\\(.)|([^\\]+)/g)) {
+    const [, name, group, symbol, literal] = match;
+    if (literal !== undefined) {
+      // Literal units separate factors with `.`, `~`, or spaces.
+      const text = literal.trim().replace(/\s*(?:(?<!\d)\.(?!\d)|~)\s*|\s+/g, '\\,');
+      if (text) add(text);
+    } else if (symbol !== undefined) add(`\\${symbol}`);
+    else if (name === 'per') per = true;
+    else if (name === 'square' || name === 'cubic') power = name === 'square' ? '2' : '3';
+    else if (name === 'raiseto' && group !== undefined) power = group;
+    else if ((name === 'squared' || name === 'cubed' || name === 'tothe') && last)
+      last.power = name === 'squared' ? '2' : name === 'cubed' ? '3' : group || '';
+    else if (siunitxPrefixes[name]) prefix = joinControlWords(prefix, siunitxPrefixes[name]);
+    else add(siunitxUnits[name] || `\\${name}${group === undefined ? '' : `{${group}}`}`);
+  }
+  const render = (factor, negate = false) =>
+    negate || factor.power
+      ? `${factor.symbol}^{${negate ? '-' : ''}${factor.power || (negate ? '1' : '')}}`
+      : factor.symbol;
+  if (!numerator.length && !denominator.length) return '';
+  // A bare \\per unit reads as a negative power, as siunitx prints it.
+  if (!numerator.length) return `\\mathrm{${denominator.map((factor) => render(factor, true)).join('\\,')}}`;
+  const above = numerator.map((factor) => render(factor)).join('\\,');
+  const below = denominator.map((factor) => render(factor)).join('\\,');
+  return `\\mathrm{${above}${below ? `/${denominator.length > 1 ? `(${below})` : below}` : ''}}`;
+}
+
+// siunitx input numbers: `1.5e-3` is 1.5 × 10⁻³, `2x3` is 2 × 3, and a
+// decimal comma must not read as a list separator.
+function siunitxNumber(value) {
+  const number = value.trim().replace(/\s+/g, ' ');
+  const exponent = /^([^eEdD]*?)\s*[eEdD]\s*([+-]?)\s*(\d+)$/.exec(number);
+  const mantissa = (exponent ? exponent[1] : number)
+    .replace(/(\d),(?=\d)/g, '$1{,}')
+    .replace(/(\d)\s*x\s*(?=\d)/g, '$1\\times ');
+  if (!exponent) return mantissa;
+  const power = `10^{${exponent[2] === '-' ? '-' : ''}${exponent[3]}}`;
+  return mantissa ? `${mantissa}\\times ${power}` : power;
+}
+
+// \\ang{1;2;3} is 1 degree, 2 minutes, 3 seconds; empty parts are omitted.
+function siunitxAngle(value) {
+  return value
+    .split(';')
+    .map((part, index) => part.trim() && `${siunitxNumber(part)}${['^{\\circ}', "'", "''"][index] ?? ''}`)
+    .join('');
+}
+
+function siunitxQuantity(number, unit, before = '') {
+  const symbol = siunitxUnit(unit);
+  // siunitx sets an angle in degrees without a space before the unit.
+  const space = symbol && symbol !== `\\mathrm{${siunitxUnits.degree}}` ? '\\,' : '';
+  return `${before}${siunitxNumber(number)}${space}${symbol}`;
+}
+
+// KaTeX has no siunitx. Rewrite \\SI, \\qty, \\si, \\unit, \\num, and \\ang as
+// plain TeX, wrapped in `$...$` where they appear in prose.
+function normalizeSiunitxCommands(source) {
+  const text = String(source || '');
+  if (!/\\(?:SI|si|qty|unit|num|ang|sisetup)(?![A-Za-z@])/.test(text)) return text;
+  const literalRanges = literalSourceRanges(text);
+  const mathRanges = [
+    ...text.matchAll(
+      /\\begin\{(equation|align|gather|multline|flalign|alignat|eqnarray|displaymath|math)(\*?)\}[\s\S]*?\\end\{\1\2\}|\$\$[\s\S]*?\$\$|(?<!\\)\\\[[\s\S]*?\\\]|(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\$(?:\\.|[^$\\])+\$/g,
+    ),
+  ].map((match) => [match.index, match.index + match[0].length]);
+  const textRanges = [];
+  for (const match of text.matchAll(/\\(?:text|textrm|textnormal|mbox|intertext)\s*\{/g)) {
+    const group = balancedGroup(text, match.index + match[0].length - 1);
+    if (group) textRanges.push([match.index, group.end]);
+  }
+  let output = '';
+  let cursor = 0;
+  for (const match of text.matchAll(/\\(SI|si|qty|unit|num|ang|sisetup)(?![A-Za-z@])/g)) {
+    const start = match.index;
+    if (start < cursor || insideSourceRanges(start, literalRanges)) continue;
+    let position = start + match[0].length;
+    const optional = () => {
+      while (/\s/.test(text[position] || '')) position += 1;
+      const group = balancedGroup(text, position, '[', ']');
+      if (group) position = group.end;
+      return group?.content;
+    };
+    const argument = () => {
+      while (/\s/.test(text[position] || '')) position += 1;
+      const group = balancedGroup(text, position);
+      if (group) position = group.end;
+      return group?.content;
+    };
+    const options = optional();
+    let quantity;
+    if (match[1] === 'sisetup') quantity = argument() === undefined ? undefined : '';
+    else if (match[1] === 'SI') {
+      const number = argument();
+      const before = optional();
+      const unit = argument();
+      if (number !== undefined && unit !== undefined) quantity = siunitxQuantity(number, unit, before);
+    } else if (match[1] === 'qty') {
+      const number = argument();
+      const unit = argument();
+      // The physics package's \\qty{x} is automatic bracing, never a number.
+      if (number !== undefined && unit !== undefined && /^\s*[-+]?\.?\d/.test(number))
+        quantity = siunitxQuantity(number, unit);
+    } else if (match[1] === 'si' || match[1] === 'unit') {
+      const unit = argument();
+      // The units package writes the value as the option: \\unit[3]{m}.
+      if (unit !== undefined)
+        quantity =
+          match[1] === 'unit' && /^\s*[-+]?[\d.,]+\s*$/.test(options || '')
+            ? siunitxQuantity(options, unit)
+            : siunitxUnit(unit);
+    } else {
+      const value = argument();
+      if (value !== undefined) quantity = match[1] === 'num' ? siunitxNumber(value) : siunitxAngle(value);
+    }
+    if (quantity === undefined) continue;
+    const inMath = insideSourceRanges(start, mathRanges) && !insideSourceRanges(start, textRanges);
+    output += text.slice(cursor, start) + (inMath || !quantity ? quantity : `$${quantity}$`);
+    cursor = position;
+  }
+  return output + text.slice(cursor);
+}
+
 function normalizeMathTextCommands(source) {
-  let text = String(source || '');
+  let text = normalizeSiunitxCommands(source);
   const command = /\\(mbox|text)\s*\{/g;
   for (let pass = 0; pass < 3; pass += 1) {
     let output = '';
