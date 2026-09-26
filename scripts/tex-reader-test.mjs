@@ -8,6 +8,7 @@ import {
   buildSourceBlocks,
   enrichAuditFromTex,
   expandAuthorMacros,
+  extractBibliography,
   extractBibliographyTree,
   extractSourceUnits,
   readExpandedTex,
@@ -847,6 +848,139 @@ assert.ok(
 assert.ok(
   bibliographyBlocks.some((block) => block.kind === 'section' && block.title === 'References'),
   'An inline bibliography must receive a readable references heading.',
+);
+
+// Some authors write the reference list by hand: a References heading, then
+// entries that open with a bracketed key instead of \bibitem.
+const handWrittenSource = String.raw`\documentclass{article}\begin{document}
+\section{Introduction}
+Body text.
+
+\vspace{6ex}
+
+\noindent {\bf References.} \\
+
+\noindent [Buc88]\, N. P. Buchdahl --- {\it Hermitian-Einstein Connections} --- Math. Ann. {\bf 280} (1988), 625-648.
+
+\vspace{1ex}
+
+%\noindent [Old25]\, A. Withdrawn --- {\it Withdrawn} --- arXiv:2501.00001.
+
+\noindent [DP25]\, S. Dinew, D. Popovici --- {\it $m$-Pseudo-effectivity} --- arXiv:2510.27362v1 [math.DG].
+
+\noindent [Web]\, A. Author, \emph{Online notes}, \url{https://example.org/notes.pdf}, doi:10.1000/xyz123.
+
+\vspace{6ex}
+
+\noindent Institut de Math\'ematiques, Toulouse
+\end{document}`;
+const handWritten = extractBibliography(handWrittenSource);
+const referenceFields = (reference) =>
+  reference && {
+    title: reference.title,
+    authors: reference.authors,
+    arxivId: reference.arxivId,
+    doi: reference.doi,
+    url: reference.url,
+  };
+assert.deepEqual([...handWritten.keys()], ['Buc88', 'DP25', 'Web'], 'A hand-written list must be the bibliography.');
+assert.deepEqual(referenceFields(handWritten.get('DP25')), {
+  title: '$m$-Pseudo-effectivity',
+  authors: 'S. Dinew, D. Popovici',
+  arxivId: '2510.27362',
+  doi: '',
+  url: 'https://arxiv.org/abs/2510.27362',
+});
+assert.deepEqual(referenceFields(handWritten.get('Web')), {
+  title: 'Online notes',
+  authors: 'A. Author',
+  arxivId: '',
+  doi: '10.1000/xyz123',
+  url: 'https://example.org/notes.pdf',
+});
+assert.match(
+  handWritten.get('Buc88').text,
+  /^N\. P\. Buchdahl --- Hermitian-Einstein Connections --- Math\. Ann\. 280/,
+);
+const handWrittenBlocks = buildSourceBlocks(handWrittenSource, [], handWritten);
+assert.deepEqual(
+  handWrittenBlocks.map((block) => [block.kind, block.title]).slice(-5),
+  [
+    ['section', 'References'],
+    ['bibliography', 'Buc88'],
+    ['bibliography', 'DP25'],
+    ['bibliography', 'Web'],
+    ['paragraph', ''],
+  ],
+  'A hand-written list must render as one references heading and one block per entry.',
+);
+assert.equal(handWrittenBlocks.find((block) => block.title === 'DP25').citations[0].arxivId, '2510.27362');
+assert.match(handWrittenBlocks.at(-1).content, /^Institut de Mathématiques, Toulouse$/);
+assert.doesNotMatch(
+  handWrittenBlocks.map((block) => block.content).join('\n'),
+  /References\.|\[Buc88\]|Withdrawn|\\,/,
+  'The heading, keys, and commented entries of a hand-written list must not leak into the reader.',
+);
+for (const [heading, list, keys] of [
+  [
+    String.raw`\section*{References}`,
+    String.raw`[1] A. Author, {\em First title}, J. One (2001).
+
+[2] B. Author, {\em Second title}, J. Two (2002).`,
+    ['1', '2'],
+  ],
+  [
+    String.raw`\textbf{References}`,
+    String.raw`\begin{description}
+\item[AB01] A. Author, \textit{First title}, J. One (2001).
+\item [CD02] B. Author, \textit{Second title}, J. Two (2002).
+\end{description}`,
+    ['AB01', 'CD02'],
+  ],
+  [
+    'References',
+    String.raw`[AB01] A. Author, {\it First title}, J. One (2001).\\
+[CD02] B. Author, {\it Second title}, J. Two (2002).`,
+    ['AB01', 'CD02'],
+  ],
+  [
+    String.raw`\noindent{\bf Bibliography}\medskip`,
+    String.raw`\noindent[1] A. Author, {\it First title}, J. One (2001).
+
+\noindent[2] B. Author, {\it Second title}, J. Two (2002).`,
+    ['1', '2'],
+  ],
+]) {
+  const source = String.raw`\begin{document}\section{Body}Text.
+
+${heading}
+${list}
+\end{document}`;
+  const references = extractBibliography(source);
+  assert.deepEqual([...references.keys()], keys, `A list under ${heading} must be the bibliography.`);
+  assert.deepEqual(
+    [...references.values()].map((reference) => [reference.authors, reference.title]),
+    [
+      ['A. Author', 'First title'],
+      ['B. Author', 'Second title'],
+    ],
+  );
+  assert.deepEqual(
+    buildSourceBlocks(source, [], references).map((block) => [block.kind, block.title]),
+    [['section', 'Body'], ['paragraph', ''], ['section', 'References'], ...keys.map((key) => ['bibliography', key])],
+    `A list under ${heading} must render as entries after one references heading.`,
+  );
+}
+assert.equal(
+  extractBibliography(String.raw`\begin{document}
+References
+
+We thank the referee.
+
+[1] is not an entry after prose.
+\end{document}`).size,
+  0,
+  'Prose between the heading and a bracket must not make a hand-written list.',
 );
 
 const decorative = readableLatex(

@@ -819,36 +819,104 @@ function extractBibliography(source) {
       (match.index ?? 0) + match[0].length,
       matches[index + 1]?.index ?? text.indexOf('\\end{thebibliography}', (match.index ?? 0) + match[0].length),
     );
-    const blocks = raw
-      .split(/\\newblock\b/)
-      .map(cleanBibliographyFragment)
-      .filter(Boolean);
-    const citationText = cleanBibliographyFragment(raw);
-    const title = blocks[1] || blocks[0] || match[1];
-    const authors = blocks.length > 1 ? blocks[0] : '';
-    const href = /\\href\s*\{([^}]+)\}/.exec(raw)?.[1];
-    const explicitUrl = /\\(?:url|nolinkurl|path)\s*\{([^}]+)\}/.exec(raw)?.[1] || /https?:\/\/[^\s}]+/.exec(raw)?.[0];
-    const doi = /\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/i.exec(raw)?.[0]?.replace(/[.,;]+$/, '') || '';
-    const arxivId = /(?:arXiv\s*:\s*|arXiv\s+)([a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i.exec(citationText)?.[1] || '';
-    const searchQuery = [title, authors].filter(Boolean).join(' ');
-    const searchUrl = `https://scholar.google.com/scholar?q=${encodeURIComponent(searchQuery)}`;
-    const url =
-      explicitUrl ||
-      href ||
-      (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : searchUrl);
-    references.set(match[1], {
-      key: match[1],
-      title,
-      authors,
-      text: citationText,
-      url,
-      searchUrl,
-      doi,
-      arxivId,
-      direct: Boolean(explicitUrl || href || doi || arxivId),
-    });
+    references.set(match[1], bibliographyRecord(match[1], raw, raw.split(/\\newblock\b/)));
   }
+  if (!matches.length)
+    for (const { key, raw } of handWrittenBibliography(text)?.entries || [])
+      references.set(key, bibliographyRecord(key, raw, handWrittenFragments(raw)));
   return references;
+}
+
+// `fragments` splits the entry's raw TeX into its authors, then its title.
+function bibliographyRecord(key, raw, fragments) {
+  const blocks = fragments.map(cleanBibliographyFragment).filter(Boolean);
+  const citationText = cleanBibliographyFragment(raw);
+  const title = blocks[1] || blocks[0] || key;
+  const authors = blocks.length > 1 ? blocks[0] : '';
+  const href = /\\href\s*\{([^}]+)\}/.exec(raw)?.[1];
+  const explicitUrl = /\\(?:url|nolinkurl|path)\s*\{([^}]+)\}/.exec(raw)?.[1] || /https?:\/\/[^\s}]+/.exec(raw)?.[0];
+  const doi = /\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/i.exec(raw)?.[0]?.replace(/[.,;]+$/, '') || '';
+  const arxivId = /(?:arXiv\s*:\s*|arXiv\s+)([a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i.exec(citationText)?.[1] || '';
+  const searchQuery = [title, authors].filter(Boolean).join(' ');
+  const searchUrl = `https://scholar.google.com/scholar?q=${encodeURIComponent(searchQuery)}`;
+  const url =
+    explicitUrl || href || (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : searchUrl);
+  return {
+    key,
+    title,
+    authors,
+    text: citationText,
+    url,
+    searchUrl,
+    doi,
+    arxivId,
+    direct: Boolean(explicitUrl || href || doi || arxivId),
+  };
+}
+
+// Hand-written entries have no \newblock, but they usually set the title in
+// italics after the authors.
+function handWrittenFragments(raw) {
+  const title = /\{\\(?:it|em)\s[^{}]*\}|\\(?:emph|textit)\s*\{[^{}]*\}/.exec(raw);
+  return title ? [raw.slice(0, title.index).replace(/[\s,;:-]+$/, ''), title[0]] : [raw];
+}
+
+// Headings that open a hand-written reference list, and the spacing, labels,
+// and list markup that may stand between them and its entries.
+const referencesHeading =
+  /\\(?:chapter|(?:sub)?section)\*?\s*\{\s*(?:References|Bibliography)\s*\}|\{\s*\\(?:bf|bfseries)\s+(?:References|Bibliography)[.:]?\s*\}|\\textbf\s*\{\s*(?:References|Bibliography)[.:]?\s*\}|^[ \t]*(?:References|Bibliography)[.:]?[ \t]*$/gim;
+const referencesLayout =
+  /\\\\(?:\[[^\]]*\])?|\\(?:vspace|hspace)\*?\s*\{[^}]*\}|\\(?:label|addcontentsline)\s*(?:\{[^}]*\}\s*)+|\\(?:noindent|par|medskip|smallskip|bigskip|small|footnotesize)(?![A-Za-z@])|\\begin\{(?:description|itemize|enumerate)\}(?:\[[^\]]*\])?|[{}]/g;
+// An entry opens a line or paragraph with its key, as `\noindent [Kob82]` or
+// `[1]`, or is a list `\item[Kob82]`; it runs to the next entry or the end of
+// its paragraph, list, or section.
+const handWrittenEntry =
+  /^[ \t]*(?:\\(?:noindent|par)(?![A-Za-z@])[ \t]*)*\[([^[\]{}\\$%,\n]{1,40})\]|\\item\s*\[([^[\]{}\\$%,\n]{1,40})\]/gm;
+const handWrittenEntryEnd =
+  /\n[ \t]*\r?\n|\\end\{(?:description|itemize|enumerate|document)\}|\\(?:chapter|section|appendix)(?![A-Za-z@])/g;
+
+// Some authors typeset the reference list by hand, with no \bibitem. Returns
+// the list's extent and its entries' keys and raw TeX, or null. The extent
+// starts after a sectioning heading, which renders as its own section, and at
+// any other heading, which the list replaces.
+function handWrittenBibliography(source) {
+  const text = String(source || '');
+  const literalRanges = literalSourceRanges(text);
+  const active = (index) => !insideSourceRanges(index, literalRanges) && !isLatexCommentedAt(text, index);
+  if ([...text.matchAll(/\\bibitem(?![A-Za-z@])/g)].some((match) => active(match.index ?? 0))) return null;
+  const entryAfter = (position) => {
+    handWrittenEntry.lastIndex = position;
+    for (let match = handWrittenEntry.exec(text); match; match = handWrittenEntry.exec(text)) {
+      const key = (match[1] ?? match[2]).trim();
+      if (/[\p{L}\p{N}]/u.test(key) && active(match.index))
+        return { key, start: match.index, end: handWrittenEntry.lastIndex };
+    }
+    return null;
+  };
+  const layoutOnly = (fragment) => !stripLatexComments(fragment).replace(referencesLayout, '').trim();
+  const headings = [...text.matchAll(referencesHeading)].filter((match) => active(match.index ?? 0));
+  // The reference list closes the paper, so the last heading followed by entries is it.
+  for (const heading of headings.reverse()) {
+    const headingEnd = (heading.index ?? 0) + heading[0].length;
+    const entries = [];
+    let cursor = headingEnd;
+    for (let entry = entryAfter(cursor); entry && layoutOnly(text.slice(cursor, entry.start));) {
+      const next = entryAfter(entry.end);
+      handWrittenEntryEnd.lastIndex = entry.end;
+      const end = Math.min(next?.start ?? text.length, handWrittenEntryEnd.exec(text)?.index ?? text.length);
+      // Drop the spacing that separates the key from the entry, as in `[Kob82]\, S. Kobayashi`.
+      entries.push({ key: entry.key, raw: text.slice(entry.end, end).replace(/^(?:\s|~|\\[,;: ])+/, '') });
+      cursor = end;
+      entry = next;
+    }
+    if (entries.length)
+      return {
+        start: /^\\(?:chapter|(?:sub)?section)/.test(heading[0]) ? headingEnd : (heading.index ?? 0),
+        end: cursor,
+        entries,
+      };
+  }
+  return null;
 }
 
 function bibtexField(entry, name) {
@@ -3096,6 +3164,14 @@ function bibliographyEvents(source, bibliography) {
       .filter((entry) => entry.key);
     if (entries.length) events.push({ type: 'bibliography', start, end: start + match[0].length, entries });
   }
+  const handWritten = events.length ? null : handWrittenBibliography(value);
+  if (handWritten)
+    events.push({
+      type: 'bibliography',
+      start: handWritten.start,
+      end: handWritten.end,
+      entries: handWritten.entries.map(({ key, raw }) => ({ key, content: cleanBibliographyFragment(raw) || key })),
+    });
   if (events.length || !bibliography?.size) return events;
   const external = /\\(?:printbibliography|bibliography)\b(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/.exec(value);
   if (
