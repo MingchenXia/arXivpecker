@@ -616,6 +616,38 @@ function isLatexCommentedAt(source, index) {
   return !(lineBreak >= 0 && breaks[lineBreak] > percents[percent]) && active[percent];
 }
 
+// Every command that prints a citation: the \cite family, natbib's, and
+// biblatex's, starred or not. biblatex's multicites (\cites, \textcites, ...)
+// take optional (pre)(post) notes for the whole list, then repeat
+// [pre][post]{keys}; the others take one group, so a brace group after them
+// stays text. \nocite prints nothing and is not one of them.
+const citeCommand =
+  /\\(?:((?:[Cc]ite|[Pp]arencite|[Tt]extcite|[Aa]utocite|[Ss]martcite|[Ss]upercite|[Ff]ootcite(?:text)?)s)\*?((?:\s*\([^()]*\)){0,2})((?:(?:\s*\[[^\]]*\]){0,2}\s*\{[^}]*\})+)|([Cc]ite\w*|(?:[Pp]aren|[Tt]ext|[Aa]uto|[Ss]mart|[Ss]uper|[Ff]ull|[Ff]oot(?:full)?)cite(?:text)?)\*?((?:\s*\[[^\]]*\]){0,2}\s*\{[^}]*\}))/g;
+
+// The keys of one citeCommand match, each with the notes printed around it as
+// its locator: a group's own [pre][post], and a multicite's (pre) before its
+// first group and (post) after its last. A lone note is the postnote.
+function citeCommandMentions(globalNotes = '', groups = '') {
+  const notes = [...globalNotes.matchAll(/\(([^()]*)\)/g)].map((note) => note[1]);
+  const [before, after] = notes.length > 1 ? notes : ['', notes[0] || ''];
+  const parsed = [...groups.matchAll(/((?:\s*\[[^\]]*\]){0,2})\s*\{([^}]*)\}/g)];
+  return parsed.flatMap((group, index) => {
+    const locator = [
+      index === 0 ? before : '',
+      ...[...group[1].matchAll(/\[([^\]]*)\]/g)].map((note) => note[1]),
+      index === parsed.length - 1 ? after : '',
+    ]
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join('; ');
+    return group[2]
+      .split(',')
+      .map((key) => key.trim())
+      .filter(Boolean)
+      .map((key) => ({ key, locator }));
+  });
+}
+
 function readableLatex(source) {
   const withoutCommentEnvironments = String(source || '').replace(/\\begin\{comment\}[\s\S]*?\\end\{comment\}/g, '');
   const prepared = stripDocumentDeclarations(
@@ -635,16 +667,11 @@ function readableLatex(source) {
       '??',
     )
     .replace(/\\hyperref\s*\[[^\]]*\]\s*\{([^{}]*)\}/g, '$1')
-    .replace(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}/g, (_match, preNote, postNote, keys) => {
-      const locator = [preNote, postNote]
-        .map((item) => String(item || '').trim())
-        .filter(Boolean)
-        .join('; ');
-      return String(keys)
-        .split(',')
-        .map((key) => `[[cite:${key.trim()}${locator ? `|${locator}` : ''}]]`)
-        .join(' ');
-    })
+    .replace(citeCommand, (_match, _multicite, globalNotes, groups, _cite, group) =>
+      citeCommandMentions(globalNotes, groups ?? group)
+        .map(({ key, locator }) => `[[cite:${key}${locator ? `|${locator}` : ''}]]`)
+        .join(' '),
+    )
     .replace(/\\begin\{tikzcd\}(?:\[[^\]]*\])?/g, '\\begin{array}{cccccccccccc}')
     .replace(/\\end\{tikzcd\}/g, '\\end{array}')
     .replace(/\\ar(?:\[[^\]]*\])?(?:\s*\{[^}]*\})?/g, '')
@@ -759,18 +786,10 @@ function citationMentions(source) {
   const value = String(source || '');
   const literalRanges = literalSourceRanges(value);
   const mentions = [];
-  for (const match of value.matchAll(/\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)) {
+  for (const match of value.matchAll(citeCommand)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(value, match.index ?? 0)) continue;
-    for (const key of match[3]
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean)) {
-      const locator = [match[1], match[2]]
-        .map((item) => String(item || '').trim())
-        .filter(Boolean)
-        .join('; ');
+    for (const { key, locator } of citeCommandMentions(match[2], match[3] ?? match[5]))
       if (!mentions.some((item) => item.key === key && item.locator === locator)) mentions.push({ key, locator });
-    }
   }
   return mentions;
 }

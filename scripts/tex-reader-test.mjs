@@ -797,6 +797,38 @@ assert.deepEqual(
   'Commented and literal image examples must not become live paper assets.',
 );
 
+// biblatex's citation commands, their starred forms, and its multicites are
+// citations like \cite, in theorem statements and in prose; \nocite prints nothing.
+const biblatexCitations = String.raw`By \parencite{a}, \Parencite[p. 3]{b}, \textcite{c}, \Textcite*{d},
+\autocite[see][ch. 2]{e}, \Autocite{f}, \footcite{g}, \footcitetext{h}, \smartcite{i}, \supercite{j},
+\fullcite{k}, \Cite{l}, \cite*{m}, \citeauthor*{n}, \textcites[pre][post]{o}[post2]{p,q},
+\cites(Global)(end)[x]{r}{s}, \parencites{t}{u}, and \cite{v}{\em also \cite{w}}.\nocite{z}`;
+const biblatexMentions = [
+  ...['a', ['b', 'p. 3'], 'c', 'd', ['e', 'see; ch. 2'], 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n'],
+  ...[['o', 'pre; post'], ['p', 'post2'], ['q', 'post2'], ['r', 'Global; x'], ['s', 'end'], 't', 'u', 'v', 'w'],
+].map((mention) => (Array.isArray(mention) ? { key: mention[0], locator: mention[1] } : { key: mention, locator: '' }));
+assert.deepEqual(
+  extractSourceUnits(String.raw`\newtheorem{theorem}{Theorem}\begin{theorem}${biblatexCitations}\end{theorem}`)[0]
+    .citationMentions,
+  biblatexMentions,
+  'biblatex citation commands must be read as citations in a result.',
+);
+const biblatexParagraph = buildSourceBlocks(
+  String.raw`\begin{document}${biblatexCitations}\end{document}`,
+  [],
+  new Map(),
+).find((block) => block.kind === 'paragraph');
+assert.deepEqual(
+  biblatexParagraph.citations.map(({ key, locator }) => ({ key, locator })),
+  biblatexMentions,
+  'biblatex citation commands must become citation markers in prose.',
+);
+assert.doesNotMatch(
+  biblatexParagraph.content,
+  /\\\w*cite|\(Global\)|\[post2\]|\{u\}/i,
+  'No part of a biblatex citation may leak into prose.',
+);
+
 const bibliographyBlocks = buildSourceBlocks(
   String.raw`\begin{document}\begin{thebibliography}{9}\bibitem{alpha} A. Author. \newblock \emph{First reference.}\bibitem[Beta]{beta} B. Author. \newblock \textit{Second reference.}\end{thebibliography}\end{document}`,
   [],
