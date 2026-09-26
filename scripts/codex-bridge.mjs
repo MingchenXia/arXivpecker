@@ -27,6 +27,8 @@ const DEFAULT_JSON_BODY_CHARS = 1_000_000;
 const MAX_AUDIT_JSON_BODY_CHARS = 32_000_000;
 const MAX_PAPER_UPDATE_JSON_BODY_CHARS = 24_000_000;
 const MAX_SOURCE_UPLOAD_JSON_BODY_CHARS = 112_000_000;
+// Reader state carries every saved AI answer and paper-chat transcript.
+const MAX_READER_JSON_BODY_CHARS = 8_000_000;
 
 function isAllowedOrigin(origin) {
   return !origin || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
@@ -331,6 +333,7 @@ function normalizeProfile(value) {
 function bodyLimitFor(pathname) {
   if (['/vault/source-upload', '/vault/citation-asset'].includes(pathname)) return MAX_SOURCE_UPLOAD_JSON_BODY_CHARS;
   if (pathname === '/vault/audit') return MAX_AUDIT_JSON_BODY_CHARS;
+  if (pathname === '/vault/reader') return MAX_READER_JSON_BODY_CHARS;
   if (['/vault/latex-export', '/vault/paper/update-commit'].includes(pathname)) return MAX_PAPER_UPDATE_JSON_BODY_CHARS;
   return DEFAULT_JSON_BODY_CHARS;
 }

@@ -16,6 +16,7 @@ const auditBody = {
 
 assert.equal(bodyLimitFor('/vault/audit'), 32_000_000, 'Audit saves need a dedicated large request limit.');
 assert.equal(bodyLimitFor('/vault/paper'), 1_000_000, 'Ordinary paper updates should retain the smaller safety limit.');
+assert.ok(bodyLimitFor('/vault/reader') > 1_000_000, 'Reader state with long AI conversations needs more than the default limit.');
 assert.deepEqual(await parseBody(auditBody, bodyLimitFor('/vault/audit')), auditBody, 'A 1.4 million-character enriched audit must be saveable.');
 await assert.rejects(parseBody(auditBody, 1_000_000), /Request body is too large/, 'The previous generic limit would have rejected this audit.');
 

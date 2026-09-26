@@ -682,6 +682,34 @@ function ReaderIcon({ name }: { name: 'magnify' | 'fullscreen' | 'reference' | '
   return <svg className="reader-control-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths}</svg>;
 }
 
+type ReaderStateSlices = { notes: Note[]; nodeNotes: Record<string, Record<string, string>>; nodeAnswers: Record<string, Record<string, string>>; expanded: Record<string, Record<string, boolean>>; marks: Record<string, Record<string, Exclude<ReadingMark, ''>>> };
+
+// State updates replace only the slice of the paper they touch, so comparing
+// slices by identity finds every paper whose reader state needs saving.
+function changedReaderPapers(previous: ReaderStateSlices, next: ReaderStateSlices) {
+  const changed = new Set<string>();
+  for (const key of ['nodeNotes', 'nodeAnswers', 'expanded', 'marks'] as const) {
+    const before: Record<string, unknown> = previous[key]; const after: Record<string, unknown> = next[key];
+    if (before === after) continue;
+    for (const paperId of new Set([...Object.keys(before), ...Object.keys(after)])) if (before[paperId] !== after[paperId]) changed.add(paperId);
+  }
+  if (previous.notes !== next.notes) {
+    const byPaper = (notes: Note[]) => { const groups = new Map<string, Note[]>(); for (const note of notes) { const group = groups.get(note.paperId); if (group) group.push(note); else groups.set(note.paperId, [note]); } return groups; };
+    const before = byPaper(previous.notes); const after = byPaper(next.notes);
+    for (const paperId of new Set([...before.keys(), ...after.keys()])) {
+      const left = before.get(paperId) ?? []; const right = after.get(paperId) ?? [];
+      if (left.length !== right.length || left.some((note, index) => note !== right[index])) changed.add(paperId);
+    }
+  }
+  return changed;
+}
+
+function saveReaderState(paperId: string, state: ReaderStateSlices) {
+  const body = JSON.stringify({ paperId, reader: { notes: state.notes.filter((item) => item.paperId === paperId), nodeNotes: state.nodeNotes[paperId] ?? {}, nodeAnswers: state.nodeAnswers[paperId] ?? {}, expanded: state.expanded[paperId] ?? {}, marks: state.marks[paperId] ?? {} } });
+  // keepalive lets a save started as the tab closes complete; browsers cap it at 64 KB.
+  return fetch(`${bridgeUrl}/vault/reader`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: body.length < 20_000 });
+}
+
 export default function Home() {
   const [view, setView] = useState<View>('reader');
   const [papers, setPapers] = useState<Paper[]>([]);
@@ -717,6 +745,12 @@ export default function Home() {
   const auditJob = paper ? auditJobs[paper.id] : undefined;
   const activePaperId = paper?.id ?? '';
   const activePaperNotes = useMemo(() => activePaperId ? notes.filter((item) => item.paperId === activePaperId) : [], [activePaperId, notes]);
+  const readerState = useMemo<ReaderStateSlices>(() => ({ notes, nodeNotes, nodeAnswers, expanded, marks }), [notes, nodeNotes, nodeAnswers, expanded, marks]);
+  const savedReaderStateRef = useRef<ReaderStateSlices | null>(null);
+  const readerSnapshotAppliedRef = useRef(false);
+  const dirtyReaderPapersRef = useRef(new Set<string>());
+  const readerSaveTimerRef = useRef<number | undefined>(undefined);
+  const flushReaderSavesRef = useRef(() => {});
 
   function notify(message: string) { setNotice(message); window.setTimeout(() => setNotice(''), 8500); }
   function rememberAuditThread(paperId: string, threadId: string) {
@@ -730,6 +764,7 @@ export default function Home() {
   function beginPaperJob(paperId: string, kind: PaperJobKind) { setPaperJobs((current) => ({ ...current, [paperId]: kind })); }
   function finishPaperJob(paperId: string, kind: PaperJobKind) { setPaperJobs((current) => { if (current[paperId] !== kind) return current; const next = { ...current }; delete next[paperId]; return next; }); }
   function applySnapshot(snapshot: VaultSnapshot) {
+    readerSnapshotAppliedRef.current = true; dirtyReaderPapersRef.current.clear();
     setPapers(snapshot.papers); setAudits(Object.fromEntries(Object.entries(snapshot.audits).map(([paperId, paperAudit]) => [paperId, normalizeAuditCitations(paperAudit)]))); setNotes(normalizeNotes(snapshot.notes)); setNodeNotes(snapshot.nodeNotes); setNodeAnswers(snapshot.nodeAnswers); setExpanded(snapshot.expanded); setMarks(snapshot.marks ?? {}); setPatches(snapshot.patches ?? {}); setUpdates(snapshot.updates ?? {}); setAuditJobs(snapshot.auditJobs ?? {}); setLinks(snapshot.links); setGraph(snapshot.graph ?? emptyGraph);
     if (snapshot.profile) { const next = normalizeReaderProfile(snapshot.profile); if (!window.localStorage.getItem(reasoningDefaultMigrationKey)) window.localStorage.setItem(reasoningDefaultMigrationKey, 'applied'); setProfile(next); }
     setSelectedPaperId((current) => {
@@ -766,11 +801,42 @@ export default function Home() {
   }, []);
   useEffect(() => { if (!vaultReady || onboardingOpen) return; localStorage.setItem(preferenceKey, JSON.stringify(profile)); void fetch(`${bridgeUrl}/vault/profile`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }) }); }, [profile, vaultReady, onboardingOpen]);
   useEffect(() => { if (vaultReady && selectedPaperId) window.localStorage.setItem(selectedPaperKey, selectedPaperId); }, [selectedPaperId, vaultReady]);
+  // Reader state is saved per paper. Every paper whose slice changed is saved
+  // after a short pause, so an AI answer that lands after switching papers, or an
+  // edit made just before a switch, reaches the vault. Papers with a running
+  // audit or update wait until that job finishes, as before.
   useEffect(() => {
-    if (!vaultReady || !paper || Boolean(paperJobs[paper.id])) return;
-    const timer = window.setTimeout(() => { void fetch(`${bridgeUrl}/vault/reader`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paperId: paper.id, reader: { notes: notes.filter((item) => item.paperId === paper.id), nodeNotes: nodeNotes[paper.id] ?? {}, nodeAnswers: nodeAnswers[paper.id] ?? {}, expanded: expanded[paper.id] ?? {}, marks: marks[paper.id] ?? {} } }) }); }, 500);
-    return () => window.clearTimeout(timer);
-  }, [vaultReady, paper, notes, nodeNotes, nodeAnswers, expanded, marks, paperJobs]);
+    flushReaderSavesRef.current = () => {
+      window.clearTimeout(readerSaveTimerRef.current);
+      for (const paperId of [...dirtyReaderPapersRef.current]) {
+        if (paperJobs[paperId]) continue;
+        dirtyReaderPapersRef.current.delete(paperId);
+        saveReaderState(paperId, readerState).then((response) => { if (!response.ok) throw new Error(); }).catch(() => {
+          dirtyReaderPapersRef.current.add(paperId);
+          notify('Some reader changes could not be saved locally. They will be retried with your next change.');
+        });
+      }
+    };
+  });
+  useEffect(() => {
+    if (!vaultReady) return;
+    const previous = savedReaderStateRef.current; savedReaderStateRef.current = readerState;
+    if (!previous || readerSnapshotAppliedRef.current) { readerSnapshotAppliedRef.current = false; return; }
+    for (const paperId of changedReaderPapers(previous, readerState)) dirtyReaderPapersRef.current.add(paperId);
+    if (!dirtyReaderPapersRef.current.size) return;
+    window.clearTimeout(readerSaveTimerRef.current);
+    readerSaveTimerRef.current = window.setTimeout(() => flushReaderSavesRef.current(), 500);
+  }, [vaultReady, readerState]);
+  useEffect(() => {
+    if (!dirtyReaderPapersRef.current.size) return;
+    window.clearTimeout(readerSaveTimerRef.current);
+    readerSaveTimerRef.current = window.setTimeout(() => flushReaderSavesRef.current(), 500);
+  }, [paperJobs]);
+  useEffect(() => {
+    const flush = () => flushReaderSavesRef.current();
+    window.addEventListener('pagehide', flush);
+    return () => window.removeEventListener('pagehide', flush);
+  }, []);
 
   async function savePaper(incoming: Paper) {
     const response = await fetch(`${bridgeUrl}/vault/paper`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paper: incoming }) });
