@@ -38,6 +38,7 @@ import {
 import { bridgeGet, bridgePost, bridgeUrl, readerApiGet, saveReaderState } from './lib/bridge-client';
 import { changedReaderPapers } from './lib/reader-state';
 import type { ReaderStateSlices } from './lib/reader-state';
+import { understoodUnits } from './lib/study';
 import {
   arxivBaseId,
   arxivVersionNumber,
@@ -116,6 +117,7 @@ export default function Home() {
     () => (activePaperId ? notes.filter((item) => item.paperId === activePaperId) : []),
     [activePaperId, notes],
   );
+  const isUnitUnderstood = useMemo(() => understoodUnits(marks, audits), [marks, audits]);
   const readerState = useMemo<ReaderStateSlices>(
     () => ({ notes, nodeNotes, nodeAnswers, expanded, marks }),
     [notes, nodeNotes, nodeAnswers, expanded, marks],
@@ -1177,6 +1179,14 @@ export default function Home() {
             readerNotes={paper ? (nodeNotes[paper.id] ?? emptyRecord) : emptyRecord}
             notes={activePaperNotes}
             answers={paper ? (nodeAnswers[paper.id] ?? emptyRecord) : emptyRecord}
+            saveAnswer={(key, value) =>
+              paper &&
+              setNodeAnswers((current) => ({
+                ...current,
+                [paper.id]: { ...(current[paper.id] ?? {}), [key]: value },
+              }))
+            }
+            isUnderstood={isUnitUnderstood}
             savePaperMessages={(messages) =>
               paper &&
               setNodeAnswers((current) => ({

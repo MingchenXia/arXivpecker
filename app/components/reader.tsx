@@ -45,6 +45,7 @@ import type {
   EditionMode,
   EditorialSuggestion,
   Graph,
+  GraphNode,
   Note,
   Paper,
   PaperAudit,
@@ -75,6 +76,8 @@ type ReaderProps = {
   readerNotes: Record<string, string>;
   notes: Note[];
   answers: Record<string, string>;
+  saveAnswer: (key: string, value: string) => void;
+  isUnderstood: (unit: GraphNode) => boolean;
   savePaperMessages: (messages: PaperChatMessage[]) => void;
   patches: WorkingPatch[];
   savePatches: (patches: WorkingPatch[]) => Promise<void>;
@@ -109,6 +112,8 @@ export function Reader({
   readerNotes,
   notes,
   answers,
+  saveAnswer,
+  isUnderstood,
   savePaperMessages,
   patches,
   savePatches,
@@ -514,6 +519,16 @@ export function Reader({
     );
     return readString(data.text);
   }
+  async function askAboutUnit(target: AuditNode, prompt: string, failure: string) {
+    if (!paper || !audit) throw new Error('Run the full-paper audit first.');
+    const data = await bridgePost(
+      '/node-question',
+      { paper, profile, node: target, question: prompt, threadId: audit.threadId },
+      failure,
+    );
+    if (!audit.threadId && readString(data.threadId)) rememberAuditThread(readString(data.threadId));
+    return readString(data.text);
+  }
   async function expandProofRequest(target: AuditNode, request: string) {
     if (!paper || !audit?.threadId) throw new Error('Run the full-paper audit first.');
     const visibleLines = indexedVisibleProof(target.id);
@@ -768,6 +783,10 @@ export function Reader({
                 openOriginalPaper={openOriginalPaper}
                 assistantRequest={assistantRequest}
                 clearAssistantRequest={() => setAssistantRequest(null)}
+                isUnderstood={isUnderstood}
+                studyAnswers={answers}
+                saveAnswer={saveAnswer}
+                askAboutUnit={askAboutUnit}
               />
             ) : (
               <p className="p-4 text-xs text-[#6e6a64]">Select a document unit.</p>

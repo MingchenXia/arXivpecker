@@ -77,3 +77,73 @@ try {
 console.log(
   'Reader logic: macro fallback, typeset cache, per-paper reader-state changes, and bridge request errors verified.',
 );
+
+// A reading path lists prerequisites before the results that use them.
+const { readingPath, understoodUnits } = await import('../app/lib/study.ts');
+const unit = (id) => ({
+  id,
+  paperId: 'p',
+  paperTitle: '',
+  arxivId: '',
+  nodeId: id,
+  label: id,
+  title: id,
+  kind: 'lemma',
+  page: null,
+  status: 'verified',
+});
+const pathGraph = {
+  version: 1,
+  updatedAt: null,
+  nodes: ['main', 'lemmaA', 'lemmaB', 'def', 'other'].map(unit),
+  edges: [
+    { id: '1', from: 'main', to: 'lemmaA', relation: 'uses', source: 'audit' },
+    { id: '2', from: 'main', to: 'lemmaB', relation: 'uses', source: 'audit' },
+    { id: '3', from: 'lemmaA', to: 'def', relation: 'uses', source: 'audit' },
+    { id: '4', from: 'lemmaB', to: 'def', relation: 'background', source: 'manual' },
+    { id: '5', from: 'def', to: 'main', relation: 'uses', source: 'audit' },
+    { id: '6', from: 'main', to: 'other', relation: 'contrasts', source: 'manual' },
+  ],
+};
+const route = readingPath(pathGraph, 'main', (node) => node.id === 'lemmaB');
+assert.deepEqual(
+  route.map((step) => step.node.id),
+  ['def', 'lemmaA', 'lemmaB', 'main'],
+  'Prerequisites come first; cycles and contrasts are cut.',
+);
+assert.deepEqual(
+  route.map((step) => step.understood),
+  [false, false, true, false],
+);
+const understood = understoodUnits(
+  { p: { 'block-a': 'understood', 'block-b': 'question' } },
+  {
+    p: {
+      sourceBlocks: [
+        { id: 'block-a', nodeId: 'lemmaA' },
+        { id: 'block-b', nodeId: 'lemmaB' },
+      ],
+    },
+  },
+);
+assert.deepEqual(
+  pathGraph.nodes.map(understood),
+  [false, true, false, false, false],
+  'A unit is understood once one of its blocks carries the mark.',
+);
+console.log('Reader logic: reading paths verified.');
+
+// Study records survive malformed storage; Lean drafts expose their code block.
+const { extractCodeBlock, parsePracticeRecord, proofPracticePrompt } = await import('../app/lib/study.ts');
+assert.deepEqual(parsePracticeRecord('not json'), { attempt: '', feedback: '', updatedAt: '' });
+assert.equal(parsePracticeRecord(JSON.stringify({ attempt: 'By induction.', feedback: 7 })).attempt, 'By induction.');
+assert.equal(parsePracticeRecord(JSON.stringify({ attempt: 'x', feedback: 7 })).feedback, '');
+assert.match(proofPracticePrompt('Lemma 2', '', 'hint'), /how to begin/);
+assert.match(proofPracticePrompt('Lemma 2', 'Take $x$.', 'check'), /Take \$x\$\./);
+assert.equal(
+  extractCodeBlock('Intro\n```text\nnot this\n```\n```lean\ntheorem t : 1 = 1 := by\n  sorry\n```\nNotes'),
+  'theorem t : 1 = 1 := by\n  sorry',
+);
+assert.equal(extractCodeBlock('```\nexample : True := trivial\n```'), 'example : True := trivial');
+assert.equal(extractCodeBlock('No code.'), '');
+console.log('Reader logic: study records verified.');

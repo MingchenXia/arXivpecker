@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { EditableSavedNote } from './document';
 import { AIText, MathText } from './math';
+import { StudyTools } from './study-tools';
 import { makeId, readString, reportReaderProcess } from '../lib/app';
 import { bridgePost } from '../lib/bridge-client';
 import {
@@ -845,6 +846,10 @@ type InspectorProps = {
   openOriginalPaper: (page?: number) => void;
   assistantRequest: { view: 'ask' | 'notes' | 'compose-note'; nonce: number } | null;
   clearAssistantRequest: () => void;
+  isUnderstood: (unit: GraphNode) => boolean;
+  studyAnswers: Record<string, string>;
+  saveAnswer: (key: string, value: string) => void;
+  askAboutUnit: (node: AuditNode, prompt: string, failure: string) => Promise<string>;
 };
 
 export function NodeInspector({
@@ -875,6 +880,10 @@ export function NodeInspector({
   openOriginalPaper,
   assistantRequest,
   clearAssistantRequest,
+  isUnderstood,
+  studyAnswers,
+  saveAnswer,
+  askAboutUnit,
 }: InspectorProps) {
   const [noteText, setNoteText] = useState('');
   const [noteEditNonce, setNoteEditNonce] = useState(0);
@@ -1016,6 +1025,17 @@ export function NodeInspector({
       {!plainSource && (
         <>
           <AssistantProofExpander node={node} expand={expandProof} />
+          <StudyTools
+            paper={paper}
+            node={node}
+            graph={graph}
+            isUnderstood={isUnderstood}
+            openUnit={openUnit}
+            answers={studyAnswers}
+            saveAnswer={saveAnswer}
+            askAboutUnit={askAboutUnit}
+            setProofVisible={setExpanded}
+          />
           <button className="assistant-more" onClick={() => setAdvancedOpen(!advancedOpen)}>
             {advancedOpen ? 'Hide edit and context' : 'Edit and context'} <span>{advancedOpen ? '−' : '+'}</span>
           </button>
