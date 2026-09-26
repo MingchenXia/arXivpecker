@@ -122,8 +122,28 @@ function unknownMathMacroFallback(command: string) {
   return `\\operatorname{${name}}`;
 }
 
+// KaTeX output depends only on the expression and display mode. A paper repeats
+// many short formulas, and switching papers or reader modes remounts every
+// MathText, so typeset each formula once and reuse the HTML (LRU, bounded by size).
+const typesetCache = new Map<string, string | null>();
+const typesetCacheCharBudget = 6_000_000;
+let typesetCacheChars = 0;
+
 function renderMath(expression: string, displayMode: boolean) {
-  const normalized = expression.replace(/\uE000/g, '\\text{\\$}').replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}');
+  const key = `${displayMode ? 'D' : 'I'}${expression}`;
+  const cached = typesetCache.get(key);
+  if (cached !== undefined) { typesetCache.delete(key); typesetCache.set(key, cached); return cached; }
+  const html = typesetMath(expression, displayMode);
+  typesetCache.set(key, html); typesetCacheChars += key.length + (html?.length ?? 0);
+  for (const [oldKey, oldHtml] of typesetCache) {
+    if (typesetCacheChars <= typesetCacheCharBudget || oldKey === key) break;
+    typesetCache.delete(oldKey); typesetCacheChars -= oldKey.length + (oldHtml?.length ?? 0);
+  }
+  return html;
+}
+
+function typesetMath(expression: string, displayMode: boolean) {
+  const normalized =expression.replace(/\uE000/g, '\\text{\\$}').replace(/\\eqno\s*\{([^{}]*)\}/g, '\\tag{$1}');
   let candidate = normalized;
   for (let attempt = 0; attempt < 16; attempt += 1) {
     try { return katex.renderToString(candidate, { throwOnError: true, strict: 'ignore', displayMode, macros: readerKatexMacros }); }
