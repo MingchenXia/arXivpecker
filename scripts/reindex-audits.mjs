@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { enrichAuditFromTex } from './codex-bridge.mjs';
+import { enrichAuditFromTex } from './tex-source.mjs';
 import { PaperVault } from './paper-vault.mjs';
 
 const root = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || path.join(process.cwd(), 'proofroom-library'));
