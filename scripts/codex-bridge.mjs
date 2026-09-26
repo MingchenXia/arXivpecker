@@ -82,7 +82,13 @@ function runProgram(command, args, maxOutput = MAX_SOURCE_BYTES, cwd = WORKDIR) 
 
 function hydrateSourceManifest(manifest, manifestFile) {
   const directory = path.dirname(manifestFile); const hydrated = { ...manifest };
-  for (const key of ['entryFile', 'sourceDirectory', 'uploadedFile']) if (hydrated[key] && !path.isAbsolute(hydrated[key])) hydrated[key] = path.resolve(directory, hydrated[key]);
+  for (const key of ['entryFile', 'sourceDirectory', 'uploadedFile']) {
+    if (!hydrated[key]) continue;
+    if (!path.isAbsolute(hydrated[key])) hydrated[key] = path.resolve(directory, hydrated[key]);
+    // Manifests share a folder with extracted arXiv files, so a source bundle can
+    // ship its own. Never let one point the reader at files outside this paper.
+    if (relativePathEscapes(path.relative(directory, hydrated[key]))) throw new Error('The source manifest points outside its paper folder.');
+  }
   return hydrated;
 }
 
@@ -270,13 +276,19 @@ async function acquireArxivSource(paper, requestedArxivId = paper.arxivId, versi
   const payload = Buffer.from(await response.arrayBuffer());
   if (!payload.length || payload.length > MAX_SOURCE_BYTES) throw new Error('arXiv TeX source is empty or too large.');
   await writeFile(archive, payload);
-  try {
-    const listing = (await runProgram('tar', ['-tf', archive], 4 * 1024 * 1024)).toString('utf8').split('\n').filter(Boolean);
+  let listing = null;
+  try { listing = (await runProgram('tar', ['-tf', archive], 4 * 1024 * 1024)).toString('utf8').split('\n').filter(Boolean); }
+  catch { /* Not a tar archive: single-file submissions are served as gzip-compressed TeX. */ }
+  if (listing) {
+    // Validation failures must stop here rather than fall through to the gzip
+    // path, which would save the raw tar bytes as main.tex.
     if (listing.some((entry) => path.isAbsolute(entry) || path.normalize(entry).split(path.sep).includes('..'))) throw new Error('arXiv source archive contains an unsafe path.');
+    const detailedListing = (await runProgram('tar', ['-tvf', archive], 8 * 1024 * 1024)).toString('utf8');
+    if (/^[lhbcps]/m.test(detailedListing)) throw new Error('arXiv source archive contains a symbolic link or special file.');
     await runProgram('tar', ['-xf', archive, '-C', sourceDirectory], 4 * 1024 * 1024);
-  } catch (tarError) {
+  } else {
     try { await writeFile(path.join(sourceDirectory, 'main.tex'), await runProgram('gzip', ['-dc', archive])); }
-    catch { throw tarError; }
+    catch { throw new Error('arXiv did not provide a readable TeX source archive for this paper.'); }
   }
   const texFiles = await collectTexFiles(sourceDirectory);
   const main = await chooseMainTex(texFiles);
@@ -332,6 +344,8 @@ async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 
   if (depth > 12 || seen.has(entryFile)) return '';
   const relative = path.relative(sourceRoot, entryFile);
   if (relativePathEscapes(relative)) return '';
+  // Compare resolved paths too, so a symbolic link cannot lead outside the source.
+  if (relativePathEscapes(path.relative(await realpath(sourceRoot), await realpath(entryFile)))) return '';
   seen.add(entryFile);
   let source = decodeSourceBuffer(await readFile(entryFile));
   const include = /\\(?:input|include)\s*\{([^}]+)\}/g;

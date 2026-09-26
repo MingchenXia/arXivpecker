@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import katex from 'katex';
@@ -92,6 +92,21 @@ try {
     { kind: 'tex', entryFile: path.join(sourceRoot, 'main.tex'), sourceDirectory: sourceRoot },
     { kind: 'tex', entryFile: path.join(aliasDirectory, 'main.tex'), sourceDirectory: aliasDirectory },
   ), false, 'A real included-file change must still reach structural AI comparison.');
+
+  // A symbolic link inside the source tree must not pull in a file outside it.
+  const outsideRoot = await mkdtemp(path.join(tmpdir(), 'arxivpecker-outside-'));
+  try {
+    await writeFile(path.join(outsideRoot, 'secret.tex'), 'PRIVATE KEY MATERIAL');
+    const linkedRoot = path.join(sourceRoot, 'linked');
+    await mkdir(linkedRoot);
+    await symlink(path.join(outsideRoot, 'secret.tex'), path.join(linkedRoot, 'secret.tex'));
+    await writeFile(path.join(linkedRoot, 'main.tex'), String.raw`Before. \input{secret} After.`);
+    const linked = await readExpandedTex(path.join(linkedRoot, 'main.tex'), linkedRoot);
+    assert.doesNotMatch(linked, /PRIVATE KEY MATERIAL/, 'A symlinked include must not escape the paper source folder.');
+    assert.match(linked, /Before\. .*After\./s);
+  } finally {
+    await rm(outsideRoot, { recursive: true, force: true });
+  }
 } finally {
   await rm(sourceRoot, { recursive: true, force: true });
 }
