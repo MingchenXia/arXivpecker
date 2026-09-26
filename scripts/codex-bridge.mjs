@@ -2159,12 +2159,18 @@ function bodyLimitFor(pathname) {
 
 function readBody(request, maxChars = DEFAULT_JSON_BODY_CHARS) {
   return new Promise((resolve, reject) => {
+    // Decode the whole stream as UTF-8. Appending raw Buffer chunks decodes each
+    // chunk separately and corrupts characters (≤, ℝ, CJK notes) split between them.
+    request.setEncoding('utf8');
     let body = '';
+    let tooLarge = false;
     request.on('data', (chunk) => {
+      if (tooLarge) return;
       body += chunk;
-      if (body.length > maxChars) reject(new Error('Request body is too large.'));
+      if (body.length > maxChars) { tooLarge = true; body = ''; reject(new Error('Request body is too large.')); }
     });
     request.on('end', () => {
+      if (tooLarge) return;
       try { resolve(JSON.parse(body || '{}')); } catch { reject(new Error('Request body must be JSON.')); }
     });
     request.on('error', reject);
