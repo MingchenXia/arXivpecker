@@ -21,12 +21,4 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
-      - run: npm run test:starter
-      - run: npm run test:reader
-      - run: npm run test:arxiv-id
-      - run: npm run test:audit-checkpoints
-      - run: npm run test:body-limits
-      - run: npm run test:vault
-      - run: npm run test:vault-robustness
-      - run: npm run test:sessions
-      - run: npm run audit-formulas
+      - run: npm test

@@ -60,3 +60,4 @@ for (const folder of (await fs.readdir(root)).filter((name) => name.startsWith('
 }
 
 console.log(JSON.stringify({ auditedPapers, skippedPapers, total, failedCount: failed.length, failed }, null, 2));
+if (failed.length) process.exitCode = 1;

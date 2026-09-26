@@ -16,17 +16,9 @@ The combined command starts both the reader and its localhost Codex bridge. Use 
 Run:
 
 ```bash
-npm run lint
-npm run typecheck
-npm run build
-npm run test:starter
-npm run test:reader
-npm run test:arxiv-id
-npm run test:audit-checkpoints
-npm run test:body-limits
-npm run test:vault
-npm run test:sessions
-npm run audit-formulas
+npm run check
 ```
+
+It runs lint, typecheck, the production build, and every test, exactly as CI does. Add new test scripts to the `test` entry in `package.json` so CI picks them up.
 
 Do not commit `proofroom-library/`, local environment files, credentials, generated builds, or personal reader profiles. Add reusable demo papers only through `examples/starter-library/`, with portable relative source paths and no Codex thread ID.

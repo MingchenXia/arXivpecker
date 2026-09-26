@@ -44,12 +44,12 @@ The repository's reusable examples live in `examples/starter-library/`. On first
 
 Set `PROOFROOM_LIBRARY_DIR` to use another writable library. Set `ARXIVPECKER_SKIP_STARTER_LIBRARY=1` when an intentionally empty library is desired.
 
-Long audits are not stopped merely because they exceed 30 minutes. The bridge waits up to 30 minutes **without a Codex progress event** and keeps a separate two-hour safety ceiling. Maintainers can override these with `CODEX_TURN_IDLE_TIMEOUT_MS` and `CODEX_TURN_HARD_TIMEOUT_MS`; the legacy `CODEX_TURN_TIMEOUT_MS` remains an alias for the idle limit.
+Long audits are never stopped for taking too long: by default an audit runs until Codex completes or fails, and an interrupted audit can be resumed from its checkpoint. To opt in to a cutoff, set `CODEX_TURN_IDLE_TIMEOUT_MS` (no Codex progress event for that long) and/or `CODEX_TURN_HARD_TIMEOUT_MS` (absolute limit), in milliseconds with a one-minute minimum; the legacy `CODEX_TURN_TIMEOUT_MS` remains an alias for the idle limit.
 
 ## Project map
 
 - `app/` — reader interface and arXiv metadata route
-- `scripts/` — local Codex bridge, vault, checks, and sharing tools
+- `scripts/` — local Codex bridge (`codex-bridge.mjs`), Codex client and prompts, TeX reader (`tex-source.mjs`), vault, checks, and sharing tools
 - `examples/starter-library/` — portable bundled papers
 - `docs/architecture.md` — storage, first-run, and trust-boundary design
 - `proofroom-library/` — local runtime data, never committed
@@ -57,16 +57,8 @@ Long audits are not stopped merely because they exceed 30 minutes. The bridge wa
 ## Validation
 
 ```bash
-npm run lint
-npm run build
-npm run test:starter
-npm run test:reader
-npm run test:reader-fuzz
-npm run test:audit-checkpoints
-npm run test:body-limits
-npm run test:vault
-npm run test:sessions
-npm run audit-formulas
+npm run check        # lint, typecheck, production build, and every test (what CI runs)
+npm test             # tests only
 npm audit --omit=dev
 ```
 
