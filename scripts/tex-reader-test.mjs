@@ -49,13 +49,19 @@ const sharedSectionSource = String.raw`\newtheorem{claim}[section]{Claim}
 \section{First}
 \begin{claim}First claim.\end{claim}
 \begin{claim}Second claim.\end{claim}
-\section{Second}
+\section{Second}\label{sec:second}
 \begin{claim}Third claim.\end{claim}
+See Section~\ref{sec:second}.
 \end{document}`;
 assert.deepEqual(
   extractSourceUnits(sharedSectionSource).map((unit) => unit.printedNumber),
-  ['1', '1', '2'],
-  'A theorem sharing the section counter must display the current section number without incrementing it.',
+  ['2', '3', '5'],
+  'A theorem sharing the section counter steps it, as in LaTeX.',
+);
+assert.match(
+  resolveLatexReferences(sharedSectionSource, extractSourceUnits(sharedSectionSource)),
+  /See Section~4\./,
+  'Sections after a theorem sharing their counter are renumbered, as in LaTeX.',
 );
 
 const nestedCounterSource = String.raw`\newtheorem{lemma}{Lemma}[subsection]

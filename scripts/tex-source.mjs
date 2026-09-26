@@ -2192,9 +2192,9 @@ function latexNumbering(declarationSource, body, declarations = theoremDeclarati
         if (!shared || shared === root) break;
         root = shared;
       }
-      // A theorem that shares a sectioning counter shows the current number
-      // without stepping it, so results never renumber the paper's sections.
-      if (sectionDepths[root] === undefined) step(root);
+      // As in LaTeX, a theorem sharing a sectioning counter steps it, so
+      // \newtheorem{claim}[section] renumbers the sections after it.
+      step(root);
       theoremNumbers.set(event.start, the(root));
     } else if (event.type === 'equation') {
       // A display nested in another one is malformed; count the outer one only.
