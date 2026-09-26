@@ -150,7 +150,9 @@ function typesetMath(expression: string, displayMode: boolean) {
     catch (error) {
       const command = /Undefined control sequence:\s*(\\[A-Za-z@]+)/.exec(error instanceof Error ? error.message : '')?.[1];
       if (!command) return null;
-      candidate = candidate.split(command).join(unknownMathMacroFallback(command));
+      // Replace only the whole control word: an unknown \eps must not rewrite \epsilon.
+      const replacement = unknownMathMacroFallback(command);
+      candidate = candidate.replace(new RegExp(`${command.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}(?![A-Za-z@])`, 'g'), () => replacement);
     }
   }
   return null;
