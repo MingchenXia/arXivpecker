@@ -2,7 +2,10 @@
 
 arXivpecker is a local-first reader with two cooperating processes:
 
-- `app/` contains the browser interface and the arXiv metadata route.
+- `app/` contains the browser interface and the arXiv metadata route:
+  - `app/page.tsx` holds the top-level `Home` state (library, reader state, AI jobs) and per-paper reader-state saving;
+  - `app/lib/` holds framework-free logic: shared types (`types.ts`), bridge client, storage and defaults (`app.ts`), KaTeX rendering with its cache and TeX prose cleanup (`tex-text.ts`), and audit parsing, working-edition patches, version migration, and exports (`audit.ts`);
+  - `app/components/` holds the React views: the reader shell and its panels (`reader.tsx`), the interactive paper and proof line numbering (`document.tsx`), the unit inspector and version panels (`inspector.tsx`), library, discovery, settings and dialogs (`views.tsx`), math rendering (`math.tsx`), and icons.
 - `scripts/codex-bridge.mjs` is the localhost HTTP bridge: request routing, source acquisition and uploads, and figure assets. It never requires an OpenAI API key.
 - `scripts/codex-app-server.mjs` drives the locally signed-in Codex app-server over JSON-RPC (threads, turns, timeouts, archived-session recovery); `scripts/codex-prompts.mjs` holds the prompts and structured-output schemas it sends.
 - `scripts/tex-source.mjs` reads a paper's TeX tree (includes, author macros, references, bibliography) and extracts theorem units and reader blocks. It is pure apart from reading files, so the TeX tests import it directly.

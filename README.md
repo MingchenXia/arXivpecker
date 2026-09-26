@@ -48,7 +48,7 @@ Long audits are never stopped for taking too long: by default an audit runs unti
 
 ## Project map
 
-- `app/` — reader interface and arXiv metadata route
+- `app/` — reader interface (`page.tsx`, `components/`, framework-free logic in `lib/`) and arXiv metadata route
 - `scripts/` — local Codex bridge (`codex-bridge.mjs`), Codex client and prompts, TeX reader (`tex-source.mjs`), vault, checks, and sharing tools
 - `examples/starter-library/` — portable bundled papers
 - `docs/architecture.md` — storage, first-run, and trust-boundary design
