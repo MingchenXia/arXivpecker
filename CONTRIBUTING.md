@@ -16,17 +16,16 @@ The combined command starts both the reader and its localhost Codex bridge. Use 
 Run:
 
 ```bash
-npm run lint
-npm run typecheck
-npm run build
-npm run test:starter
-npm run test:reader
-npm run test:arxiv-id
-npm run test:audit-checkpoints
-npm run test:body-limits
-npm run test:vault
-npm run test:sessions
-npm run audit-formulas
+npm run check
 ```
+
+It checks formatting (`npm run format` fixes it), then runs lint, typecheck, the production build, and every test. CI also runs the browser tests:
+
+```bash
+npx playwright install chromium   # once
+npm run test:e2e
+```
+
+They start the bridge on a throwaway copy of the starter library, so your own library is never touched. With a Chromium already installed elsewhere, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to its path instead of installing one. Add new test scripts to the `test` entry in `package.json` so CI picks them up.
 
 Do not commit `proofroom-library/`, local environment files, credentials, generated builds, or personal reader profiles. Add reusable demo papers only through `examples/starter-library/`, with portable relative source paths and no Codex thread ID.

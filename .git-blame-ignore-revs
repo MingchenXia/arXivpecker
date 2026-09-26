@@ -1,0 +1,4 @@
+# Whitespace-only reformatting; skip it in git blame with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Prettier formatting of the whole codebase
+eee83f7c0df5d4c8c445a2937c066c1fc0ec1b97

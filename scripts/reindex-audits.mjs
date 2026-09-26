@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { enrichAuditFromTex } from './codex-bridge.mjs';
+import { enrichAuditFromTex } from './tex-source.mjs';
 import { PaperVault } from './paper-vault.mjs';
 
 const root = path.resolve(process.env.PROOFROOM_LIBRARY_DIR || path.join(process.cwd(), 'proofroom-library'));
@@ -12,7 +12,9 @@ for (const record of records) {
   if (!record.audit || !source?.mainTex || !source?.sourceDirectory) continue;
   const paperDirectory = path.join(root, record.folder);
   const entryFile = path.isAbsolute(source.mainTex) ? source.mainTex : path.resolve(paperDirectory, source.mainTex);
-  const sourceDirectory = path.isAbsolute(source.sourceDirectory) ? source.sourceDirectory : path.resolve(paperDirectory, source.sourceDirectory);
+  const sourceDirectory = path.isAbsolute(source.sourceDirectory)
+    ? source.sourceDirectory
+    : path.resolve(paperDirectory, source.sourceDirectory);
   const enriched = await enrichAuditFromTex(JSON.stringify(record.audit), { entryFile, sourceDirectory });
   const audit = JSON.parse(enriched);
   await vault.saveAudit(record.paper, audit);

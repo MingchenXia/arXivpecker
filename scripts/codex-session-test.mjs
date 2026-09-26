@@ -1,18 +1,29 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CodexAppServer } from './codex-bridge.mjs';
+import { CodexAppServer } from './codex-app-server.mjs';
 
 const threadId = 'saved-paper-audit';
 const archived = () => new Error(`session ${threadId} is archived. Run codex unarchive first.`);
-const params = { threadId, input: [{ type: 'text', text: 'Explain the proof.' }], model: 'reader-model', effort: 'xhigh', approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: true } };
+const params = {
+  threadId,
+  input: [{ type: 'text', text: 'Explain the proof.' }],
+  model: 'reader-model',
+  effort: 'xhigh',
+  approvalPolicy: 'never',
+  sandboxPolicy: { type: 'readOnly', networkAccess: true },
+};
 
 test('concurrent callers wait for the app-server initialization handshake', async () => {
   const server = new CodexAppServer();
   server.process = { killed: false };
   let initialize;
-  server.starting = new Promise(resolve => { initialize = resolve; });
+  server.starting = new Promise((resolve) => {
+    initialize = resolve;
+  });
   let ready = false;
-  const waiting = server.start().then(() => { ready = true; });
+  const waiting = server.start().then(() => {
+    ready = true;
+  });
   await Promise.resolve();
   assert.equal(ready, false);
   initialize();
@@ -23,7 +34,13 @@ test('concurrent callers wait for the app-server initialization handshake', asyn
 test('a failed app-server child is terminated without harming its replacement', () => {
   const server = new CodexAppServer();
   let failedKills = 0;
-  const failed = { killed: false, kill: () => { failedKills += 1; failed.killed = true; } };
+  const failed = {
+    killed: false,
+    kill: () => {
+      failedKills += 1;
+      failed.killed = true;
+    },
+  };
   server.process = failed;
   server.stopWithError(new Error('initialize timed out.'), failed);
   assert.equal(failedKills, 1);
@@ -38,7 +55,10 @@ function mockServer(handler) {
   const server = new CodexAppServer();
   const calls = [];
   server.start = async () => {};
-  server.call = async (method, request, timeoutMs) => { calls.push({ method, request, timeoutMs }); return handler(method, request, server); };
+  server.call = async (method, request, timeoutMs) => {
+    calls.push({ method, request, timeoutMs });
+    return handler(method, request, server);
+  };
   return { server, calls };
 }
 
@@ -53,17 +73,38 @@ function mockTimedServer({ idle = 80, hard = 320 } = {}) {
 }
 
 function complete(server, status = 'completed', error) {
-  setImmediate(() => server.handleNotification({ method: 'turn/completed', params: { turn: { id: 'reply', status, error, items: [{ type: 'agentMessage', text: 'The original audit is still in context.' }] } } }));
+  setImmediate(() =>
+    server.handleNotification({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'reply',
+          status,
+          error,
+          items: [{ type: 'agentMessage', text: 'The original audit is still in context.' }],
+        },
+      },
+    }),
+  );
   return { turn: { id: 'reply' } };
 }
 
 test('archived audit resumes in the same thread without creating a blank session', async () => {
   let resumes = 0;
-  const { server, calls } = mockServer((method) => { if (method === 'thread/resume' && ++resumes === 1) throw archived(); return {}; });
+  const { server, calls } = mockServer((method) => {
+    if (method === 'thread/resume' && ++resumes === 1) throw archived();
+    return {};
+  });
   await server.resumeThread(threadId);
-  assert.deepEqual(calls.map(c => c.method), ['thread/resume', 'thread/unarchive', 'thread/resume']);
-  assert.ok(calls.every(c => c.request.threadId === threadId));
-  assert.ok(calls.every(c => c.timeoutMs >= 60_000), 'Archived audit restoration must not use the 30-second generic RPC timeout.');
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ['thread/resume', 'thread/unarchive', 'thread/resume'],
+  );
+  assert.ok(calls.every((c) => c.request.threadId === threadId));
+  assert.ok(
+    calls.every((c) => c.timeoutMs >= 60_000),
+    'Archived audit restoration must not use the 30-second generic RPC timeout.',
+  );
   assert.ok(server.loadedThreads.has(threadId));
   await server.resumeThread(threadId);
   assert.equal(calls.length, 3, 'Already loaded threads are reused.');
@@ -80,11 +121,16 @@ test('a checkpointed audit reuses its saved thread and asks for one complete rep
     paper: { title: 'Checkpointed paper', authors: 'Reader', arxivId: '2601.12345', abstract: '' },
     profile: { level: 'Graduate student', areas: ['math.AG'], goal: 'Understand proofs', reasoning: 'xhigh' },
     resumeThreadId: resumedThread,
-    onThreadReady: async (threadId) => { checkpointed = threadId; },
+    onThreadReady: async (threadId) => {
+      checkpointed = threadId;
+    },
   });
   assert.equal(result.threadId, resumedThread);
   assert.equal(checkpointed, resumedThread);
-  assert.deepEqual(calls.map((call) => call.method), ['thread/resume', 'turn/start']);
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ['thread/resume', 'turn/start'],
+  );
   assert.match(calls[1].request.input[0].text, /RESUME SAVED AUDIT/);
   assert.doesNotMatch(calls.map((call) => call.method).join(','), /thread\/start/);
 });
@@ -104,7 +150,10 @@ test('a portable audit creates a reader thread for its first question', async ()
     profile: { reasoning: 'xhigh' },
   });
   assert.equal(result.threadId, readerThreadId);
-  assert.deepEqual(calls.map((call) => call.method), ['thread/start', 'turn/start']);
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ['thread/start', 'turn/start'],
+  );
   assert.match(calls[1].request.input[0].text, /portable audit that has no reusable Codex thread/);
   assert.equal(calls[1].request.threadId, readerThreadId);
 });
@@ -112,13 +161,19 @@ test('a portable audit creates a reader thread for its first question', async ()
 test('a cached thread archived by another client recovers at turn/start', async () => {
   let starts = 0;
   const { server, calls } = mockServer((method, request, instance) => {
-    if (method === 'turn/start') { if (++starts === 1) throw archived(); return complete(instance); }
+    if (method === 'turn/start') {
+      if (++starts === 1) throw archived();
+      return complete(instance);
+    }
     return {};
   });
   server.loadedThreads.add(threadId);
   const reply = await server.runTurn(params);
   assert.match(reply.text, /original audit/);
-  assert.deepEqual(calls.map(c => c.method), ['turn/start', 'thread/unarchive', 'thread/resume', 'turn/start']);
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ['turn/start', 'thread/unarchive', 'thread/resume', 'turn/start'],
+  );
   assert.deepEqual(calls[3].request, params, 'Recovery preserves model, effort, sandbox, question, and thread.');
 });
 
@@ -130,34 +185,57 @@ test('whole-paper questions, unit questions, and editorial suggestions share rec
       if (rpc === 'turn/start') return complete(instance);
       return {};
     });
-    await server[method]({ threadId, paper: { title: 'Paper', arxivId: '1234.56789' }, node: { statement: 'Claim' }, question: 'Why?', profile: { reasoning: 'xhigh' } });
-    assert.deepEqual(calls.map(c => c.method), ['thread/resume', 'thread/unarchive', 'thread/resume', 'turn/start'], method);
+    await server[method]({
+      threadId,
+      paper: { title: 'Paper', arxivId: '1234.56789' },
+      node: { statement: 'Claim' },
+      question: 'Why?',
+      profile: { reasoning: 'xhigh' },
+    });
+    assert.deepEqual(
+      calls.map((c) => c.method),
+      ['thread/resume', 'thread/unarchive', 'thread/resume', 'turn/start'],
+      method,
+    );
   }
 });
 
 test('authentication, missing-thread, and timeout errors are not retried', async () => {
-  for (const message of ['Your authentication token has been invalidated.', 'thread not found', 'turn/start timed out.']) {
-    const { server, calls } = mockServer(() => { throw new Error(message); });
+  for (const message of [
+    'Your authentication token has been invalidated.',
+    'thread not found',
+    'turn/start timed out.',
+  ]) {
+    const { server, calls } = mockServer(() => {
+      throw new Error(message);
+    });
     await assert.rejects(server.runTurn(params), { message });
     assert.equal(calls.length, 1);
   }
 });
 
 test('failed unarchive leaves the thread unloaded and reports the error', async () => {
-  const { server, calls } = mockServer((method) => { throw method === 'thread/resume' ? archived() : new Error('Could not restore the saved session.'); });
+  const { server, calls } = mockServer((method) => {
+    throw method === 'thread/resume' ? archived() : new Error('Could not restore the saved session.');
+  });
   await assert.rejects(server.resumeThread(threadId), /Could not restore/);
   assert.equal(server.loadedThreads.has(threadId), false);
   assert.equal(calls.length, 2);
 });
 
 test('recovery retries turn/start at most once', async () => {
-  const { server, calls } = mockServer(method => { if (method === 'turn/start') throw archived(); return {}; });
+  const { server, calls } = mockServer((method) => {
+    if (method === 'turn/start') throw archived();
+    return {};
+  });
   await assert.rejects(server.runTurn(params), /is archived/);
-  assert.equal(calls.filter(c => c.method === 'turn/start').length, 2);
+  assert.equal(calls.filter((c) => c.method === 'turn/start').length, 2);
 });
 
 test('a failed accepted turn is never replayed', async () => {
-  const { server, calls } = mockServer((method, request, instance) => complete(instance, 'failed', { message: archived().message }));
+  const { server, calls } = mockServer((method, request, instance) =>
+    complete(instance, 'failed', { message: archived().message }),
+  );
   await assert.rejects(server.runTurn(params), /is archived/);
   assert.equal(calls.length, 1);
 });
@@ -165,36 +243,125 @@ test('a failed accepted turn is never replayed', async () => {
 test('active turn notifications extend the inactivity watchdog', async () => {
   const { server, calls } = mockTimedServer({ idle: 200, hard: 1_200 });
   const reply = server.runTurn(params, { taskLabel: 'AI audit' });
-  const progress = setInterval(() => server.handleNotification({ method: 'item/reasoning/summaryTextDelta', params: { threadId, turnId: 'reply', delta: '.' } }), 40);
-  await new Promise(resolve => setTimeout(resolve, 520));
+  const progress = setInterval(
+    () =>
+      server.handleNotification({
+        method: 'item/reasoning/summaryTextDelta',
+        params: { threadId, turnId: 'reply', delta: '.' },
+      }),
+    40,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 520));
   clearInterval(progress);
-  server.handleNotification({ method: 'turn/completed', params: { turn: { id: 'reply', status: 'completed', items: [{ type: 'agentMessage', text: 'Long audit completed.' }] } } });
+  server.handleNotification({
+    method: 'turn/completed',
+    params: {
+      turn: { id: 'reply', status: 'completed', items: [{ type: 'agentMessage', text: 'Long audit completed.' }] },
+    },
+  });
   assert.equal((await reply).text, 'Long audit completed.');
-  assert.equal(calls.some(call => call.method === 'turn/interrupt'), false);
+  assert.equal(
+    calls.some((call) => call.method === 'turn/interrupt'),
+    false,
+  );
 });
 
 test('an inactive turn is interrupted after its idle limit', async () => {
   const { server, calls } = mockTimedServer({ idle: 100, hard: 800 });
   await assert.rejects(server.runTurn(params, { taskLabel: 'AI audit' }), /no Codex progress/);
-  assert.equal(calls.filter(call => call.method === 'turn/interrupt').length, 1);
+  assert.equal(calls.filter((call) => call.method === 'turn/interrupt').length, 1);
 });
 
 test('an audit has no automatic cutoff when neither watchdog is configured', async () => {
   const { server, calls } = mockTimedServer({ idle: 0, hard: 0 });
   const reply = server.runTurn(params, { taskLabel: 'AI audit' });
-  await new Promise(resolve => setTimeout(resolve, 140));
-  server.handleNotification({ method: 'turn/completed', params: { turn: { id: 'reply', status: 'completed', items: [{ type: 'agentMessage', text: 'Audit completed after an unbounded run.' }] } } });
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  server.handleNotification({
+    method: 'turn/completed',
+    params: {
+      turn: {
+        id: 'reply',
+        status: 'completed',
+        items: [{ type: 'agentMessage', text: 'Audit completed after an unbounded run.' }],
+      },
+    },
+  });
   assert.match((await reply).text, /unbounded run/);
-  assert.equal(calls.some(call => call.method === 'turn/interrupt'), false);
+  assert.equal(
+    calls.some((call) => call.method === 'turn/interrupt'),
+    false,
+  );
 });
 
 test('the hard safety limit still stops a continuously active turn', async () => {
   const { server, calls } = mockTimedServer({ idle: 200, hard: 600 });
-  const progress = setInterval(() => server.handleNotification({ method: 'thread/tokenUsage/updated', params: { threadId } }), 40);
+  const progress = setInterval(
+    () => server.handleNotification({ method: 'thread/tokenUsage/updated', params: { threadId } }),
+    40,
+  );
   try {
     await assert.rejects(server.runTurn(params, { taskLabel: 'AI audit' }), /safety limit/);
   } finally {
     clearInterval(progress);
   }
-  assert.equal(calls.filter(call => call.method === 'turn/interrupt').length, 1);
+  assert.equal(calls.filter((call) => call.method === 'turn/interrupt').length, 1);
+});
+
+test('turn events that arrive before turn/start resolves are replayed, not dropped', async () => {
+  const progress = [];
+  const { server } = mockServer((method, _request, current) => {
+    if (method !== 'turn/start') return {};
+    // The app-server can write the response and the whole turn in one stdout chunk.
+    current.handleNotification({
+      method: 'item/completed',
+      params: { threadId, turnId: 'fast', item: { type: 'reasoning' } },
+    });
+    current.handleNotification({
+      method: 'item/completed',
+      params: { threadId, turnId: 'fast', item: { type: 'agentMessage', text: 'Immediate answer.' } },
+    });
+    current.handleNotification({
+      method: 'turn/completed',
+      params: { threadId, turn: { id: 'fast', status: 'completed' } },
+    });
+    return { turn: { id: 'fast' } };
+  });
+  const output = await server.runTurn(params, { onProgress: (message) => progress.push(message.method) });
+  assert.equal(output.text, 'Immediate answer.');
+  assert.deepEqual(progress, ['item/completed', 'item/completed']);
+  assert.equal(server.earlyTurnEvents.size, 0);
+});
+
+test('a request from the app-server is refused instead of being taken for a response', () => {
+  const server = new CodexAppServer();
+  const written = [];
+  server.process = { killed: false, stdin: { writable: true, write: (line) => written.push(JSON.parse(line)) } };
+  let settled = false;
+  server.pending.set(7, { resolve: () => (settled = true), reject: () => (settled = true), timer: null });
+  server.handleLine(JSON.stringify({ id: 7, method: 'item/commandExecution/requestApproval', params: {} }));
+  assert.equal(settled, false, 'A server request with the same id must not settle our pending call.');
+  assert.equal(written[0].id, 7);
+  assert.equal(written[0].error.code, -32601);
+});
+
+test('interruptThread stops a running turn and interrupts it in Codex', async () => {
+  const { server, calls } = mockServer((method) => (method === 'turn/start' ? { turn: { id: 'long' } } : {}));
+  const running = server.runTurn(params);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(server.interruptThread(threadId, 'Stopped by the reader.'), 1);
+  await assert.rejects(running, /Stopped by the reader\./);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(calls.some((call) => call.method === 'turn/interrupt'));
+});
+
+test('a stop requested while turn/start is in flight interrupts the turn once it exists', async () => {
+  let cancelled = false;
+  const { server, calls } = mockServer((method) => {
+    if (method !== 'turn/start') return {};
+    cancelled = true; // The reader pressed Stop before Codex answered turn/start.
+    return { turn: { id: 'late' } };
+  });
+  await assert.rejects(server.runTurn(params, { isCancelled: () => cancelled }), /Stopped by the reader\./);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(calls.some((call) => call.method === 'turn/interrupt'));
 });

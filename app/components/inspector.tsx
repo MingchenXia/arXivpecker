@@ -1,0 +1,1263 @@
+import { useEffect, useRef, useState } from 'react';
+import { EditableSavedNote } from './document';
+import { AIText, MathText } from './math';
+import { StudyTools } from './study-tools';
+import { makeId, readString, reportReaderProcess } from '../lib/app';
+import { bridgePost } from '../lib/bridge-client';
+import {
+  displayUnitLabel,
+  kindClass,
+  parseVersionComparison,
+  patchForNode,
+  unitId,
+  updateMatchText,
+} from '../lib/audit';
+import type {
+  AuditNode,
+  CrossLink,
+  EditionMode,
+  EditorialSuggestion,
+  Graph,
+  GraphNode,
+  NodeKind,
+  Note,
+  Paper,
+  PaperAudit,
+  PaperUpdateRecord,
+  Profile,
+  VersionChange,
+  VersionComparison,
+  WorkingPatch,
+} from '../lib/types';
+
+export function VersionComparisonPanel({
+  paper,
+  profile,
+  audit,
+  openUnit,
+  close,
+}: {
+  paper: Paper;
+  profile: Profile;
+  audit: PaperAudit;
+  openUnit: (paperId: string, nodeId: string) => void;
+  close: () => void;
+}) {
+  const baseId = paper.arxivId.replace(/v\d+$/i, '');
+  const [fromVersion, setFromVersion] = useState(`${baseId}v1`);
+  const [toVersion, setToVersion] = useState(paper.arxivId.match(/v\d+$/i) ? paper.arxivId : baseId);
+  const [result, setResult] = useState<VersionComparison | null>(null);
+  const [sources, setSources] = useState<{ from: string; to: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  async function compare() {
+    if (!fromVersion.trim() || !toVersion.trim()) return;
+    const processId = `version-comparison:${paper.id}`;
+    reportReaderProcess({
+      id: processId,
+      label: 'Comparing paper versions',
+      detail: `${fromVersion} → ${toVersion}`,
+      status: 'running',
+    });
+    setBusy(true);
+    setError('');
+    setResult(null);
+    try {
+      const data = await bridgePost(
+        '/compare-versions',
+        { paper, profile, fromVersion, toVersion },
+        'Version comparison failed.',
+      );
+      setResult(parseVersionComparison(readString(data.text)));
+      setSources(data.sources ?? null);
+      reportReaderProcess({
+        id: processId,
+        label: 'Version comparison ready',
+        detail: `${fromVersion} → ${toVersion}`,
+        status: 'complete',
+      });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Version comparison failed.';
+      setError(message);
+      reportReaderProcess({ id: processId, label: 'Version comparison stopped', detail: message, status: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+  function matchingNode(change: VersionChange) {
+    const needle = change.label.toLowerCase();
+    return audit.nodes.find(
+      (node) =>
+        node.label.toLowerCase() === needle ||
+        node.title.toLowerCase().includes(needle) ||
+        needle.includes(node.label.toLowerCase()),
+    );
+  }
+  return (
+    <div
+      className="edition-overlay"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target && !busy) close();
+      }}
+    >
+      <section className="version-panel">
+        <header>
+          <div>
+            <h3>Compare arXiv versions</h3>
+          </div>
+          <button onClick={close} disabled={busy} aria-label="Close version comparison">
+            ×
+          </button>
+        </header>
+        <div className="version-picker">
+          <label>
+            <span>Version A</span>
+            <input
+              value={fromVersion}
+              onChange={(event) => setFromVersion(event.target.value)}
+              placeholder={`${baseId}v1`}
+            />
+          </label>
+          <span>→</span>
+          <label>
+            <span>Version B</span>
+            <input value={toVersion} onChange={(event) => setToVersion(event.target.value)} placeholder={baseId} />
+          </label>
+          <button onClick={() => void compare()} disabled={busy || !fromVersion.trim() || !toVersion.trim()}>
+            {busy ? 'Reading both sources…' : 'Compare with AI'}
+          </button>
+        </div>
+        {error && <p className="version-error">{error}</p>}
+        {busy && (
+          <div className="version-loading">
+            <b>Comparing both versions…</b>
+          </div>
+        )}
+        {result && (
+          <div className="version-results">
+            <section className="version-summary">
+              <div className="flex items-center justify-between gap-3">
+                <p className="reader-kicker">Executive difference</p>
+                {sources && (
+                  <span>
+                    {sources.from.toUpperCase()} → {sources.to.toUpperCase()}
+                  </span>
+                )}
+              </div>
+              <h4>{result.summary}</h4>
+              <p>{result.readingRecommendation}</p>
+            </section>
+            <section>
+              <div className="version-section-head">
+                <b>Changed mathematical units</b>
+                <span>{result.changedUnits.length}</span>
+              </div>
+              <div className="version-changes">
+                {result.changedUnits.map((change, index) => {
+                  const match = matchingNode(change);
+                  return (
+                    <article key={`${change.label}-${index}`}>
+                      <div>
+                        <span className={`version-change-type version-${change.changeType}`}>{change.changeType}</span>
+                        <span>{change.significance}</span>
+                        {match && (
+                          <button
+                            onClick={() => {
+                              openUnit(paper.id, match.id);
+                              close();
+                            }}
+                          >
+                            Open {match.label}
+                          </button>
+                        )}
+                      </div>
+                      <h5>{change.label}</h5>
+                      <div className="version-before-after">
+                        <div>
+                          <b>Before</b>
+                          <p>{change.before || 'Not present.'}</p>
+                        </div>
+                        <div>
+                          <b>After</b>
+                          <p>{change.after || 'Removed.'}</p>
+                        </div>
+                      </div>
+                      <footer>
+                        <b>Dependency impact</b>
+                        <p>{change.dependencyImpact || 'No verified dependency impact.'}</p>
+                      </footer>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+            <div className="version-detail-grid">
+              <ComparisonList title="Proof changes" items={result.proofChanges} />
+              <ComparisonList title="Dependency changes" items={result.dependencyImpact} />
+              <ComparisonList title="Notation changes" items={result.notationChanges} />
+              <ComparisonList title="Editorial changes" items={result.editorialChanges} />
+            </div>
+            {result.warnings.length > 0 && (
+              <ComparisonList title="Verification warnings" items={result.warnings} warning />
+            )}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+export function PaperUpdatePanel({
+  paper,
+  audit,
+  update,
+  openUnit,
+  close,
+}: {
+  paper?: Paper;
+  audit?: PaperAudit;
+  update: PaperUpdateRecord;
+  openUnit: (paperId: string, nodeId: string) => void;
+  close: () => void;
+}) {
+  const [tab, setTab] = useState<'changes' | 'reader-work'>('changes');
+  const comparison = update.comparison;
+  const migration = update.migration;
+  function matchingNode(change: VersionChange) {
+    const needle = updateMatchText(change.label);
+    return audit?.nodes.find(
+      (node) =>
+        updateMatchText(node.label) === needle ||
+        updateMatchText(node.title).includes(needle) ||
+        needle.includes(updateMatchText(node.label)),
+    );
+  }
+  return (
+    <div
+      className="edition-overlay"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) close();
+      }}
+    >
+      <section className="paper-update-panel" role="dialog" aria-modal="true" aria-label="Latest arXiv version changes">
+        <header>
+          <div>
+            <span>
+              arXiv:{update.fromVersion} → arXiv:{update.toVersion}
+            </span>
+            <h3>Latest version ready</h3>
+            <p>{paper?.title}</p>
+          </div>
+          <button onClick={close} aria-label="Close update details">
+            ×
+          </button>
+        </header>
+        <nav>
+          <button className={tab === 'changes' ? 'active' : ''} onClick={() => setTab('changes')}>
+            Source changes <span>{comparison.changedUnits.length}</span>
+          </button>
+          <button className={tab === 'reader-work' ? 'active' : ''} onClick={() => setTab('reader-work')}>
+            Your work <span>{migration.conflicts.length ? `${migration.conflicts.length} review` : 'merged'}</span>
+          </button>
+        </nav>
+        {tab === 'changes' ? (
+          <div className="paper-update-body">
+            <section className="paper-update-summary">
+              <b>What changed</b>
+              <h4>
+                <MathText value={comparison.summary} explicitOnly />
+              </h4>
+              <p>
+                <MathText value={comparison.readingRecommendation} explicitOnly />
+              </p>
+            </section>
+            {comparison.changedUnits.length ? (
+              <div className="paper-update-changes">
+                {comparison.changedUnits.map((change, index) => {
+                  const match = matchingNode(change);
+                  return (
+                    <article key={`${change.label}:${index}`} className={`update-significance-${change.significance}`}>
+                      <header>
+                        <span className={`version-change-type version-${change.changeType}`}>{change.changeType}</span>
+                        <small>{change.significance}</small>
+                        {match && paper && (
+                          <button
+                            onClick={() => {
+                              openUnit(paper.id, match.id);
+                              close();
+                            }}
+                          >
+                            Open in paper
+                          </button>
+                        )}
+                      </header>
+                      <h5>
+                        <MathText value={change.label} explicitOnly />
+                      </h5>
+                      <div>
+                        <section>
+                          <b>Previous</b>
+                          <MathText value={change.before || 'Not present.'} block explicitOnly />
+                        </section>
+                        <span aria-hidden="true">→</span>
+                        <section>
+                          <b>Latest</b>
+                          <MathText value={change.after || 'Removed.'} block explicitOnly />
+                        </section>
+                      </div>
+                      {change.dependencyImpact && (
+                        <footer>
+                          <b>Logical impact</b>
+                          <MathText value={change.dependencyImpact} explicitOnly />
+                        </footer>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="paper-update-empty">AI found no material source changes.</div>
+            )}
+            <div className="version-detail-grid">
+              <ComparisonList title="Proof changes" items={comparison.proofChanges} />
+              <ComparisonList title="Dependency changes" items={comparison.dependencyImpact} />
+              <ComparisonList title="Notation changes" items={comparison.notationChanges} />
+              <ComparisonList title="Editorial changes" items={comparison.editorialChanges} />
+            </div>
+            {comparison.warnings.length > 0 && (
+              <ComparisonList title="Verification warnings" items={comparison.warnings} warning />
+            )}
+          </div>
+        ) : (
+          <div className="paper-update-body">
+            <section className="migration-overview">
+              <div>
+                <b>{migration.notesCarried}</b>
+                <span>notes carried</span>
+              </div>
+              <div>
+                <b>{migration.marksCarried}</b>
+                <span>marks carried</span>
+              </div>
+              <div>
+                <b>{migration.editsCarried}</b>
+                <span>edits merged</span>
+              </div>
+              <div className={migration.conflicts.length ? 'needs-review' : ''}>
+                <b>{migration.conflicts.length}</b>
+                <span>need review</span>
+              </div>
+            </section>
+            {migration.conflicts.length > 0 && (
+              <section className="migration-conflicts">
+                <header>
+                  <b>Needs your review</b>
+                  <span>The latest author text was kept.</span>
+                </header>
+                {migration.conflicts.map((item, index) => (
+                  <article key={`${item.type}:${item.fromId}:${index}`}>
+                    <span>{item.type}</span>
+                    <div>
+                      <b>{item.label}</b>
+                      <p>{item.detail}</p>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            )}
+            <section className="migration-list">
+              <header>
+                <b>Integration record</b>
+                <span>{migration.items.length}</span>
+              </header>
+              {migration.items.length ? (
+                migration.items.map((item, index) => (
+                  <article key={`${item.type}:${item.fromId}:${index}`}>
+                    <i className={`migration-status-${item.status}`}>
+                      {item.status === 'carried' ? '✓' : item.status === 'paper-note' ? 'N' : '!'}
+                    </i>
+                    <div>
+                      <b>{item.label}</b>
+                      <p>{item.detail}</p>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <p>No reader notes, marks, or manual edits were attached to the previous version.</p>
+              )}
+            </section>
+            <p className="migration-archive-note">
+              The complete previous paper, audit, notes, and working edition remain archived in this paper’s local
+              folder.
+            </p>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ComparisonList({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) {
+  return (
+    <section className={`comparison-list ${warning ? 'comparison-warning' : ''}`}>
+      <div>
+        <b>{title}</b>
+        <span>{items.length}</span>
+      </div>
+      {items.length ? (
+        <ul>
+          {items.map((item, index) => (
+            <li key={index}>
+              <MathText value={item} explicitOnly />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>No material change identified.</p>
+      )}
+    </section>
+  );
+}
+
+function WorkingEditionEditor({
+  node,
+  originalNode,
+  edition,
+  patches,
+  savePatches,
+  suggestEdit,
+}: {
+  node: AuditNode;
+  originalNode?: AuditNode;
+  edition: EditionMode;
+  patches: WorkingPatch[];
+  savePatches: (patches: WorkingPatch[]) => Promise<void>;
+  suggestEdit: (node: AuditNode) => Promise<EditorialSuggestion>;
+}) {
+  const currentPatch = patchForNode(patches, node.id);
+  const [mode, setMode] = useState<'idle' | 'edit' | 'add'>('idle');
+  const [title, setTitle] = useState(node.title);
+  const [statement, setStatement] = useState(node.statement);
+  const [proofText, setProofText] = useState(node.proofText);
+  const [nodeKind, setNodeKind] = useState<NodeKind>(node.kind);
+  const [dependencies, setDependencies] = useState(node.dependencies.join('\n'));
+  const [proofSketch, setProofSketch] = useState(node.proofSketch.join('\n'));
+  const [rationale, setRationale] = useState(currentPatch?.rationale ?? '');
+  const [suggestion, setSuggestion] = useState<EditorialSuggestion | null>(null);
+  const [busy, setBusy] = useState('');
+  const nodeKinds: NodeKind[] = [
+    'definition',
+    'assumption',
+    'notation',
+    'lemma',
+    'proposition',
+    'theorem',
+    'corollary',
+    'conjecture',
+    'proof',
+    'equation',
+    'remark',
+    'example',
+    'section',
+    'external-result',
+  ];
+  const lines = (value: string) =>
+    value
+      .split(/[\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  function beginEdit() {
+    setMode('edit');
+    setTitle(node.title);
+    setStatement(node.statement);
+    setProofText(node.proofText);
+    setNodeKind(node.kind);
+    setDependencies(node.dependencies.join('\n'));
+    setProofSketch(node.proofSketch.join('\n'));
+    setRationale(currentPatch?.rationale ?? '');
+  }
+  function beginAdd() {
+    setMode('add');
+    setTitle('');
+    setStatement('');
+    setProofText('');
+    setNodeKind('proposition');
+    setDependencies(node.id);
+    setProofSketch('');
+    setRationale('Reader-added result.');
+  }
+  async function saveEditor() {
+    if (!title.trim() || !statement.trim()) return;
+    setBusy('save');
+    const timestamp = new Date().toISOString();
+    const shared = {
+      title: title.trim(),
+      statement: statement.trim(),
+      proofText: proofText.trim(),
+      nodeKind,
+      rationale: rationale.trim(),
+      dependencies: lines(dependencies),
+      proofSketch: lines(proofSketch),
+      source: 'manual' as const,
+      createdAt: timestamp,
+    };
+    try {
+      if (mode === 'add') {
+        const anchor = currentPatch?.kind === 'add' ? currentPatch.afterNodeId : (originalNode?.id ?? node.id);
+        const addition: WorkingPatch = { id: makeId(), kind: 'add', nodeId: '', afterNodeId: anchor, ...shared };
+        await savePatches([...patches, addition]);
+      } else if (currentPatch?.kind === 'add') {
+        await savePatches(patches.map((patch) => (patch.id === currentPatch.id ? { ...patch, ...shared } : patch)));
+      } else {
+        const replacement: WorkingPatch = {
+          id: currentPatch?.id ?? makeId(),
+          kind: 'replace',
+          nodeId: originalNode?.id ?? node.id,
+          afterNodeId: '',
+          ...shared,
+        };
+        await savePatches([
+          ...patches.filter((patch) => !(patch.kind === 'replace' && patch.nodeId === replacement.nodeId)),
+          replacement,
+        ]);
+      }
+      setMode('idle');
+    } finally {
+      setBusy('');
+    }
+  }
+  async function hideUnit() {
+    setBusy('hide');
+    try {
+      if (currentPatch?.kind === 'add') await savePatches(patches.filter((patch) => patch.id !== currentPatch.id));
+      else {
+        const sourceId = originalNode?.id ?? node.id;
+        const hidden: WorkingPatch = {
+          id: makeId(),
+          kind: 'delete',
+          nodeId: sourceId,
+          title: node.title,
+          statement: '',
+          proofText: '',
+          nodeKind: '',
+          afterNodeId: '',
+          rationale: 'Hidden from the working edition.',
+          dependencies: [],
+          proofSketch: [],
+          source: 'manual',
+          createdAt: new Date().toISOString(),
+        };
+        await savePatches([
+          ...patches.filter(
+            (patch) => !(patch.nodeId === sourceId && (patch.kind === 'replace' || patch.kind === 'delete')),
+          ),
+          hidden,
+        ]);
+      }
+    } finally {
+      setBusy('');
+    }
+  }
+  async function revertUnit() {
+    setBusy('revert');
+    try {
+      if (currentPatch?.kind === 'add') await savePatches(patches.filter((patch) => patch.id !== currentPatch.id));
+      else {
+        const sourceId = originalNode?.id ?? node.id;
+        await savePatches(
+          patches.filter((patch) => patch.nodeId !== sourceId || (patch.kind !== 'replace' && patch.kind !== 'delete')),
+        );
+      }
+    } finally {
+      setBusy('');
+    }
+  }
+  async function inspectSource() {
+    if (!originalNode) return;
+    setBusy('ai');
+    setSuggestion(null);
+    try {
+      setSuggestion(await suggestEdit(originalNode));
+    } finally {
+      setBusy('');
+    }
+  }
+  async function applySuggestion() {
+    if (!originalNode || !suggestion?.hasIssue || !suggestion.replacement.trim()) return;
+    setBusy('apply');
+    const replacement: WorkingPatch = {
+      id: currentPatch?.kind === 'replace' ? currentPatch.id : makeId(),
+      kind: 'replace',
+      nodeId: originalNode.id,
+      title: node.title,
+      statement: suggestion.replacement.trim(),
+      proofText: node.proofText,
+      nodeKind: node.kind,
+      afterNodeId: '',
+      rationale: suggestion.rationale,
+      dependencies: node.dependencies,
+      proofSketch: node.proofSketch,
+      source: 'ai',
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      await savePatches([
+        ...patches.filter((patch) => !(patch.kind === 'replace' && patch.nodeId === originalNode.id)),
+        replacement,
+      ]);
+      setSuggestion(null);
+    } finally {
+      setBusy('');
+    }
+  }
+  return (
+    <section className="inspector-section working-editor">
+      <div className="working-editor-head">
+        <span>
+          {edition === 'original'
+            ? 'Edits are saved separately from the author source.'
+            : currentPatch
+              ? 'Hover the highlighted text to compare with the original.'
+              : 'The author source is unchanged.'}
+        </span>
+        {currentPatch && <span className="working-badge">Edited</span>}
+      </div>
+      <div className="working-editor-actions">
+        <button onClick={beginEdit}>Edit unit</button>
+        <button onClick={beginAdd}>Add after</button>
+        <button onClick={() => void inspectSource()} disabled={!originalNode || Boolean(busy)}>
+          {busy === 'ai' ? 'Proofreading…' : 'AI proofread'}
+        </button>
+        <button onClick={() => void hideUnit()} disabled={Boolean(busy)}>
+          {currentPatch?.kind === 'add' ? 'Remove addition' : 'Hide unit'}
+        </button>
+        {currentPatch && (
+          <button onClick={() => void revertUnit()} disabled={Boolean(busy)}>
+            Revert
+          </button>
+        )}
+      </div>
+      {mode !== 'idle' && (
+        <div className="working-editor-form">
+          <label>
+            <span>Unit type</span>
+            <select value={nodeKind} onChange={(event) => setNodeKind(event.target.value as NodeKind)}>
+              {nodeKinds.map((kind) => (
+                <option key={kind} value={kind}>
+                  {kind}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Title</span>
+            <input value={title} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          <label>
+            <span>Statement (LaTeX allowed)</span>
+            <textarea value={statement} onChange={(event) => setStatement(event.target.value)} />
+          </label>
+          <label>
+            <span>Full proof (LaTeX allowed)</span>
+            <textarea value={proofText} onChange={(event) => setProofText(event.target.value)} />
+          </label>
+          <label>
+            <span>Dependencies — internal IDs, one per line</span>
+            <textarea value={dependencies} onChange={(event) => setDependencies(event.target.value)} />
+          </label>
+          <label>
+            <span>AI proof route — one step per line</span>
+            <textarea value={proofSketch} onChange={(event) => setProofSketch(event.target.value)} />
+          </label>
+          <label>
+            <span>Editorial rationale</span>
+            <input value={rationale} onChange={(event) => setRationale(event.target.value)} />
+          </label>
+          <div>
+            <button
+              className="working-editor-save"
+              onClick={() => void saveEditor()}
+              disabled={busy === 'save' || !title.trim() || !statement.trim()}
+            >
+              {busy === 'save' ? 'Saving…' : mode === 'add' ? 'Add to working edition' : 'Save working edit'}
+            </button>
+            <button onClick={() => setMode('idle')}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {suggestion && (
+        <div className={`editorial-suggestion ${suggestion.hasIssue ? '' : 'editorial-clear'}`}>
+          <div>
+            <b>{suggestion.hasIssue ? 'Possible source issue' : 'No source issue found'}</b>
+            <span>{suggestion.confidence} confidence</span>
+          </div>
+          <p>{suggestion.rationale}</p>
+          {suggestion.hasIssue && (
+            <>
+              <blockquote>{suggestion.replacement}</blockquote>
+              <button onClick={() => void applySuggestion()} disabled={busy === 'apply'}>
+                {busy === 'apply' ? 'Applying…' : 'Apply AI correction'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AssistantProofExpander({
+  node,
+  expand,
+}: {
+  node: AuditNode;
+  expand: (node: AuditNode, request: string) => Promise<string>;
+}) {
+  const formal = ['theorem', 'lemma', 'proposition', 'corollary'].includes(node.kind);
+  const [lineCount, setLineCount] = useState(1);
+  const [start, setStart] = useState(1);
+  const [end, setEnd] = useState(1);
+  const [answer, setAnswer] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const count =
+        document.querySelectorAll(`.source-proof[data-node-id="${CSS.escape(node.id)}"] .proof-line-gutter > span`)
+          .length || Math.max(1, node.proofText.split(/\n+/).filter((line) => line.trim()).length);
+      setLineCount(count);
+      setStart(1);
+      setEnd(count);
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [node.id, node.proofText]);
+  if (!formal || !node.proofText.trim()) return null;
+  async function run() {
+    const from = Math.max(1, Math.min(start, lineCount));
+    const to = Math.max(from, Math.min(end, lineCount));
+    const processId = `proof-range:${node.id}:${from}-${to}`;
+    reportReaderProcess({
+      id: processId,
+      label: `Expanding proof L${from}–L${to}`,
+      detail: displayUnitLabel(node),
+      status: 'running',
+    });
+    setBusy(true);
+    setError('');
+    setAnswer('');
+    try {
+      setAnswer(
+        await expand(
+          node,
+          `Expand the author proof from visible line L${from} through L${to} in complete detail. The visible line range is the reader's requested scope; include every intermediate implication and equation needed to understand that range.`,
+        ),
+      );
+      reportReaderProcess({
+        id: processId,
+        label: `Proof L${from}–L${to} ready`,
+        detail: displayUnitLabel(node),
+        status: 'complete',
+      });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'The proof range could not be expanded.';
+      setError(message);
+      reportReaderProcess({ id: processId, label: `Proof L${from}–L${to} stopped`, detail: message, status: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="assistant-proof-expander">
+      <header>
+        <b>Expand proof</b>
+        <span>{lineCount} visible lines</span>
+      </header>
+      <div>
+        <label>
+          From <span className="proof-line-prefix">L</span>
+          <input
+            type="number"
+            min="1"
+            max={lineCount}
+            value={start}
+            onChange={(event) => setStart(Number(event.target.value))}
+          />
+        </label>
+        <label>
+          to <span className="proof-line-prefix">L</span>
+          <input
+            type="number"
+            min="1"
+            max={lineCount}
+            value={end}
+            onChange={(event) => setEnd(Number(event.target.value))}
+          />
+        </label>
+        <button onClick={() => void run()} disabled={busy}>
+          {busy ? 'Expanding…' : 'Expand'}
+        </button>
+      </div>
+      {busy && (
+        <div className="proof-ai-progress">
+          <span />
+          <span />
+          <span />
+          <p>Reading the selected proof lines…</p>
+        </div>
+      )}
+      {error && <p className="proof-step-error">{error}</p>}
+      {answer && (
+        <details open>
+          <summary>
+            Detailed expansion · L{start}–L{end}
+          </summary>
+          <AIText value={answer} citations={node.citations ?? []} />
+        </details>
+      )}
+    </section>
+  );
+}
+
+type InspectorProps = {
+  paper: Paper;
+  node: AuditNode;
+  originalNode?: AuditNode;
+  plainSource?: boolean;
+  edition: EditionMode;
+  patches: WorkingPatch[];
+  savePatches: (patches: WorkingPatch[]) => Promise<void>;
+  suggestEdit: (node: AuditNode) => Promise<EditorialSuggestion>;
+  expanded: boolean;
+  setExpanded: (value: boolean) => void;
+  expandProof: (node: AuditNode, request: string) => Promise<string>;
+  notes: Note[];
+  answer?: string;
+  question: string;
+  setQuestion: (value: string) => void;
+  asking: boolean;
+  ask: () => void;
+  saveNote: (anchor: string, nodeId: string, text: string, latex: string) => void;
+  updateNote: (noteId: string, text: string) => void;
+  deleteNote: (noteId: string) => void;
+  graph: Graph;
+  addLink: (link: Omit<CrossLink, 'id' | 'source' | 'createdAt'>) => Promise<void>;
+  removeLink: (linkId: string) => Promise<void>;
+  openUnit: (paperId: string, nodeId: string) => void;
+  openOriginalPaper: (page?: number) => void;
+  assistantRequest: { view: 'ask' | 'notes' | 'compose-note'; nonce: number } | null;
+  clearAssistantRequest: () => void;
+  isUnderstood: (unit: GraphNode) => boolean;
+  studyAnswers: Record<string, string>;
+  saveAnswer: (key: string, value: string) => void;
+  askAboutUnit: (node: AuditNode, prompt: string, failure: string) => Promise<string>;
+};
+
+export function NodeInspector({
+  paper,
+  node,
+  originalNode,
+  plainSource = false,
+  edition,
+  patches,
+  savePatches,
+  suggestEdit,
+  expanded,
+  setExpanded,
+  expandProof,
+  notes,
+  answer,
+  question,
+  setQuestion,
+  asking,
+  ask,
+  saveNote,
+  updateNote,
+  deleteNote,
+  graph,
+  addLink,
+  removeLink,
+  openUnit,
+  openOriginalPaper,
+  assistantRequest,
+  clearAssistantRequest,
+  isUnderstood,
+  studyAnswers,
+  saveAnswer,
+  askAboutUnit,
+}: InspectorProps) {
+  const [noteText, setNoteText] = useState('');
+  const [noteEditNonce, setNoteEditNonce] = useState(0);
+  const [target, setTarget] = useState('');
+  const [relation, setRelation] = useState<CrossLink['relation']>('uses');
+  const [linkNote, setLinkNote] = useState('');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [toolView, setToolView] = useState<'edit' | 'context'>('edit');
+  const notesRef = useRef<HTMLElement>(null);
+  const noteComposerRef = useRef<HTMLTextAreaElement>(null);
+  const askInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!assistantRequest) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (assistantRequest.view === 'ask') askInputRef.current?.focus();
+      if (assistantRequest.view === 'notes' || assistantRequest.view === 'compose-note')
+        notesRef.current?.scrollIntoView({ block: 'nearest' });
+      if (assistantRequest.view === 'compose-note' && notes.length > 0) setNoteEditNonce((value) => value + 1);
+      else if (assistantRequest.view === 'compose-note') noteComposerRef.current?.focus();
+      clearAssistantRequest();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [assistantRequest, clearAssistantRequest, notes.length]);
+  const sourceId = unitId(paper.id, node.id);
+  const candidates = graph.nodes.filter((item) => item.paperId !== paper.id);
+  const edges = graph.edges.filter((edge) => edge.from === sourceId || edge.to === sourceId);
+  const nodeById = new Map(graph.nodes.map((item) => [item.id, item]));
+  const prerequisiteNodes = edges
+    .filter((edge) => edge.from === sourceId && edge.relation === 'uses')
+    .map((edge) => nodeById.get(edge.to))
+    .filter(Boolean) as GraphNode[];
+  const dependentNodes = edges
+    .filter((edge) => edge.to === sourceId && edge.relation === 'uses')
+    .map((edge) => nodeById.get(edge.from))
+    .filter(Boolean) as GraphNode[];
+  function saveLinkedNote() {
+    saveNote(`${displayUnitLabel(node)} · p.${node.anchor.page ?? '—'}`, node.id, noteText, '');
+    setNoteText('');
+  }
+  function createLink() {
+    const selected = graph.nodes.find((item) => item.id === target);
+    if (!selected) return;
+    void addLink({
+      from: { paperId: paper.id, nodeId: node.id },
+      to: { paperId: selected.paperId, nodeId: selected.nodeId },
+      relation,
+      note: linkNote,
+    });
+    setTarget('');
+    setLinkNote('');
+  }
+  return (
+    <div className={`inspector-stack inspector-minimal assistant-view-${toolView} ${advancedOpen ? 'advanced' : ''}`}>
+      <div className="assistant-unit-head">
+        <div>
+          <span className={kindClass(node.kind)}>{node.kind}</span>
+          {!plainSource && !paper.arxivId.startsWith('local-') && (
+            <button
+              className="assistant-source-page"
+              onClick={() => openOriginalPaper(node.anchor.page ?? undefined)}
+              aria-label={`Open the original paper at page ${node.anchor.page ?? 1}`}
+            >
+              p.{node.anchor.page ?? '—'}
+            </button>
+          )}
+        </div>
+        <p>{displayUnitLabel(node)}</p>
+        <h3>
+          <MathText value={node.title} citations={node.citations ?? []} />
+        </h3>
+      </div>
+      <section className={`assistant-ask ${asking ? 'assistant-asking' : ''}`}>
+        <div>
+          <input
+            ref={askInputRef}
+            aria-label={`Ask about ${displayUnitLabel(node)}`}
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') ask();
+            }}
+            placeholder={`Ask about this ${displayUnitLabel(node).toLowerCase()}…`}
+          />
+          <button onClick={ask} disabled={asking || !question.trim()}>
+            {asking ? 'Working' : 'Ask'}
+          </button>
+        </div>
+        {asking && (
+          <div className="assistant-thinking">
+            <i />
+            <i />
+            <i />
+            <span>Checking the paper and dependencies…</span>
+          </div>
+        )}
+        {answer && (
+          <div className="assistant-answer">
+            <MathText value={answer} block />
+          </div>
+        )}
+      </section>
+      <section ref={notesRef} className="assistant-notes">
+        <header>
+          <b>Note</b>
+          {notes.length > 0 && <span>Saved locally</span>}
+        </header>
+        {notes.length > 0 ? (
+          <div className="assistant-saved-notes">
+            {notes.map((note) => (
+              <EditableSavedNote
+                key={`${note.id}:${noteEditNonce}`}
+                note={note}
+                update={updateNote}
+                remove={deleteNote}
+                autoEdit={noteEditNonce > 0}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="assistant-note-composer">
+            <textarea
+              ref={noteComposerRef}
+              aria-label={`Note for ${displayUnitLabel(node)}`}
+              value={noteText}
+              onChange={(event) => setNoteText(event.target.value)}
+              placeholder={`Write one note for this ${displayUnitLabel(node).toLowerCase()}. LaTeX: $inline$ or $$display math$$`}
+            />
+            {noteText.trim() && (
+              <div className="assistant-note-preview">
+                <MathText value={noteText} block />
+              </div>
+            )}
+            <button onClick={saveLinkedNote} disabled={!noteText.trim()}>
+              Save note
+            </button>
+          </div>
+        )}
+      </section>
+      {!plainSource && (
+        <>
+          <AssistantProofExpander node={node} expand={expandProof} />
+          <StudyTools
+            paper={paper}
+            node={node}
+            graph={graph}
+            isUnderstood={isUnderstood}
+            openUnit={openUnit}
+            answers={studyAnswers}
+            saveAnswer={saveAnswer}
+            askAboutUnit={askAboutUnit}
+            setProofVisible={setExpanded}
+          />
+          <button className="assistant-more" onClick={() => setAdvancedOpen(!advancedOpen)}>
+            {advancedOpen ? 'Hide edit and context' : 'Edit and context'} <span>{advancedOpen ? '−' : '+'}</span>
+          </button>
+        </>
+      )}
+      {!plainSource && advancedOpen && (
+        <>
+          <nav className="assistant-tool-tabs">
+            {(['edit', 'context'] as const).map((view) => (
+              <button key={view} className={toolView === view ? 'active' : ''} onClick={() => setToolView(view)}>
+                {view[0].toUpperCase() + view.slice(1)}
+              </button>
+            ))}
+          </nav>
+          <WorkingEditionEditor
+            node={node}
+            originalNode={originalNode}
+            edition={edition}
+            patches={patches}
+            savePatches={savePatches}
+            suggestEdit={suggestEdit}
+          />
+          <section className="assistant-source-context context-tool">
+            <MathText
+              value={node.statement || 'No standalone statement was preserved by the audit.'}
+              block
+              citations={node.citations ?? []}
+            />
+            <Info label="Role" text={node.role || 'Not classified.'} />
+            <Info label="Why it matters" text={node.whyItMatters || 'Not classified.'} />
+          </section>
+          <section className="inspector-section logical-neighborhood context-tool">
+            <div className="flex items-center justify-between">
+              <p className="mini-label">Logical neighborhood</p>
+              <span>
+                {prerequisiteNodes.length} in · {dependentNodes.length} out
+              </span>
+            </div>
+            <div className="logical-flow">
+              <div>
+                <b>Depends on</b>
+                {prerequisiteNodes.length ? (
+                  prerequisiteNodes.map((item) => (
+                    <button key={item.id} onClick={() => openUnit(item.paperId, item.nodeId)}>
+                      <small>{item.kind}</small>
+                      <span>
+                        {displayUnitLabel(item)} · {item.title}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <p>No audited prerequisites.</p>
+                )}
+              </div>
+              <i>→</i>
+              <div className="logical-current">
+                <small>{node.kind}</small>
+                <b>{displayUnitLabel(node)}</b>
+              </div>
+              <i>→</i>
+              <div>
+                <b>Used by</b>
+                {dependentNodes.length ? (
+                  dependentNodes.map((item) => (
+                    <button key={item.id} onClick={() => openUnit(item.paperId, item.nodeId)}>
+                      <small>{item.kind}</small>
+                      <span>
+                        {displayUnitLabel(item)} · {item.title}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <p>No audited dependents.</p>
+                )}
+              </div>
+            </div>
+          </section>
+          <section className="inspector-section context-tool">
+            <button onClick={() => setExpanded(!expanded)} className="inspector-toggle">
+              <span>Proof & dependencies</span>
+              <span>{expanded ? '−' : '+'}</span>
+            </button>
+            {expanded && (
+              <div className="mt-3">
+                <p className="mini-label">Prerequisites</p>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {node.dependencies.length ? (
+                    node.dependencies.map((dependency) => {
+                      const targetNode = graph.nodes.find(
+                        (item) => item.paperId === paper.id && item.nodeId === dependency,
+                      );
+                      return (
+                        <span key={dependency} className="ref-chip">
+                          {targetNode ? displayUnitLabel(targetNode) : 'Referenced result'}
+                        </span>
+                      );
+                    })
+                  ) : (
+                    <span className="text-[11px] text-[#758075]">No audited prerequisites.</span>
+                  )}
+                </div>
+                {node.proofText && (
+                  <>
+                    <p className="mini-label mt-3">Source proof</p>
+                    <div className="mt-2 text-[11px] leading-5 text-[#56504c]">
+                      <MathText value={node.proofText} block citations={node.citations ?? []} />
+                    </div>
+                  </>
+                )}
+                {node.proofSketch.length > 0 && (
+                  <>
+                    <p className="mini-label mt-3">AI proof route</p>
+                    <ol className="mt-2 space-y-2">
+                      {node.proofSketch.map((step, index) => (
+                        <li key={index} className="flex gap-2 text-[11px] leading-5 text-[#56504c]">
+                          <span className="grid h-4 w-4 flex-none place-items-center rounded-full bg-white text-[9px] font-bold text-[#8f1d2c]">
+                            {index + 1}
+                          </span>
+                          <MathText value={step} citations={node.citations ?? []} />
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                )}
+              </div>
+            )}
+          </section>
+          <section className="inspector-section context-tool">
+            <div className="flex justify-between">
+              <p className="mini-label">Cross-paper relations</p>
+              <span className="text-[10px] text-[#7d877d]">{edges.length}</span>
+            </div>
+            {edges.length ? (
+              <div className="mt-2 space-y-1.5">
+                {edges.map((edge) => {
+                  const otherId = edge.from === sourceId ? edge.to : edge.from;
+                  const other = nodeById.get(otherId);
+                  const manual = edge.source === 'manual';
+                  const manualId = manual ? edge.id.replace('manual:', '') : '';
+                  return (
+                    <div key={edge.id} className="cross-edge">
+                      <button
+                        onClick={() => other && openUnit(other.paperId, other.nodeId)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <b>
+                          {edge.relation}
+                          {edge.source === 'citation' ? ' · cited' : ''}
+                        </b>
+                        <span>{other ? `${other.paperTitle} · ${displayUnitLabel(other)}` : 'Referenced result'}</span>
+                      </button>
+                      {manual && (
+                        <button
+                          onClick={() => void removeLink(manualId)}
+                          title="Remove relation"
+                          className="text-[#899189]"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-2 text-[11px] leading-5 text-[#758075]">No local cross-paper relation yet.</p>
+            )}
+            {candidates.length > 0 && (
+              <div className="mt-3 border-t border-[#e2e7df] pt-3">
+                <select
+                  value={target}
+                  onChange={(event) => setTarget(event.target.value)}
+                  className="w-full rounded border border-[#d5ddd4] bg-white px-2 py-1.5 text-[10px] outline-none"
+                >
+                  <option value="">Link to another audited unit…</option>
+                  {candidates.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.paperTitle} · {displayUnitLabel(item)}
+                    </option>
+                  ))}
+                </select>
+                <div className="mt-1.5 flex gap-1.5">
+                  <select
+                    value={relation}
+                    onChange={(event) => setRelation(event.target.value as CrossLink['relation'])}
+                    className="rounded border border-[#d5ddd4] bg-white px-1.5 py-1 text-[10px]"
+                  >
+                    <option value="uses">uses</option>
+                    <option value="extends">extends</option>
+                    <option value="background">background</option>
+                    <option value="contrasts">contrasts</option>
+                  </select>
+                  <button
+                    onClick={createLink}
+                    disabled={!target}
+                    className="rounded border border-[#cbdacb] px-2 py-1 text-[10px] font-bold text-[#35624b] disabled:opacity-50"
+                  >
+                    Add relation
+                  </button>
+                </div>
+                <input
+                  value={linkNote}
+                  onChange={(event) => setLinkNote(event.target.value)}
+                  placeholder="Optional rationale"
+                  className="mt-1.5 w-full rounded border border-[#d5ddd4] px-2 py-1.5 text-[10px] outline-none"
+                />
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Info({ label, text }: { label: string; text: string }) {
+  return (
+    <div className="rounded border border-[#e3ddd5] bg-[#fbfaf7] p-2.5">
+      <p className="mini-label">{label}</p>
+      <div className="mt-1 text-[11px] leading-5 text-[#58514d]">
+        <MathText value={text} block />
+      </div>
+    </div>
+  );
+}

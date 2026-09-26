@@ -1,22 +1,26 @@
-import { cp, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { citationEdges } from './citation-links.mjs';
 
 const VAULT_VERSION = 1;
 
-function relativePathEscapes(relative) {
+export function relativePathEscapes(relative) {
   return path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`);
 }
 
 function slug(value, limit = 64) {
-  return String(value || 'untitled-paper')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, limit)
-    .replace(/-+$/g, '') || 'untitled-paper';
+  return (
+    String(value || 'untitled-paper')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, limit)
+      .replace(/-+$/g, '') || 'untitled-paper'
+  );
 }
 
 function arxivStem(arxivId) {
@@ -44,22 +48,83 @@ function compactPaper(paper) {
 }
 
 async function readJson(file, fallback) {
-  try { return JSON.parse(await readFile(file, 'utf8')); }
-  catch { return fallback; }
+  let text;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch {
+    return fallback;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    // A damaged record falls back like a missing one so the rest of the library
+    // still opens, but keep the original bytes: the fallback may be saved over it.
+    await preserveCorruptJson(file);
+    return fallback;
+  }
 }
 
-async function writeJson(file, value) {
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await rename(temporary, file);
+async function preserveCorruptJson(file) {
+  try {
+    const { mtimeMs } = await stat(file);
+    const backup = `${file}.corrupt-${Math.round(mtimeMs)}`;
+    await copyFile(file, backup, fsConstants.COPYFILE_EXCL);
+    console.warn(`arXivpecker: ${file} is not valid JSON; the original was kept at ${backup}.`);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') console.warn(`arXivpecker: ${file} is not valid JSON and could not be backed up.`);
+  }
+}
+
+const pendingWrites = new Map();
+
+// Writes to one file are serialized and each uses its own temporary name. With a
+// shared name, two saves in the same millisecond interleaved their bytes or
+// renamed each other's partial file, leaving invalid JSON behind.
+function writeJson(file, value) {
+  const content = `${JSON.stringify(value, null, 2)}\n`;
+  const write = async () => {
+    const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, content, 'utf8');
+      await rename(temporary, file);
+    } catch (error) {
+      await rm(temporary, { force: true });
+      throw error;
+    }
+  };
+  const scheduled = (pendingWrites.get(file) ?? Promise.resolve()).then(write, write);
+  const tail = scheduled.catch(() => {});
+  pendingWrites.set(file, tail);
+  void tail.finally(() => {
+    if (pendingWrites.get(file) === tail) pendingWrites.delete(file);
+  });
+  return scheduled;
+}
+
+// 'ready' means Codex finished and the result waits in audit-result.json.
+const auditJobStates = ['preparing', 'running', 'paused', 'ready', 'completed'];
+
+function normalizeProgress(value) {
+  if (!isObject(value)) return null;
+  return {
+    steps: Number.isFinite(value.steps) ? Math.max(0, Math.floor(value.steps)) : 0,
+    activity: typeof value.activity === 'string' ? value.activity.slice(0, 200) : '',
+    lastActivityAt: typeof value.lastActivityAt === 'string' ? value.lastActivityAt : '',
+  };
+}
+
+function isObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function readmeFor(paper) {
-  return `# ${paper.title}\n\n` +
+  return (
+    `# ${paper.title}\n\n` +
     `- **arXiv:** ${paper.arxivId}\n` +
     `- **Authors:** ${paper.authors}\n` +
     `- **Category:** ${paper.category}\n\n` +
-    `This folder is managed by arXivpecker. It keeps the source record, full-paper audit, reader state, and cross-paper links together.\n`;
+    `This folder is managed by arXivpecker. It keeps the source record, full-paper audit, reader state, and cross-paper links together.\n`
+  );
 }
 
 export class PaperVault {
@@ -74,39 +139,68 @@ export class PaperVault {
   }
 
   async ensure() {
-    if (!this.initializing) this.initializing = this.initialize().catch((error) => { this.initializing = null; throw error; });
+    if (!this.initializing)
+      this.initializing = this.initialize().catch((error) => {
+        this.initializing = null;
+        throw error;
+      });
     return this.initializing;
   }
 
   async initialize() {
     await mkdir(this.root, { recursive: true });
     const existing = await readdir(this.root, { withFileTypes: true });
-    const hasPaper = existing.some((entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'));
-    if (!hasPaper && this.starterRoot) await this.installStarterLibrary();
+    const hasPaper = existing.some(
+      (entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'),
+    );
+    // Seed only a library that has never been set up: a reader who removed every
+    // paper must not get the starter papers back on the next launch.
+    const initializedBefore = await stat(this.indexFile).then(
+      () => true,
+      () => false,
+    );
+    if (!hasPaper && !initializedBefore && this.starterRoot) await this.installStarterLibrary();
     await mkdir(this.graphDirectory, { recursive: true });
     const index = await readJson(this.indexFile, null);
-    if (!index) await writeJson(this.indexFile, { version: VAULT_VERSION, updatedAt: new Date().toISOString(), papers: [], links: [] });
+    if (!index)
+      await writeJson(this.indexFile, {
+        version: VAULT_VERSION,
+        updatedAt: new Date().toISOString(),
+        papers: [],
+        links: [],
+      });
   }
 
   async installStarterLibrary() {
     let entries;
-    try { entries = await readdir(this.starterRoot, { withFileTypes: true }); }
-    catch { return; }
+    try {
+      entries = await readdir(this.starterRoot, { withFileTypes: true });
+    } catch {
+      return;
+    }
     for (const entry of entries) {
       if (entry.name === 'profile.json' || entry.name === '_trash' || entry.name.startsWith('.')) continue;
-      await cp(path.join(this.starterRoot, entry.name), path.join(this.root, entry.name), { recursive: true, force: false, errorOnExist: false });
+      await cp(path.join(this.starterRoot, entry.name), path.join(this.root, entry.name), {
+        recursive: true,
+        force: false,
+        errorOnExist: false,
+      });
     }
     await this.hydratePortableSourcePaths();
   }
 
   async hydratePortableSourcePaths() {
-    const folders = (await readdir(this.root, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'));
+    const folders = (await readdir(this.root, { withFileTypes: true })).filter(
+      (entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'),
+    );
     for (const folder of folders) {
-      const paperDirectory = path.join(this.root, folder.name); const paperFile = path.join(paperDirectory, 'paper.json');
+      const paperDirectory = path.join(this.root, folder.name);
+      const paperFile = path.join(paperDirectory, 'paper.json');
       const paper = await readJson(paperFile, null);
       if (paper?.source) {
         const source = { ...paper.source };
-        for (const key of ['sourceDirectory', 'mainTex', 'localPdf']) if (source[key] && !path.isAbsolute(source[key])) source[key] = path.resolve(paperDirectory, source[key]);
+        for (const key of ['sourceDirectory', 'mainTex', 'localPdf'])
+          if (source[key] && !path.isAbsolute(source[key])) source[key] = path.resolve(paperDirectory, source[key]);
         await writeJson(paperFile, { ...paper, source });
       }
       const sourceRoot = path.join(paperDirectory, 'attachments', 'source');
@@ -117,15 +211,20 @@ export class PaperVault {
   async hydrateManifestTree(directory, depth = 0) {
     if (depth > 8) return;
     let entries;
-    try { entries = await readdir(directory, { withFileTypes: true }); }
-    catch { return; }
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
     for (const entry of entries) {
       const absolute = path.join(directory, entry.name);
       if (entry.isDirectory()) await this.hydrateManifestTree(absolute, depth + 1);
       else if (/^proofroom-(?:source|uploaded-source|ai-source)\.json$/i.test(entry.name)) {
-        const manifest = await readJson(absolute, null); if (!manifest) continue;
+        const manifest = await readJson(absolute, null);
+        if (!manifest) continue;
         const hydrated = { ...manifest };
-        for (const key of ['entryFile', 'sourceDirectory', 'uploadedFile']) if (hydrated[key] && !path.isAbsolute(hydrated[key])) hydrated[key] = path.resolve(directory, hydrated[key]);
+        for (const key of ['entryFile', 'sourceDirectory', 'uploadedFile'])
+          if (hydrated[key] && !path.isAbsolute(hydrated[key])) hydrated[key] = path.resolve(directory, hydrated[key]);
         await writeJson(absolute, hydrated);
       }
     }
@@ -133,20 +232,39 @@ export class PaperVault {
 
   async index() {
     await this.ensure();
-    const index = await readJson(this.indexFile, { version: VAULT_VERSION, updatedAt: new Date().toISOString(), papers: [], links: [] });
+    const index = await readJson(this.indexFile, {
+      version: VAULT_VERSION,
+      updatedAt: new Date().toISOString(),
+      papers: [],
+      links: [],
+    });
     const savedPapers = Array.isArray(index.papers) ? index.papers : [];
-    const folders = (await readdir(this.root, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'));
+    const folders = (await readdir(this.root, { withFileTypes: true })).filter(
+      (entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'),
+    );
     const discovered = [];
     for (const entry of folders) {
       const paper = await readJson(path.join(this.root, entry.name, 'paper.json'), null);
       if (!paper?.id || !paper?.title || !paper?.arxivId) continue;
       const previous = savedPapers.find((record) => record.folder === entry.name || record.id === String(paper.id));
-      discovered.push({ id: String(paper.id), arxivId: String(paper.arxivId), folder: entry.name, title: String(paper.title), updatedAt: String(paper.updatedAt || previous?.updatedAt || new Date().toISOString()), createdAt: String(paper.createdAt || previous?.createdAt || new Date().toISOString()) });
+      discovered.push({
+        id: String(paper.id),
+        arxivId: String(paper.arxivId),
+        folder: entry.name,
+        title: String(paper.title),
+        updatedAt: String(paper.updatedAt || previous?.updatedAt || new Date().toISOString()),
+        createdAt: String(paper.createdAt || previous?.createdAt || new Date().toISOString()),
+      });
     }
     const byId = new Map(discovered.map((record) => [record.id, record]));
     const ordered = savedPapers.map((record) => byId.get(record.id)).filter(Boolean);
     const seen = new Set(ordered.map((record) => record.id));
-    const papers = [...ordered, ...discovered.filter((record) => !seen.has(record.id)).sort((left, right) => left.title.localeCompare(right.title))];
+    const papers = [
+      ...ordered,
+      ...discovered
+        .filter((record) => !seen.has(record.id))
+        .sort((left, right) => left.title.localeCompare(right.title)),
+    ];
     const normalized = { ...index, papers, links: Array.isArray(index.links) ? index.links : [] };
     const priorShape = savedPapers.map(({ id, folder, title, arxivId }) => ({ id, folder, title, arxivId }));
     const nextShape = papers.map(({ id, folder, title, arxivId }) => ({ id, folder, title, arxivId }));
@@ -190,14 +308,33 @@ export class PaperVault {
     const directory = this.paperDirectory(record);
     await this.createDirectories(directory);
     const oldPaper = await readJson(path.join(directory, 'paper.json'), {});
-    const savedPaper = { ...oldPaper, ...paper, folder: record.folder, updatedAt: record.updatedAt, createdAt: oldPaper.createdAt ?? record.createdAt, source: { ...(oldPaper.source ?? {}), abstractUrl: `https://arxiv.org/abs/${paper.arxivId}`, pdfUrl: `https://arxiv.org/pdf/${paper.arxivId}`, texUrl: `https://export.arxiv.org/e-print/${paper.arxivId}` } };
+    const savedPaper = {
+      ...oldPaper,
+      ...paper,
+      folder: record.folder,
+      updatedAt: record.updatedAt,
+      createdAt: oldPaper.createdAt ?? record.createdAt,
+      source: {
+        ...(oldPaper.source ?? {}),
+        abstractUrl: `https://arxiv.org/abs/${paper.arxivId}`,
+        pdfUrl: `https://arxiv.org/pdf/${paper.arxivId}`,
+        texUrl: `https://export.arxiv.org/e-print/${paper.arxivId}`,
+      },
+    };
     await writeJson(path.join(directory, 'paper.json'), savedPaper);
     await writeFile(path.join(directory, 'README.md'), readmeFor(paper), 'utf8');
     const patchesFile = path.join(directory, 'editions', 'working', 'patches.json');
     const patches = await readJson(patchesFile, null);
-    if (!patches) await writeJson(patchesFile, { version: VAULT_VERSION, updatedAt: new Date().toISOString(), patches: [] });
+    if (!patches)
+      await writeJson(patchesFile, { version: VAULT_VERSION, updatedAt: new Date().toISOString(), patches: [] });
     const existingIndex = index.papers.findIndex((item) => item.id === record.id || item.arxivId === record.arxivId);
-    if (existingIndex >= 0) index.papers = index.papers.map((item, position) => position === existingIndex ? record : item).filter((item, position, all) => all.findIndex((candidate) => candidate.id === item.id || candidate.arxivId === item.arxivId) === position);
+    if (existingIndex >= 0)
+      index.papers = index.papers
+        .map((item, position) => (position === existingIndex ? record : item))
+        .filter(
+          (item, position, all) =>
+            all.findIndex((candidate) => candidate.id === item.id || candidate.arxivId === item.arxivId) === position,
+        );
     else index.papers = [record, ...index.papers];
     await this.writeIndex(index);
     return savedPaper;
@@ -217,7 +354,8 @@ export class PaperVault {
 
   async saveSourceRecord(paperId, sourceRecord) {
     const record = await this.recordFor(paperId);
-    const directory = this.paperDirectory(record); const file = path.join(directory, 'paper.json');
+    const directory = this.paperDirectory(record);
+    const file = path.join(directory, 'paper.json');
     const paper = await readJson(file, {});
     const portable = { ...sourceRecord };
     for (const key of ['sourceDirectory', 'mainTex', 'localPdf']) {
@@ -242,7 +380,9 @@ export class PaperVault {
     index.links = index.links.filter((link) => link.from.paperId !== paperId && link.to.paperId !== paperId);
     await this.writeIndex(index);
     for (const remaining of index.papers) {
-      const incident = index.links.filter((link) => link.from.paperId === remaining.id || link.to.paperId === remaining.id);
+      const incident = index.links.filter(
+        (link) => link.from.paperId === remaining.id || link.to.paperId === remaining.id,
+      );
       await writeJson(path.join(this.paperDirectory(remaining), 'links.json'), incident);
     }
     await this.rebuildGraph();
@@ -280,11 +420,11 @@ export class PaperVault {
     return updated;
   }
 
-  async auditJob(paperId) {
-    const record = await this.recordFor(paperId);
+  async auditJob(paperId, knownRecord = null) {
+    const record = knownRecord ?? (await this.recordFor(paperId));
     const job = await readJson(path.join(this.paperDirectory(record), 'audit-progress.json'), null);
     if (!job || typeof job !== 'object') return null;
-    const states = new Set(['preparing', 'running', 'paused', 'completed']);
+    const states = new Set(auditJobStates);
     return {
       version: 1,
       paperId: String(paperId),
@@ -299,29 +439,51 @@ export class PaperVault {
       startedAt: typeof job.startedAt === 'string' ? job.startedAt : '',
       updatedAt: typeof job.updatedAt === 'string' ? job.updatedAt : '',
       message: typeof job.message === 'string' ? job.message : '',
+      progress: normalizeProgress(job.progress),
     };
+  }
+
+  /** Every paper's unfinished audit job, keyed by paper id. */
+  async auditJobs() {
+    const index = await this.index();
+    const jobs = {};
+    for (const record of index.papers) {
+      const job = await this.auditJob(record.id, record);
+      if (job && job.state !== 'completed') jobs[record.id] = job;
+    }
+    return jobs;
   }
 
   async saveAuditJob(paperId, update) {
     const record = await this.recordFor(paperId);
     const previous = await this.auditJob(paperId);
     const now = new Date().toISOString();
-    const states = new Set(['preparing', 'running', 'paused', 'completed']);
-    const options = update?.options && typeof update.options === 'object' ? update.options : previous?.options ?? {};
+    const states = new Set(auditJobStates);
+    const options = update?.options && typeof update.options === 'object' ? update.options : (previous?.options ?? {});
     const job = {
       version: 1,
       paperId: String(paperId),
-      state: states.has(update?.state) ? update.state : previous?.state ?? 'paused',
-      threadId: typeof update?.threadId === 'string' ? update.threadId : previous?.threadId ?? '',
+      state: states.has(update?.state) ? update.state : (previous?.state ?? 'paused'),
+      threadId: typeof update?.threadId === 'string' ? update.threadId : (previous?.threadId ?? ''),
       options: {
         convertPdfToLatex: Boolean(options.convertPdfToLatex),
         correctnessAudit: options.correctnessAudit !== false,
         detailedAudit: options.detailedAudit !== false,
       },
-      attempts: Number.isFinite(update?.attempts) ? Math.max(0, Math.floor(update.attempts)) : previous?.attempts ?? 0,
-      startedAt: typeof update?.startedAt === 'string' && update.startedAt ? update.startedAt : previous?.startedAt || now,
+      attempts: Number.isFinite(update?.attempts)
+        ? Math.max(0, Math.floor(update.attempts))
+        : (previous?.attempts ?? 0),
+      startedAt:
+        typeof update?.startedAt === 'string' && update.startedAt ? update.startedAt : previous?.startedAt || now,
       updatedAt: now,
-      message: typeof update?.message === 'string' ? update.message.slice(0, 4000) : previous?.message ?? '',
+      message: typeof update?.message === 'string' ? update.message.slice(0, 4000) : (previous?.message ?? ''),
+      // Progress describes the current attempt only; a new state without it clears it.
+      progress:
+        update?.progress !== undefined
+          ? normalizeProgress(update.progress)
+          : update?.state
+            ? null
+            : (previous?.progress ?? null),
     };
     await writeJson(path.join(this.paperDirectory(record), 'audit-progress.json'), job);
     return job;
@@ -336,12 +498,45 @@ export class PaperVault {
       options: resume && previous?.options ? previous.options : options,
       attempts: (previous?.attempts ?? 0) + 1,
       startedAt: previous?.startedAt || new Date().toISOString(),
-      message: reusingThread ? 'Resuming the saved Codex audit thread.' : 'Preparing the primary source for an AI audit.',
+      message: reusingThread
+        ? 'Resuming the saved Codex audit thread.'
+        : 'Preparing the primary source for an AI audit.',
     });
   }
 
+  /**
+   * Stores a finished audit before anyone has turned it into the interactive
+   * reader, so a reload or restart cannot lose hours of Codex work.
+   */
+  async saveAuditResult(paperId, result) {
+    const record = await this.recordFor(paperId);
+    await writeJson(path.join(this.paperDirectory(record), 'audit-result.json'), {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      result,
+    });
+    return this.saveAuditJob(paperId, {
+      state: 'ready',
+      message: 'The AI audit finished; building the interactive reader.',
+    });
+  }
+
+  async auditResult(paperId) {
+    const record = await this.recordFor(paperId);
+    const saved = await readJson(path.join(this.paperDirectory(record), 'audit-result.json'), null);
+    return isObject(saved?.result) ? saved.result : null;
+  }
+
+  async clearAuditResult(paperId) {
+    const record = await this.recordFor(paperId);
+    await rm(path.join(this.paperDirectory(record), 'audit-result.json'), { force: true });
+  }
+
   async pauseAuditJob(paperId, message) {
-    return this.saveAuditJob(paperId, { state: 'paused', message: String(message || 'The audit was paused and can be resumed.') });
+    return this.saveAuditJob(paperId, {
+      state: 'paused',
+      message: String(message || 'The audit was paused and can be resumed.'),
+    });
   }
 
   async completeAuditJob(paperId) {
@@ -355,7 +550,12 @@ export class PaperVault {
       nodeNotes: reader.nodeNotes && typeof reader.nodeNotes === 'object' ? reader.nodeNotes : {},
       nodeAnswers: reader.nodeAnswers && typeof reader.nodeAnswers === 'object' ? reader.nodeAnswers : {},
       expanded: reader.expanded && typeof reader.expanded === 'object' ? reader.expanded : {},
-      marks: reader.marks && typeof reader.marks === 'object' ? Object.fromEntries(Object.entries(reader.marks).filter(([, value]) => ['understood', 'question', 'error'].includes(value))) : {},
+      marks:
+        reader.marks && typeof reader.marks === 'object'
+          ? Object.fromEntries(
+              Object.entries(reader.marks).filter(([, value]) => ['understood', 'question', 'error'].includes(value)),
+            )
+          : {},
       updatedAt: new Date().toISOString(),
     };
     await writeJson(path.join(this.paperDirectory(record), 'reader.json'), safeReader);
@@ -366,12 +566,24 @@ export class PaperVault {
     const record = await this.recordFor(paperId);
     const content = typeof exportRecord?.content === 'string' ? exportRecord.content : '';
     if (!content.trim()) throw new Error('The selected paper export is empty.');
-    if (Buffer.byteLength(content, 'utf8') > 16 * 1024 * 1024) throw new Error('The selected paper export is too large.');
-    const requested = String(exportRecord?.fileName || 'reading-edition.md').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 120) || 'reading-edition.md';
+    if (Buffer.byteLength(content, 'utf8') > 16 * 1024 * 1024)
+      throw new Error('The selected paper export is too large.');
+    const requested =
+      String(exportRecord?.fileName || 'reading-edition.md')
+        .replace(/[^a-zA-Z0-9._-]+/g, '-')
+        .replace(/^-+/, '')
+        .slice(0, 120) || 'reading-edition.md';
     const fileName = requested.toLowerCase().endsWith('.md') ? requested : `${requested}.md`;
-    const directory = path.join(this.paperDirectory(record), 'exports'); await mkdir(directory, { recursive: true });
-    const file = path.join(directory, fileName); await writeFile(file, content, 'utf8');
-    await writeJson(path.join(directory, `${fileName}.manifest.json`), { paperId, fileName, selection: exportRecord?.selection ?? {}, savedAt: new Date().toISOString() });
+    const directory = path.join(this.paperDirectory(record), 'exports');
+    await mkdir(directory, { recursive: true });
+    const file = path.join(directory, fileName);
+    await writeFile(file, content, 'utf8');
+    await writeJson(path.join(directory, `${fileName}.manifest.json`), {
+      paperId,
+      fileName,
+      selection: exportRecord?.selection ?? {},
+      savedAt: new Date().toISOString(),
+    });
     return { fileName, relativePath: path.relative(this.root, file), bytes: Buffer.byteLength(content, 'utf8') };
   }
 
@@ -383,35 +595,81 @@ export class PaperVault {
     if (payload.length > 80 * 1024 * 1024) throw new Error('Reference uploads are limited to 80 MB.');
     const citation = upload?.citation && typeof upload.citation === 'object' ? upload.citation : {};
     const referenceName = slug(citation.key || citation.title || 'attached-reference', 72);
-    const fileName = String(upload?.fileName || 'source.pdf').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+/, '').slice(0, 140) || 'source.pdf';
-    const directory = path.join(this.paperDirectory(record), 'attachments', 'references', referenceName); await mkdir(directory, { recursive: true });
-    const file = path.join(directory, fileName); await writeFile(file, payload);
-    const manifestFile = path.join(directory, 'reference.json'); const previous = await readJson(manifestFile, { files: [] });
+    const fileName =
+      String(upload?.fileName || 'source.pdf')
+        .replace(/[^a-zA-Z0-9._-]+/g, '-')
+        .replace(/^-+/, '')
+        .slice(0, 140) || 'source.pdf';
+    const directory = path.join(this.paperDirectory(record), 'attachments', 'references', referenceName);
+    await mkdir(directory, { recursive: true });
+    const file = path.join(directory, fileName);
+    await writeFile(file, payload);
+    const manifestFile = path.join(directory, 'reference.json');
+    const previous = await readJson(manifestFile, { files: [] });
     const relativePath = path.relative(this.root, file);
-    await writeJson(manifestFile, { citation: { key: String(citation.key || ''), title: String(citation.title || ''), authors: String(citation.authors || ''), locator: String(citation.locator || '') }, files: [...new Set([...(Array.isArray(previous.files) ? previous.files : []), relativePath])], updatedAt: new Date().toISOString() });
+    await writeJson(manifestFile, {
+      citation: {
+        key: String(citation.key || ''),
+        title: String(citation.title || ''),
+        authors: String(citation.authors || ''),
+        locator: String(citation.locator || ''),
+      },
+      files: [...new Set([...(Array.isArray(previous.files) ? previous.files : []), relativePath])],
+      updatedAt: new Date().toISOString(),
+    });
     return { fileName, relativePath, bytes: payload.length };
   }
 
   async savePatches(paperId, patches) {
     const record = await this.recordFor(paperId);
     const allowedKinds = new Set(['replace', 'delete', 'add']);
-    const allowedNodeKinds = new Set(['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'proof', 'equation', 'remark', 'example', 'section', 'paragraph', 'figure', 'table', 'external-result']);
-    const safePatches = Array.isArray(patches) ? patches.slice(0, 500).map((patch) => ({
-      id: typeof patch.id === 'string' ? patch.id : randomUUID(),
-      kind: allowedKinds.has(patch.kind) ? patch.kind : 'replace',
-      nodeId: typeof patch.nodeId === 'string' ? patch.nodeId : '',
-      title: typeof patch.title === 'string' ? patch.title : '',
-      statement: typeof patch.statement === 'string' ? patch.statement : '',
-      proofText: typeof patch.proofText === 'string' ? patch.proofText : '',
-      nodeKind: allowedNodeKinds.has(patch.nodeKind) ? patch.nodeKind : '',
-      afterNodeId: typeof patch.afterNodeId === 'string' ? patch.afterNodeId : '',
-      rationale: typeof patch.rationale === 'string' ? patch.rationale : '',
-      dependencies: Array.isArray(patch.dependencies) ? patch.dependencies.map(String).filter(Boolean).slice(0, 100) : [],
-      proofSketch: Array.isArray(patch.proofSketch) ? patch.proofSketch.map(String).filter(Boolean).slice(0, 100) : [],
-      source: patch.source === 'ai' ? 'ai' : 'manual',
-      createdAt: typeof patch.createdAt === 'string' ? patch.createdAt : new Date().toISOString(),
-    })).filter((patch) => patch.nodeId || (patch.kind === 'add' && patch.title && patch.statement)) : [];
-    await writeJson(path.join(this.paperDirectory(record), 'editions', 'working', 'patches.json'), { version: VAULT_VERSION, updatedAt: new Date().toISOString(), patches: safePatches });
+    const allowedNodeKinds = new Set([
+      'definition',
+      'assumption',
+      'notation',
+      'lemma',
+      'proposition',
+      'theorem',
+      'corollary',
+      'proof',
+      'equation',
+      'remark',
+      'example',
+      'section',
+      'paragraph',
+      'figure',
+      'table',
+      'external-result',
+    ]);
+    const safePatches = Array.isArray(patches)
+      ? patches
+          .slice(0, 500)
+          .map((patch) => ({
+            id: typeof patch.id === 'string' ? patch.id : randomUUID(),
+            kind: allowedKinds.has(patch.kind) ? patch.kind : 'replace',
+            nodeId: typeof patch.nodeId === 'string' ? patch.nodeId : '',
+            title: typeof patch.title === 'string' ? patch.title : '',
+            statement: typeof patch.statement === 'string' ? patch.statement : '',
+            proofText: typeof patch.proofText === 'string' ? patch.proofText : '',
+            nodeKind: allowedNodeKinds.has(patch.nodeKind) ? patch.nodeKind : '',
+            afterNodeId: typeof patch.afterNodeId === 'string' ? patch.afterNodeId : '',
+            rationale: typeof patch.rationale === 'string' ? patch.rationale : '',
+            dependencies: Array.isArray(patch.dependencies)
+              ? patch.dependencies.map(String).filter(Boolean).slice(0, 100)
+              : [],
+            proofSketch: Array.isArray(patch.proofSketch)
+              ? patch.proofSketch.map(String).filter(Boolean).slice(0, 100)
+              : [],
+            source: patch.source === 'ai' ? 'ai' : 'manual',
+            createdAt: typeof patch.createdAt === 'string' ? patch.createdAt : new Date().toISOString(),
+          }))
+          .filter((patch) => patch.nodeId || (patch.kind === 'add' && patch.title && patch.statement))
+      : [];
+    await writeJson(path.join(this.paperDirectory(record), 'editions', 'working', 'patches.json'), {
+      version: VAULT_VERSION,
+      updatedAt: new Date().toISOString(),
+      patches: safePatches,
+    });
     await this.rebuildGraph();
     return safePatches;
   }
@@ -423,51 +681,86 @@ export class PaperVault {
     const [previousPaper, previousAudit, previousReader, previousPatches, previousUpdates] = await Promise.all([
       readJson(path.join(directory, 'paper.json'), null),
       readJson(path.join(directory, 'audit.json'), null),
-      readJson(path.join(directory, 'reader.json'), { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} }),
+      readJson(path.join(directory, 'reader.json'), {
+        notes: [],
+        nodeNotes: {},
+        nodeAnswers: {},
+        expanded: {},
+        marks: {},
+      }),
       readJson(path.join(directory, 'editions', 'working', 'patches.json'), { patches: [] }),
       readJson(path.join(directory, 'updates.json'), { updates: [] }),
     ]);
-    if (!previousPaper || !previousAudit) throw new Error('The current paper and its audit are required before updating versions.');
-    if (!payload?.audit || !Array.isArray(payload.audit.nodes) || !Array.isArray(payload.audit.sourceBlocks)) throw new Error('A complete latest-version audit is required.');
-    if (!payload?.update?.fromVersion || !payload?.update?.toVersion || !payload?.update?.comparison) throw new Error('A version comparison record is required.');
+    if (!previousPaper || !previousAudit)
+      throw new Error('The current paper and its audit are required before updating versions.');
+    if (!payload?.audit || !Array.isArray(payload.audit.nodes) || !Array.isArray(payload.audit.sourceBlocks))
+      throw new Error('A complete latest-version audit is required.');
+    if (!payload?.update?.fromVersion || !payload?.update?.toVersion || !payload?.update?.comparison)
+      throw new Error('A version comparison record is required.');
     const previousIndex = structuredClone(await this.index());
     const archiveName = `${new Date().toISOString().replace(/[:.]/g, '-')}--${slug(payload.update.fromVersion, 30)}-to-${slug(payload.update.toVersion, 30)}`;
-    const archiveDirectory = path.join(directory, 'history', 'updates', archiveName); await mkdir(archiveDirectory, { recursive: true });
-    await writeJson(path.join(archiveDirectory, 'snapshot.json'), { paper: previousPaper, audit: previousAudit, reader: previousReader, patches: previousPatches.patches ?? [], archivedAt: new Date().toISOString(), reason: `Before update ${payload.update.fromVersion} → ${payload.update.toVersion}` });
+    const archiveDirectory = path.join(directory, 'history', 'updates', archiveName);
+    await mkdir(archiveDirectory, { recursive: true });
+    await writeJson(path.join(archiveDirectory, 'snapshot.json'), {
+      paper: previousPaper,
+      audit: previousAudit,
+      reader: previousReader,
+      patches: previousPatches.patches ?? [],
+      archivedAt: new Date().toISOString(),
+      reason: `Before update ${payload.update.fromVersion} → ${payload.update.toVersion}`,
+    });
 
     try {
-    const storedPaper = await this.upsertPaper({ ...payload.paper, id: paperId });
-    if (payload.sourceRecord && typeof payload.sourceRecord === 'object') await this.saveSourceRecord(paperId, payload.sourceRecord);
-    await writeJson(path.join(directory, 'audit.json'), payload.audit);
-    const reader = await this.saveReader(paperId, payload.reader ?? {});
-    const patches = await this.savePatches(paperId, payload.patches ?? []);
-    const updateRecord = {
-      ...payload.update,
-      id: String(payload.update.id || randomUUID()),
-      paperId,
-      status: 'updated',
-      createdAt: String(payload.update.createdAt || new Date().toISOString()),
-      archive: path.relative(this.root, archiveDirectory),
-    };
-    const updates = [updateRecord, ...(Array.isArray(previousUpdates.updates) ? previousUpdates.updates : [])].slice(0, 50);
-    await writeJson(path.join(directory, 'updates.json'), { version: VAULT_VERSION, updatedAt: new Date().toISOString(), updates });
+      const storedPaper = await this.upsertPaper({ ...payload.paper, id: paperId });
+      if (payload.sourceRecord && typeof payload.sourceRecord === 'object')
+        await this.saveSourceRecord(paperId, payload.sourceRecord);
+      await writeJson(path.join(directory, 'audit.json'), payload.audit);
+      const reader = await this.saveReader(paperId, payload.reader ?? {});
+      const patches = await this.savePatches(paperId, payload.patches ?? []);
+      const updateRecord = {
+        ...payload.update,
+        id: String(payload.update.id || randomUUID()),
+        paperId,
+        status: 'updated',
+        createdAt: String(payload.update.createdAt || new Date().toISOString()),
+        archive: path.relative(this.root, archiveDirectory),
+      };
+      const updates = [updateRecord, ...(Array.isArray(previousUpdates.updates) ? previousUpdates.updates : [])].slice(
+        0,
+        50,
+      );
+      await writeJson(path.join(directory, 'updates.json'), {
+        version: VAULT_VERSION,
+        updatedAt: new Date().toISOString(),
+        updates,
+      });
 
-    const nodeMap = payload.nodeMap && typeof payload.nodeMap === 'object' ? payload.nodeMap : {};
-    const index = await this.index(); const touched = new Set([paperId]);
-    index.links = index.links.map((link) => {
-      const next = structuredClone(link);
-      if (next.from.paperId === paperId && nodeMap[next.from.nodeId]) { next.from.nodeId = String(nodeMap[next.from.nodeId]); touched.add(next.to.paperId); }
-      if (next.to.paperId === paperId && nodeMap[next.to.nodeId]) { next.to.nodeId = String(nodeMap[next.to.nodeId]); touched.add(next.from.paperId); }
-      return next;
-    });
-    await this.writeIndex(index);
-    for (const touchedPaperId of touched) {
-      const record = index.papers.find((item) => item.id === touchedPaperId); if (!record) continue;
-      const incident = index.links.filter((link) => link.from.paperId === touchedPaperId || link.to.paperId === touchedPaperId);
-      await writeJson(path.join(this.paperDirectory(record), 'links.json'), incident);
-    }
-    await this.rebuildGraph();
-    return { paper: storedPaper, reader, patches, update: updateRecord, snapshot: await this.snapshot() };
+      const nodeMap = payload.nodeMap && typeof payload.nodeMap === 'object' ? payload.nodeMap : {};
+      const index = await this.index();
+      const touched = new Set([paperId]);
+      index.links = index.links.map((link) => {
+        const next = structuredClone(link);
+        if (next.from.paperId === paperId && nodeMap[next.from.nodeId]) {
+          next.from.nodeId = String(nodeMap[next.from.nodeId]);
+          touched.add(next.to.paperId);
+        }
+        if (next.to.paperId === paperId && nodeMap[next.to.nodeId]) {
+          next.to.nodeId = String(nodeMap[next.to.nodeId]);
+          touched.add(next.from.paperId);
+        }
+        return next;
+      });
+      await this.writeIndex(index);
+      for (const touchedPaperId of touched) {
+        const record = index.papers.find((item) => item.id === touchedPaperId);
+        if (!record) continue;
+        const incident = index.links.filter(
+          (link) => link.from.paperId === touchedPaperId || link.to.paperId === touchedPaperId,
+        );
+        await writeJson(path.join(this.paperDirectory(record), 'links.json'), incident);
+      }
+      await this.rebuildGraph();
+      return { paper: storedPaper, reader, patches, update: updateRecord, snapshot: await this.snapshot() };
     } catch (error) {
       await Promise.all([
         writeJson(path.join(directory, 'paper.json'), previousPaper),
@@ -479,7 +772,9 @@ export class PaperVault {
       ]);
       await this.writeIndex(previousIndex);
       for (const record of previousIndex.papers) {
-        const incident = previousIndex.links.filter((link) => link.from.paperId === record.id || link.to.paperId === record.id);
+        const incident = previousIndex.links.filter(
+          (link) => link.from.paperId === record.id || link.to.paperId === record.id,
+        );
         await writeJson(path.join(this.paperDirectory(record), 'links.json'), incident);
       }
       await this.rebuildGraph();
@@ -502,31 +797,71 @@ export class PaperVault {
       const [paper, audit, reader, patches, updates, auditJob] = await Promise.all([
         readJson(path.join(directory, 'paper.json'), null),
         readJson(path.join(directory, 'audit.json'), null),
-        readJson(path.join(directory, 'reader.json'), { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} }),
-        readJson(path.join(directory, 'editions', 'working', 'patches.json'), { patches: [] }),
-        readJson(path.join(directory, 'updates.json'), { updates: [] }),
-        this.auditJob(record.id),
+        readJson(path.join(directory, 'reader.json'), null),
+        readJson(path.join(directory, 'editions', 'working', 'patches.json'), null),
+        readJson(path.join(directory, 'updates.json'), null),
+        this.auditJob(record.id, record),
       ]);
-      if (paper) records.push({ paper, audit, reader, patches: Array.isArray(patches.patches) ? patches.patches : [], updates: Array.isArray(updates.updates) ? updates.updates : [], auditJob, folder: record.folder });
+      if (!isObject(paper)) continue;
+      // Valid JSON of the wrong shape must not take the whole library down: keep
+      // the paper visible and treat the malformed part as absent.
+      const validAudit = isObject(audit) && Array.isArray(audit.nodes) ? audit : null;
+      if (audit && !validAudit) console.warn(`arXivpecker: ignoring malformed audit.json in ${record.folder}.`);
+      records.push({
+        paper,
+        audit: validAudit,
+        reader: isObject(reader) ? reader : { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} },
+        patches: Array.isArray(patches?.patches) ? patches.patches : [],
+        updates: Array.isArray(updates?.updates) ? updates.updates : [],
+        auditJob,
+        folder: record.folder,
+      });
     }
     return records;
   }
 
   async snapshot() {
     const [records, index, profile, graph] = await Promise.all([
-      this.allRecords(), this.index(), readJson(this.profileFile, null), readJson(this.graphFile, { version: VAULT_VERSION, nodes: [], edges: [], updatedAt: null }),
+      this.allRecords(),
+      this.index(),
+      readJson(this.profileFile, null),
+      readJson(this.graphFile, { version: VAULT_VERSION, nodes: [], edges: [], updatedAt: null }),
     ]);
     const papers = records.map((record) => record.paper);
-    const audits = Object.fromEntries(records.filter((record) => record.audit).map((record) => [record.paper.id, record.audit]));
-    const notes = records.flatMap((record) => record.reader.notes ?? []);
+    const audits = Object.fromEntries(
+      records.filter((record) => record.audit).map((record) => [record.paper.id, record.audit]),
+    );
+    const notes = records.flatMap((record) => (Array.isArray(record.reader.notes) ? record.reader.notes : []));
     const nodeNotes = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.nodeNotes ?? {}]));
     const nodeAnswers = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.nodeAnswers ?? {}]));
     const expanded = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.expanded ?? {}]));
     const marks = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.marks ?? {}]));
     const patches = Object.fromEntries(records.map((record) => [record.paper.id, record.patches ?? []]));
     const updates = Object.fromEntries(records.map((record) => [record.paper.id, record.updates ?? []]));
-    const auditJobs = Object.fromEntries(records.filter((record) => record.auditJob && record.auditJob.state !== 'completed').map((record) => [record.paper.id, record.auditJob]));
-    return { papers, audits, notes, nodeNotes, nodeAnswers, expanded, marks, patches, updates, auditJobs, profile, links: index.links, graph, vault: { folder: this.root, paperFolders: records.map((record) => ({ paperId: record.paper.id, folder: record.folder })) } };
+    const auditJobs = Object.fromEntries(
+      records
+        .filter((record) => record.auditJob && record.auditJob.state !== 'completed')
+        .map((record) => [record.paper.id, record.auditJob]),
+    );
+    return {
+      papers,
+      audits,
+      notes,
+      nodeNotes,
+      nodeAnswers,
+      expanded,
+      marks,
+      patches,
+      updates,
+      auditJobs,
+      profile,
+      links: index.links,
+      graph,
+      vault: {
+        folder: this.root,
+        paperFolders: records.map((record) => ({ paperId: record.paper.id, folder: record.folder })),
+      },
+    };
   }
 
   async compactInventory() {
@@ -535,19 +870,44 @@ export class PaperVault {
       paperId: record.paper.id,
       title: record.paper.title,
       arxivId: record.paper.arxivId,
-      units: (record.audit?.nodes ?? []).filter((node) => ['definition', 'lemma', 'proposition', 'theorem', 'corollary', 'external-result'].includes(node.kind)).slice(0, 18).map((node) => ({ id: node.id, label: node.label, title: node.title, kind: node.kind })),
+      units: (record.audit?.nodes ?? [])
+        .filter(
+          (node) =>
+            isObject(node) &&
+            ['definition', 'lemma', 'proposition', 'theorem', 'corollary', 'external-result'].includes(node.kind),
+        )
+        .slice(0, 18)
+        .map((node) => ({ id: node.id, label: node.label, title: node.title, kind: node.kind })),
     }));
   }
 
   async addLink(link) {
     const index = await this.index();
-    const from = link?.from; const to = link?.to;
-    if (!from?.paperId || !from?.nodeId || !to?.paperId || !to?.nodeId) throw new Error('A source and target document unit are required.');
-    if (from.paperId === to.paperId && from.nodeId === to.nodeId) throw new Error('A document unit cannot link to itself.');
-    const existing = index.links.find((item) => item.from.paperId === from.paperId && item.from.nodeId === from.nodeId && item.to.paperId === to.paperId && item.to.nodeId === to.nodeId && item.relation === link.relation);
+    const from = link?.from;
+    const to = link?.to;
+    if (!from?.paperId || !from?.nodeId || !to?.paperId || !to?.nodeId)
+      throw new Error('A source and target document unit are required.');
+    if (from.paperId === to.paperId && from.nodeId === to.nodeId)
+      throw new Error('A document unit cannot link to itself.');
+    const existing = index.links.find(
+      (item) =>
+        item.from.paperId === from.paperId &&
+        item.from.nodeId === from.nodeId &&
+        item.to.paperId === to.paperId &&
+        item.to.nodeId === to.nodeId &&
+        item.relation === link.relation,
+    );
     if (existing) return existing;
     const relation = ['uses', 'extends', 'background', 'contrasts'].includes(link.relation) ? link.relation : 'uses';
-    const created = { id: randomUUID(), from: { paperId: String(from.paperId), nodeId: String(from.nodeId) }, to: { paperId: String(to.paperId), nodeId: String(to.nodeId) }, relation, note: String(link.note || ''), source: 'manual', createdAt: new Date().toISOString() };
+    const created = {
+      id: randomUUID(),
+      from: { paperId: String(from.paperId), nodeId: String(from.nodeId) },
+      to: { paperId: String(to.paperId), nodeId: String(to.nodeId) },
+      relation,
+      note: String(link.note || ''),
+      source: 'manual',
+      createdAt: new Date().toISOString(),
+    };
     index.links.push(created);
     await this.writeIndex(index);
     await this.writeIncidentLinks(created);
@@ -581,30 +941,66 @@ export class PaperVault {
     const edges = [];
     const known = new Set();
     for (const record of records) {
-      for (const node of workingNodes(record.audit?.nodes ?? [], record.patches ?? [])) {
+      for (const node of workingNodes((record.audit?.nodes ?? []).filter(isObject), record.patches ?? [])) {
         const id = `${record.paper.id}::${node.id}`;
         known.add(id);
-        nodes.push({ id, paperId: record.paper.id, paperTitle: record.paper.title, arxivId: record.paper.arxivId, nodeId: node.id, label: node.label, title: node.title, kind: node.kind, page: node.anchor?.page ?? null, status: node.status });
+        nodes.push({
+          id,
+          paperId: record.paper.id,
+          paperTitle: record.paper.title,
+          arxivId: record.paper.arxivId,
+          nodeId: node.id,
+          label: node.label,
+          title: node.title,
+          kind: node.kind,
+          page: node.anchor?.page ?? null,
+          status: node.status,
+        });
       }
     }
     for (const record of records) {
-      for (const node of workingNodes(record.audit?.nodes ?? [], record.patches ?? [])) {
+      for (const node of workingNodes((record.audit?.nodes ?? []).filter(isObject), record.patches ?? [])) {
         const from = `${record.paper.id}::${node.id}`;
-        for (const dependency of node.dependencies ?? []) {
-          const to = dependency.includes('::') ? dependency : `${record.paper.id}::${dependency}`;
+        for (const dependency of Array.isArray(node.dependencies) ? node.dependencies : []) {
+          const to = String(dependency).includes('::') ? String(dependency) : `${record.paper.id}::${dependency}`;
           if (known.has(to)) edges.push({ id: `intra:${from}:${to}`, from, to, relation: 'uses', source: 'audit' });
         }
       }
-      for (const link of record.audit?.crossPaperLinks ?? []) {
+      for (const link of Array.isArray(record.audit?.crossPaperLinks)
+        ? record.audit.crossPaperLinks.filter(isObject)
+        : []) {
         const from = `${record.paper.id}::${link.fromNodeId}`;
         const to = `${link.targetPaperId}::${link.targetNodeId}`;
-        if (known.has(from) && known.has(to)) edges.push({ id: `audit-cross:${from}:${to}:${link.relation}`, from, to, relation: link.relation, source: 'audit', note: String(link.rationale || '') });
+        if (known.has(from) && known.has(to))
+          edges.push({
+            id: `audit-cross:${from}:${to}:${link.relation}`,
+            from,
+            to,
+            relation: link.relation,
+            source: 'audit',
+            note: String(link.rationale || ''),
+          });
       }
     }
+    const citationSources = records.map((record) => ({
+      id: record.paper.id,
+      arxivId: record.paper.arxivId,
+      title: record.paper.title,
+      nodes: workingNodes((record.audit?.nodes ?? []).filter(isObject), record.patches ?? []),
+    }));
+    for (const edge of citationEdges(citationSources)) if (known.has(edge.from) && known.has(edge.to)) edges.push(edge);
     for (const link of index.links) {
       const from = `${link.from.paperId}::${link.from.nodeId}`;
       const to = `${link.to.paperId}::${link.to.nodeId}`;
-      if (known.has(from) && known.has(to)) edges.push({ id: `manual:${link.id}`, from, to, relation: link.relation, source: 'manual', note: link.note || '' });
+      if (known.has(from) && known.has(to))
+        edges.push({
+          id: `manual:${link.id}`,
+          from,
+          to,
+          relation: link.relation,
+          source: 'manual',
+          note: link.note || '',
+        });
     }
     const graph = { version: VAULT_VERSION, updatedAt: new Date().toISOString(), nodes, edges };
     await writeJson(this.graphFile, graph);
@@ -614,14 +1010,44 @@ export class PaperVault {
 
 function workingNodes(nodes, patches) {
   const deleted = new Set(patches.filter((patch) => patch.kind === 'delete').map((patch) => patch.nodeId));
-  const replacements = new Map(patches.filter((patch) => patch.kind === 'replace').map((patch) => [patch.nodeId, patch]));
+  const replacements = new Map(
+    patches.filter((patch) => patch.kind === 'replace').map((patch) => [patch.nodeId, patch]),
+  );
   const result = [];
   for (const node of nodes) {
     if (deleted.has(node.id)) continue;
     const replacement = replacements.get(node.id);
-    result.push(replacement ? { ...node, kind: replacement.nodeKind || node.kind, title: replacement.title || node.title, statement: replacement.statement || node.statement, proofText: replacement.proofText || node.proofText, dependencies: replacement.dependencies?.length ? replacement.dependencies : node.dependencies, proofSketch: replacement.proofSketch?.length ? replacement.proofSketch : node.proofSketch, status: 'needs-verification', anchor: { ...node.anchor, confidence: 'approximate' } } : node);
+    result.push(
+      replacement
+        ? {
+            ...node,
+            kind: replacement.nodeKind || node.kind,
+            title: replacement.title || node.title,
+            statement: replacement.statement || node.statement,
+            proofText: replacement.proofText || node.proofText,
+            dependencies: replacement.dependencies?.length ? replacement.dependencies : node.dependencies,
+            proofSketch: replacement.proofSketch?.length ? replacement.proofSketch : node.proofSketch,
+            status: 'needs-verification',
+            anchor: { ...node.anchor, confidence: 'approximate' },
+          }
+        : node,
+    );
     for (const patch of patches.filter((item) => item.kind === 'add' && item.afterNodeId === node.id)) {
-      result.push({ id: `working-${patch.id}`, kind: patch.nodeKind || 'proposition', label: 'Working edition', title: patch.title, statement: patch.statement, proofText: patch.proofText || '', status: 'needs-verification', anchor: { label: 'Working edition — reader addition', page: null, confidence: 'unverified' }, role: patch.rationale || 'Reader-added proposition', dependencies: patch.dependencies ?? [], proofSketch: patch.proofSketch ?? [], whyItMatters: 'This unit was added in the working edition and is not part of the original source.', expandable: true });
+      result.push({
+        id: `working-${patch.id}`,
+        kind: patch.nodeKind || 'proposition',
+        label: 'Working edition',
+        title: patch.title,
+        statement: patch.statement,
+        proofText: patch.proofText || '',
+        status: 'needs-verification',
+        anchor: { label: 'Working edition — reader addition', page: null, confidence: 'unverified' },
+        role: patch.rationale || 'Reader-added proposition',
+        dependencies: patch.dependencies ?? [],
+        proofSketch: patch.proofSketch ?? [],
+        whyItMatters: 'This unit was added in the working edition and is not part of the original source.',
+        expandable: true,
+      });
     }
   }
   return result;

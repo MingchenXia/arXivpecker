@@ -1,0 +1,15 @@
+# Bundled paper data and generated files are kept byte-for-byte.
+examples/
+package-lock.json
+dist/
+.next/
+.vinext/
+.wrangler/
+proofroom-library/
+outputs/
+work/
+# Prose documents are edited by hand.
+*.md
+test-results/
+playwright-report/
+.claude/
