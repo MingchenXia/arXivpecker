@@ -1,4 +1,4 @@
-export type View = 'reader' | 'library' | 'graph' | 'discover' | 'settings';
+export type View = 'reader' | 'library' | 'review' | 'graph' | 'discover' | 'settings';
 export type ReaderMode = 'source' | 'interactive';
 export type EditionMode = 'original' | 'working';
 export type Paper = {

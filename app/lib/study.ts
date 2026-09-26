@@ -39,7 +39,7 @@ export function understoodUnits(
   marks: Record<string, Record<string, Exclude<ReadingMark, ''>>>,
   audits: Record<string, Pick<PaperAudit, 'sourceBlocks'>>,
 ) {
-  return (unit: GraphNode) => {
+  return (unit: Pick<GraphNode, 'paperId' | 'nodeId'>) => {
     const paperMarks = marks[unit.paperId];
     if (!paperMarks) return false;
     if (paperMarks[unit.nodeId] === 'understood') return true;

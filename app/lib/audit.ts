@@ -1,5 +1,6 @@
 import { asArray, makeId, paperChatAnswerKey, parseJsonObject, readString } from './app';
 import { parsePracticeRecord, practiceKey, practiceKeyPrefix } from './study';
+import { reviewKey, reviewKeyPrefix } from './review';
 import { citationAlphaLabel, citationTitle, cleanBibliographicText, cleanTeXProse } from './tex-text';
 import type {
   Anchor,
@@ -586,6 +587,12 @@ export function migrateReaderWork({
   // Proof-practice attempts are the reader's own writing: they follow their
   // result, while the AI feedback on them stays with the old version.
   for (const [key, value] of Object.entries(nodeAnswers)) {
+    // A review schedule belongs to the reader's memory of the result, not to a version.
+    if (key.startsWith(reviewKeyPrefix)) {
+      const target = maps.unitMap[key.slice(reviewKeyPrefix.length)];
+      if (target) migratedAnswers[reviewKey(target)] = value;
+      continue;
+    }
     if (!key.startsWith(practiceKeyPrefix)) continue;
     const target = maps.unitMap[key.slice(practiceKeyPrefix.length)];
     const { attempt, updatedAt } = parsePracticeRecord(value);

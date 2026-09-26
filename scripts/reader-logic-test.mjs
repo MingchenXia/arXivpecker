@@ -234,3 +234,66 @@ assert.equal(unitPage('lemma', pagedUnits, pagedBlocks), 4, 'A result without a 
 assert.equal(unitPage('source-block:p0', pagedUnits, pagedBlocks), undefined);
 assert.equal(unitPage('unknown', pagedUnits, pagedBlocks), undefined);
 console.log('Reader logic: PDF page sync verified.');
+
+// Review cards: SM-2 scheduling, due order, and a file Anki can import.
+const { ankiExport, ankiField, dueCards, parseReviewState, reviewCards, schedule } =
+  await import('../app/lib/review.ts');
+const reviewNode = (id, kind, statement = 'For all $x$, $f(x) < 1$.') => ({
+  id,
+  kind,
+  label: id,
+  title: `${id} title`,
+  statement,
+  citations: [],
+});
+const deck = reviewCards(
+  [
+    {
+      paper: { id: 'p', title: 'Paper', arxivId: '2401.00001' },
+      nodes: [
+        reviewNode('thm', 'theorem'),
+        reviewNode('rem', 'remark'),
+        reviewNode('def', 'definition'),
+        reviewNode('lem', 'lemma'),
+      ],
+    },
+  ],
+  (unit) => unit.nodeId !== 'lem',
+);
+assert.deepEqual(
+  deck.map((card) => card.id),
+  ['p::thm', 'p::def'],
+  'Only understood definitions and results become cards.',
+);
+const start = new Date('2026-01-01T00:00:00Z');
+const first = schedule(null, 'good', start);
+assert.equal(first.interval, 1);
+const second = schedule(first, 'good', start);
+assert.equal(second.interval, 3);
+const third = schedule(second, 'good', start);
+assert.equal(third.interval, Math.round(3 * 2.5));
+const lapsed = schedule(third, 'again', start);
+assert.deepEqual([lapsed.reps, lapsed.lapses, lapsed.interval], [0, 1, 0]);
+assert.equal(Date.parse(lapsed.due) - start.getTime(), 10 * 60 * 1000);
+assert.equal(schedule(null, 'easy', start).interval, 4);
+assert.ok(schedule(third, 'hard', start).interval < third.interval * 2.5);
+assert.equal(parseReviewState('{"due":"nope"}'), null);
+assert.equal(parseReviewState(JSON.stringify(first)).interval, 1);
+const states = { 'p::thm': { ...first, due: '2026-01-05T00:00:00Z' } };
+assert.deepEqual(
+  dueCards(deck, (card) => states[card.id] ?? null, start).map((card) => card.id),
+  ['p::def'],
+  'A card scheduled for later is not due; a new card is.',
+);
+assert.equal(
+  ankiField('If $a<b$ then\n$$\\sum a_i$$ [[cite:KM|Thm 2]]'),
+  'If \\(a&lt;b\\) then<br>\\[\\sum a_i\\] [KM, Thm 2]',
+);
+const exported = ankiExport(deck, (node) => node.label).split('\n');
+assert.deepEqual(exported.slice(0, 3), ['#separator:tab', '#html:true', '#tags column:3']);
+assert.equal(exported[3].split('\t').length, 3);
+assert.match(
+  exported[3],
+  /^<b>thm<\/b> — thm title<br><small>Paper \(arXiv:2401\.00001\)<\/small>\tFor all \\\(x\\\), \\\(f\(x\) &lt; 1\\\)\.\tarxivpecker theorem arXiv:2401\.00001$/,
+);
+console.log('Reader logic: review scheduling and Anki export verified.');

@@ -1,4 +1,4 @@
-export function RailIcon({ name }: { name: 'reader' | 'library' | 'graph' | 'discover' | 'settings' }) {
+export function RailIcon({ name }: { name: 'reader' | 'library' | 'review' | 'graph' | 'discover' | 'settings' }) {
   const paths = {
     reader: (
       <>
@@ -10,6 +10,13 @@ export function RailIcon({ name }: { name: 'reader' | 'library' | 'graph' | 'dis
       <>
         <path d="M3.5 5.5c3-1 5.8-.5 8.5 1.3v13c-2.7-1.8-5.5-2.3-8.5-1.3z" />
         <path d="M20.5 5.5c-3-1-5.8-.5-8.5 1.3v13c2.7-1.8 5.5-2.3 8.5-1.3z" />
+      </>
+    ),
+    review: (
+      <>
+        <path d="M7 6.5h11.5v12H7z" />
+        <path d="M4.5 16V4h11" />
+        <path d="m10.2 12.4 1.8 1.8 3.4-3.6" />
       </>
     ),
     graph: (

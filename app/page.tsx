@@ -39,8 +39,12 @@ import { bridgeGet, bridgePost, bridgeUrl, readerApiGet, saveReaderState } from 
 import { changedReaderPapers } from './lib/reader-state';
 import type { ReaderStateSlices } from './lib/reader-state';
 import { understoodUnits } from './lib/study';
+import { parseReviewState, reviewCards, reviewKey, schedule } from './lib/review';
+import type { Grade, ReviewCard } from './lib/review';
+import { ReviewView } from './components/review';
 import { arxivKey } from './lib/cited-papers';
 import {
+  applyWorkingPatches,
   arxivBaseId,
   arxivVersionNumber,
   automaticEditorialPatches,
@@ -119,6 +123,17 @@ export default function Home() {
     [activePaperId, notes],
   );
   const isUnitUnderstood = useMemo(() => understoodUnits(marks, audits), [marks, audits]);
+  const reviewDeck = useMemo(
+    () =>
+      reviewCards(
+        papers.map((item) => ({
+          paper: item,
+          nodes: audits[item.id] ? applyWorkingPatches(audits[item.id].nodes, patches[item.id] ?? []) : [],
+        })),
+        isUnitUnderstood,
+      ),
+    [audits, isUnitUnderstood, papers, patches],
+  );
   const addingCitedRef = useRef(new Set<string>());
   // Keyed by content, so the memoized paper view re-renders only when the set of
   // arXiv papers in the library changes, not whenever the list is replaced.
@@ -1034,6 +1049,13 @@ export default function Home() {
       if (discoveriesRequestRef.current === request) setLoadingDiscoveries(false);
     }
   }
+  function gradeCard(card: ReviewCard, grade: Grade) {
+    setNodeAnswers((current) => {
+      const answers = current[card.paperId] ?? {};
+      const next = schedule(parseReviewState(answers[reviewKey(card.node.id)]), grade);
+      return { ...current, [card.paperId]: { ...answers, [reviewKey(card.node.id)]: JSON.stringify(next) } };
+    });
+  }
   function openUnit(paperId: string, nodeId: string) {
     setSelectedPaperId(paperId);
     setSelectedNodeId(nodeId);
@@ -1062,6 +1084,7 @@ export default function Home() {
           [
             ['reader', 'Read'],
             ['library', 'Library'],
+            ['review', 'Review'],
             ['discover', 'Discover'],
             ['settings', 'Settings'],
           ] as const
@@ -1092,6 +1115,7 @@ export default function Home() {
           [
             ['reader', 'Read'],
             ['library', 'Library'],
+            ['review', 'Review'],
             ['discover', 'Discover'],
             ['settings', 'Settings'],
           ] as const
@@ -1269,6 +1293,14 @@ export default function Home() {
             openUnit={openUnit}
             profile={profile}
             navigationRequest={readerNavigationRequest}
+          />
+        )}
+        {view === 'review' && (
+          <ReviewView
+            cards={reviewDeck}
+            stateOf={(card) => parseReviewState(nodeAnswers[card.paperId]?.[reviewKey(card.node.id)])}
+            grade={gradeCard}
+            openUnit={openUnit}
           />
         )}
         {view === 'library' && (
