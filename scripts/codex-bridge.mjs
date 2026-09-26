@@ -10,7 +10,7 @@ import { chatBackendFromEnvironment } from './chat-backend.mjs';
 import { CodexAppServer } from './codex-app-server.mjs';
 import { extractLatexDocument } from './codex-prompts.mjs';
 import { PaperVault, relativePathEscapes } from './paper-vault.mjs';
-import { decodeSourceBuffer, sameExpandedTexSource } from './tex-source.mjs';
+import { decodeSourceBuffer, readExpandedTex, sameExpandedTexSource, texFrontMatter } from './tex-source.mjs';
 import { enrichAuditFromTexOffThread } from './tex-worker.mjs';
 
 const PORT = Number(process.env.PROOFROOM_CODEX_PORT || 4318);
@@ -173,6 +173,65 @@ async function inspectZipSource(archive) {
   return listing;
 }
 
+/**
+ * A local paper's record with the placeholders an upload leaves (the file name as
+ * title, "Unknown authors", no abstract) filled in from its TeX front matter, or
+ * null when nothing changes. A title or author the reader typed is kept.
+ */
+async function localFrontMatterUpdate(paper, entryFile, sourceRoot, uploadedFile = '') {
+  if (!String(paper?.arxivId || '').startsWith('local-') || !entryFile) return null;
+  const loose = (value) =>
+    String(value || '')
+      .toLowerCase()
+      .replace(/[\s_-]+/g, ' ')
+      .trim();
+  const fileTitle = path.basename(String(uploadedFile || '')).replace(/\.(pdf|tex|ltx|zip)$/i, '');
+  const title = String(paper.title || '').trim();
+  const authors = String(paper.authors || '').trim();
+  const abstract = String(paper.abstract || '').trim();
+  const open = {
+    title: !title || title === 'Uploaded paper' || (fileTitle && loose(title) === loose(fileTitle)),
+    authors: !authors || /^unknown authors?$/i.test(authors),
+    abstract: !abstract || /^Reader-supplied local source\b/i.test(abstract),
+  };
+  if (!open.title && !open.authors && !open.abstract) return null;
+  let frontMatter;
+  try {
+    frontMatter = texFrontMatter(await readExpandedTex(entryFile, sourceRoot));
+  } catch {
+    return null;
+  }
+  const next = { ...paper };
+  for (const field of ['title', 'authors', 'abstract'])
+    if (open[field] && frontMatter[field]) next[field] = frontMatter[field];
+  return ['title', 'authors', 'abstract'].some((field) => next[field] !== paper[field]) ? next : null;
+}
+
+/** Fills the records of local papers imported before their metadata was read from TeX. */
+async function backfillLocalPaperMetadata() {
+  for (const { paper, folder } of await vault.allRecords()) {
+    const source = paper?.source;
+    if (!source?.mainTex || !String(paper.arxivId || '').startsWith('local-')) continue;
+    const directory = vault.paperDirectory({ folder });
+    const resolved = (value) => (path.isAbsolute(value) ? value : path.resolve(directory, value));
+    let uploadedFile = '';
+    try {
+      const manifestFile = path.join(directory, 'attachments', 'source', 'proofroom-uploaded-source.json');
+      uploadedFile = JSON.parse(await readFile(manifestFile, 'utf8')).uploadedFile ?? '';
+    } catch {
+      /* Uploaded before manifests recorded the file. */
+    }
+    const mainTex = resolved(source.mainTex);
+    const next = await localFrontMatterUpdate(
+      paper,
+      mainTex,
+      resolved(source.sourceDirectory || path.dirname(mainTex)),
+      uploadedFile,
+    );
+    if (next) await enqueueVaultMutation(() => vault.upsertPaper(next));
+  }
+}
+
 async function saveUploadedPaperSource(paper, upload) {
   const encoded = typeof upload?.dataBase64 === 'string' ? upload.dataBase64 : '';
   const payload = Buffer.from(encoded, 'base64');
@@ -238,7 +297,17 @@ async function saveUploadedPaperSource(paper, upload) {
     localPdf: kind === 'uploaded-pdf' ? entryFile : '',
     sourceUploadedAt: manifest.uploadedAt,
   });
-  return { paper: { ...stored, source }, primarySource: manifest };
+  const filled =
+    kind === 'tex'
+      ? await localFrontMatterUpdate(
+          stored,
+          entryFile,
+          extension === '.zip' ? path.join(sourceDirectory, 'project') : sourceDirectory,
+          requestedName,
+        )
+      : null;
+  const saved = filled ? await vault.upsertPaper(filled) : stored;
+  return { paper: { ...saved, source }, primarySource: manifest };
 }
 
 async function saveCompleteLatexExport(paperId, exportRecord) {
@@ -509,6 +578,17 @@ async function analyzePaperSource(
       await vault.saveSourceRecord(paper.id, { analysisFormat: 'pdf', sourceError: primarySource.error });
   }
   if (isCancelled()) throw new Error(stoppedByReader);
+  // A local paper's TeX (uploaded, or transcribed from its PDF) names its title,
+  // authors, and abstract; the upload only knew the file name.
+  if (['tex', 'ai-tex'].includes(primarySource.kind) && !body.updateMode) {
+    const filled = await localFrontMatterUpdate(
+      paper,
+      primarySource.entryFile,
+      primarySource.sourceDirectory,
+      primarySource.uploadedFile,
+    );
+    if (filled) paper = { ...(await enqueueVaultMutation(() => vault.upsertPaper(filled))), id: paper.id };
+  }
   const analyzed = await codex.analyze({
     paper,
     profile,
@@ -1315,6 +1395,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   server.listen(PORT, HOST, () => {
     console.log(`arXivpecker Codex bridge listening on http://${HOST}:${PORT}`);
     console.log('Uses your local Codex/ChatGPT sign-in. No OpenAI API key is used.');
+    backfillLocalPaperMetadata().catch((error) =>
+      console.warn(
+        `arXivpecker: local paper metadata was not filled in: ${error instanceof Error ? error.message : error}`,
+      ),
+    );
   });
 
   for (const signal of ['SIGINT', 'SIGTERM']) {
