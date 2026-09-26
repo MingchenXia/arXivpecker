@@ -36,11 +36,15 @@ async function providerDirectory(definition) {
 
 async function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: options.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    // The bridge has no terminal to answer from: a git credential or SSH host-key
+    // prompt would otherwise wait forever, so fail fast and bound every command.
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes' };
+    const child = spawn(command, args, { cwd: options.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     const stdout = []; const stderr = [];
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`${command} did not finish within ${Math.round((options.timeoutMs ?? 120_000) / 1000)} seconds.`)); }, options.timeoutMs ?? 120_000);
     child.stdout.on('data', (chunk) => stdout.push(chunk)); child.stderr.on('data', (chunk) => stderr.push(chunk));
-    child.on('error', reject);
-    child.on('exit', (code) => code === 0 ? resolve(Buffer.concat(stdout).toString('utf8').trim()) : reject(new Error(Buffer.concat(stderr).toString('utf8').trim() || `${command} exited with ${code}.`)));
+    child.on('error', (error) => { clearTimeout(timer); reject(error); });
+    child.on('close', (code) => { clearTimeout(timer); if (code === 0) resolve(Buffer.concat(stdout).toString('utf8').trim()); else reject(new Error(Buffer.concat(stderr).toString('utf8').trim() || `${command} exited with ${code}.`)); });
   });
 }
 
@@ -66,7 +70,9 @@ async function portableCopy(source, destination, depth = 0) {
   if (details.isDirectory()) {
     await mkdir(destination, { recursive: true });
     for (const entry of await readdir(source, { withFileTypes: true })) {
-      if (entry.name.startsWith('.') || ['proofroom-uploaded-source.json', '__MACOSX'].includes(entry.name)) continue;
+      // proofroom-*.json are local source caches holding absolute paths on this
+      // machine (including the user's home folder); they mean nothing elsewhere.
+      if (entry.name.startsWith('.') || entry.name === '__MACOSX' || /^proofroom-.*\.json$/i.test(entry.name)) continue;
       if (depth === 0 && entry.isDirectory() && entry.name === 'versions') continue;
       await portableCopy(path.join(source, entry.name), path.join(destination, entry.name), depth + 1);
     }

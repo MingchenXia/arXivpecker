@@ -24,6 +24,10 @@ try {
     }
     if (source?.mainTex) await stat(source.mainTex);
   }
+
+  for (const paper of snapshot.papers) await vault.removePaper(paper.id);
+  const reopened = await new PaperVault(target, { starterRoot }).snapshot();
+  assert.equal(reopened.papers.length, 0, 'Removing every paper must not bring the starter papers back on the next launch.');
   console.log('Starter library: 3 papers, portable sources, first-time setup enabled.');
 } finally {
   await rm(target, { recursive: true, force: true });

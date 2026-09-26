@@ -124,7 +124,10 @@ export class PaperVault {
     await mkdir(this.root, { recursive: true });
     const existing = await readdir(this.root, { withFileTypes: true });
     const hasPaper = existing.some((entry) => entry.isDirectory() && !entry.name.startsWith('_') && !entry.name.startsWith('.'));
-    if (!hasPaper && this.starterRoot) await this.installStarterLibrary();
+    // Seed only a library that has never been set up: a reader who removed every
+    // paper must not get the starter papers back on the next launch.
+    const initializedBefore = await stat(this.indexFile).then(() => true, () => false);
+    if (!hasPaper && !initializedBefore && this.starterRoot) await this.installStarterLibrary();
     await mkdir(this.graphDirectory, { recursive: true });
     const index = await readJson(this.indexFile, null);
     if (!index) await writeJson(this.indexFile, { version: VAULT_VERSION, updatedAt: new Date().toISOString(), papers: [], links: [] });

@@ -1,4 +1,6 @@
-const ARXIV_ID = /(?:[a-z-]+(?:\.[A-Z]{2})?\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i;
+// Find the identifier inside URLs or text, but only as a whole token: a typo such
+// as 12345.123456 must not silently become 2345.12345, a different paper.
+const ARXIV_ID = /(?<![\w.])(?:[a-z-]+(?:\.[A-Z]{2})?\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?(?!\w|\.\d)/i;
 
 export function normalizeArxivId(value) {
   if (typeof value !== 'string') return '';

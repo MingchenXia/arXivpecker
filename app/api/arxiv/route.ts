@@ -12,16 +12,18 @@ type ArxivPaper = {
   tags: string[];
 };
 
+const xmlEntities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
 function decodeXml(value: string) {
   return value
     .replace(/<[^>]+>/g, ' ')
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
+    // One pass, so an escaped entity such as &amp;lt; stays the literal text "&lt;";
+    // an out-of-range character reference is kept instead of failing the whole feed.
+    .replace(/&(?:#(\d+)|#x([0-9a-fA-F]+)|(amp|lt|gt|quot|apos));/g, (match: string, decimal?: string, hex?: string, name?: string) => {
+      if (name) return xmlEntities[name];
+      const code = decimal ? Number(decimal) : Number.parseInt(hex ?? '', 16);
+      return Number.isInteger(code) && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+    })
     .replace(/\s+/g, ' ')
     .trim();
 }
