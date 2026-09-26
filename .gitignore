@@ -41,3 +41,7 @@ next-env.d.ts
 
 # Writable reader data. Versioned examples live in examples/starter-library.
 /proofroom-library/
+
+# browser tests
+/test-results/
+/playwright-report/

@@ -1253,9 +1253,6 @@ function EditableSourceTable({
 function FigureAsset({ paperId, asset, alt }: { paperId: string; asset: string; alt: string }) {
   const [failed, setFailed] = useState(false);
   const url = `${bridgeUrl}/asset?paperId=${encodeURIComponent(paperId)}&file=${encodeURIComponent(asset)}`;
-  // Original paper assets are served dynamically by the local bridge, so the
-  // framework image optimizer cannot know their dimensions or paths in advance.
-  // eslint-disable-next-line @next/next/no-img-element
   return failed ? (
     <div className="source-figure-missing">
       <b>Figure asset unavailable</b>
@@ -1263,6 +1260,9 @@ function FigureAsset({ paperId, asset, alt }: { paperId: string; asset: string; 
     </div>
   ) : (
     <a href={url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+      {/* Original paper assets are served dynamically by the local bridge, so the framework image
+          optimizer cannot know their dimensions or paths in advance. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={url} alt={alt} loading="lazy" onError={() => setFailed(true)} />
     </a>
   );

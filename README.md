@@ -59,6 +59,7 @@ Long audits are never stopped for taking too long: by default an audit runs unti
 ```bash
 npm run check        # lint, typecheck, production build, and every test (what CI runs)
 npm test             # tests only
+npm run test:e2e     # browser tests (after `npx playwright install chromium`)
 npm audit --omit=dev
 ```
 

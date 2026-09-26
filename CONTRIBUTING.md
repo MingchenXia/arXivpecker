@@ -19,6 +19,13 @@ Run:
 npm run check
 ```
 
-It runs lint, typecheck, the production build, and every test, exactly as CI does. Add new test scripts to the `test` entry in `package.json` so CI picks them up.
+It checks formatting (`npm run format` fixes it), then runs lint, typecheck, the production build, and every test. CI also runs the browser tests:
+
+```bash
+npx playwright install chromium   # once
+npm run test:e2e
+```
+
+They start the bridge on a throwaway copy of the starter library, so your own library is never touched. With a Chromium already installed elsewhere, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to its path instead of installing one. Add new test scripts to the `test` entry in `package.json` so CI picks them up.
 
 Do not commit `proofroom-library/`, local environment files, credentials, generated builds, or personal reader profiles. Add reusable demo papers only through `examples/starter-library/`, with portable relative source paths and no Codex thread ID.
