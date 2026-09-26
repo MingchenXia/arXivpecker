@@ -29,6 +29,56 @@ const readerKatexMacros = {
   '\\1': '\\bbone',
   '\\mathbbm': '\\mathbb{#1}',
   '\\mathds': '\\mathbb{#1}',
+  // siunitx. The TeX pipeline rewrites author TeX, including exponents such as
+  // \num{1e3} that a macro cannot parse; these cover AI-written math. \qty is
+  // left out because the physics package uses that name for bracing.
+  '\\SI': '#1\\,\\mathrm{#2}',
+  '\\si': '\\mathrm{#1}',
+  '\\unit': '\\mathrm{#1}',
+  '\\num': '{#1}',
+  '\\ang': '{#1}^{\\circ}',
+  '\\per': '/',
+  '\\squared': '^{2}',
+  '\\cubed': '^{3}',
+  '\\meter': 'm',
+  '\\metre': 'm',
+  '\\second': 's',
+  '\\kilogram': 'kg',
+  '\\gram': 'g',
+  '\\kelvin': 'K',
+  '\\ampere': 'A',
+  '\\mole': 'mol',
+  '\\hertz': 'Hz',
+  '\\newton': 'N',
+  '\\joule': 'J',
+  '\\watt': 'W',
+  '\\volt': 'V',
+  '\\pascal': 'Pa',
+  '\\kilo': 'k',
+  '\\milli': 'm',
+  '\\micro': '\\mu',
+  '\\nano': 'n',
+  '\\centi': 'c',
+  '\\mega': 'M',
+  '\\giga': 'G',
+  '\\defeq': '\\coloneqq',
+  // The faktor package and the common \bigslant definition: a raised numerator,
+  // a slash, and a lowered denominator.
+  '\\faktor': '{\\raisebox{.2em}{$#1$}\\left/\\raisebox{-.2em}{$#2$}\\right.}',
+  '\\bigslant': '{\\raisebox{.2em}{$#1$}\\left/\\raisebox{-.2em}{$#2$}\\right.}',
+  '\\textsc': '\\text{#1}',
+  // amsmath sets \intertext flush left between rows; start it at the alignment
+  // point without widening the first column.
+  '\\intertext': '\\mathrlap{\\text{#1}}\\\\',
+  '\\shortintertext': '\\mathrlap{\\text{#1}}\\\\',
+  // The esint package's averaged integral: a bar across \int in every style.
+  '\\fint':
+    '\\mathop{\\mathchoice{\\mathrlap{\\mkern6.5mu-}}{\\mathrlap{\\mkern3.5mu-}}{\\mathrlap{\\mkern2mu-}}{\\mathrlap{\\mkern1.5mu-}}\\int}\\nolimits',
+  '\\dashint': '\\fint',
+  '\\esssup': '\\operatorname*{ess\\,sup}',
+  '\\essinf': '\\operatorname*{ess\\,inf}',
+  // The physics package's differential, spaced like an operator.
+  '\\dd': '\\mathop{}\\!\\mathrm{d}',
 };
 
 function unknownMathMacroFallback(command: string) {
