@@ -69,6 +69,7 @@ Such a model cannot open files, so the bridge sends it the paper's expanded TeX 
 - `scripts/` — local bridge (`codex-bridge.mjs`), AI backends (Codex client `codex-app-server.mjs` and OpenAI-compatible `chat-backend.mjs`) and prompts, TeX reader (`tex-source.mjs`), vault, checks, and sharing tools
 - `examples/starter-library/` — portable bundled papers
 - `docs/architecture.md` — storage, first-run, and trust-boundary design
+- `CHANGELOG.md` — what changed in each release
 - `proofroom-library/` — local runtime data, never committed
 
 ## Validation

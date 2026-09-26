@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import packageJson from '../package.json' with { type: 'json' };
 import { createInterface } from 'node:readline';
 import {
   auditPrompt,
@@ -88,7 +89,11 @@ class CodexAppServer {
           await this.call(
             'initialize',
             {
-              clientInfo: { name: 'arxivpecker_local_reader', title: 'arXivpecker local reader', version: '0.2.0' },
+              clientInfo: {
+                name: 'arxivpecker_local_reader',
+                title: 'arXivpecker local reader',
+                version: packageJson.version,
+              },
             },
             CODEX_STARTUP_RPC_TIMEOUT_MS,
           );
