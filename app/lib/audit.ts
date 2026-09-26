@@ -35,8 +35,10 @@ function readCitation(value: unknown): CitationReference {
   const entry = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
   const title = cleanBibliographicText(readString(entry.title, readString(entry.key, 'Cited source')));
   const searchUrl = readString(entry.searchUrl, `https://scholar.google.com/scholar?q=${encodeURIComponent(title)}`);
+  const label = cleanBibliographicText(readString(entry.label));
   return {
     key: readString(entry.key),
+    ...(label ? { label } : {}),
     locator: cleanBibliographicText(readString(entry.locator)),
     statement: readString(entry.statement),
     definitions: asArray(entry.definitions)

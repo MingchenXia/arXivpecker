@@ -393,3 +393,18 @@ console.log('Reader logic: update and citation watch verified.');
   );
   console.log('Reader logic: citation commands in AI text verified.');
 }
+
+// Stored reader text from before the TeX reader decoded text-mode commands still
+// displays: section signs, \textup around a citation, control spaces, and \qed.
+{
+  const { cleanTeXProse, citationAlphaLabel } = await import('../app/lib/tex-text.ts');
+  assert.equal(
+    cleanTeXProse(String.raw`By \textup{[[cite:BJ22|\S5.2]]} and \S 1, resp.\ in $\S 3$.\qed`),
+    'By [[cite:BJ22|§5.2]] and §1, resp. in $\\S 3$.$\\qed$',
+  );
+  assert.equal(cleanTeXProse(String.raw`\appendix Ruadha\'{\i} and T\o nnesen`), 'Ruadhaí and Tønnesen');
+  const stacks = { key: 'Stacks', label: 'Stacks', authors: 'The Stacks Project Authors', text: '2020' };
+  assert.equal(citationAlphaLabel(stacks, 'Stacks'), 'Stacks', 'A printed label is the citation label.');
+  assert.equal(citationAlphaLabel({ ...stacks, label: undefined }, 'Stacks'), 'Aut20');
+  console.log('Reader logic: text-mode TeX and printed citation labels verified.');
+}
