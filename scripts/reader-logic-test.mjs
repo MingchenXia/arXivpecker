@@ -168,3 +168,48 @@ assert.deepEqual(
   ],
 );
 console.log('Reader logic: cited arXiv papers verified.');
+
+// The glossary finds defined symbols and the formulas that use them.
+const { buildGlossary, definedSymbol, definitionsIn, notationUsedIn, normalizeTex } =
+  await import('../app/lib/glossary.ts');
+assert.equal(definedSymbol('P_{k}:=P_{k,n} = M_k'), 'P_{k}');
+assert.equal(definedSymbol('K_v=\\operatorname{Sp}_{2n}(\\mathcal{O}_v)'), 'K_v');
+assert.equal(definedSymbol('H_M : M(\\mathbb{A}) \\rightarrow \\mathfrak{a}_P'), 'H_M');
+assert.equal(definedSymbol('w\\in W_n'), '', 'A bound variable names nothing.');
+assert.equal(definedSymbol('3\\leqslant k <n'), '');
+assert.equal(definedSymbol('a, b'), '');
+assert.equal(normalizeTex('f_s \\in I_{n}( s )'), 'f_s\\in I_n(s)');
+assert.deepEqual(
+  definitionsIn(
+    'Let $F$ be a number field. We define $P_k := M_k U_k$ to be parabolic. Denote the resulting representation by $I_n(s)$. Let $w\\in W$ be a Weyl element. We define \\(k\\)-dependent embeddings. By $\\Sigma$ we denote the roots. Let $P$ and $Q$ denote two subgroups. We set $H = U^w$. The set $S$ of roots.',
+  ).map((item) => item.symbol),
+  ['F', 'P_k', 'I_n(s)', '\\Sigma', 'P', 'Q', 'H'],
+);
+const glossary = buildGlossary(
+  [
+    {
+      id: 'b1',
+      kind: 'paragraph',
+      content: 'Let $F$ be a number field and let $I_n(s)$ denote the induced representation.',
+      nodeId: '',
+    },
+    { id: 'b2', kind: 'result', content: 'Let $W_n := N(T)/T$ be the Weyl group.', nodeId: 'def-weyl' },
+    { id: 'b3', kind: 'paragraph', content: 'Let $F$ be redefined here.', nodeId: '' },
+  ],
+  [],
+);
+assert.deepEqual(
+  glossary.map((entry) => [entry.symbol, entry.unitId]),
+  [
+    ['F', 'source-block:b1'],
+    ['I_n(s)', 'source-block:b1'],
+    ['W_n', 'def-weyl'],
+  ],
+  'Each symbol is kept once, where it is first defined.',
+);
+const used = (formula) => notationUsedIn(formula, glossary).map((entry) => entry.symbol);
+assert.deepEqual(used('f \\in I_{n}(1/2)'), ['I_n(s)']);
+assert.deepEqual(used('w \\in W_n(F)'), ['W_n', 'F']);
+assert.deepEqual(used('\\mathbb{F}_q \\times F_v'), [], 'Neither a font letter nor a subscripted symbol is F.');
+assert.deepEqual(used('\\Phi + I_n'), [], 'I_n( is looked for with its argument.');
+console.log('Reader logic: notation glossary verified.');

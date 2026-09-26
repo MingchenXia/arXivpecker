@@ -8105,3 +8105,95 @@ body.assistant-resizing {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Notation glossary: the outline's Notation tab and the card shown over formulas. */
+.outline-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  margin-right: 8px;
+  border-radius: 4px;
+  background: #f0e9e2;
+  padding: 2px;
+}
+.outline-tabs button {
+  border-radius: 3px;
+  padding: 2px 7px;
+  color: #776c65;
+  font-size: 11px;
+  font-weight: 750;
+}
+.outline-tabs button.active {
+  background: #fffefa;
+  color: #8f1d2c;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+.glossary-list {
+  display: grid;
+  gap: 2px;
+}
+.glossary-list input {
+  margin-bottom: 6px;
+  border: 1px solid #d8ccc2;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 80%);
+  padding: 5px 7px;
+  color: #4b433e;
+  font-size: 12px;
+  outline: 0;
+}
+.glossary-list > button,
+.glossary-card > button {
+  display: grid;
+  grid-template-columns: minmax(44px, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  border-radius: 4px;
+  padding: 5px 6px;
+  color: #4f4742;
+  text-align: left;
+}
+.glossary-list > button:hover,
+.glossary-card > button:hover {
+  background: #f4ede6;
+}
+.glossary-list > button > b,
+.glossary-card > button > b {
+  color: #8f1d2c;
+  font-size: 14px;
+}
+.glossary-list > button > span,
+.glossary-card > button > span {
+  display: -webkit-box;
+  overflow: hidden;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.glossary-empty {
+  color: #8c827a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.glossary-card {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  width: min(360px, calc(100vw - 16px));
+  gap: 2px;
+  border: 1px solid #dfd4cb;
+  border-radius: 6px;
+  background: #fffefa;
+  padding: 5px;
+  box-shadow: 0 10px 28px rgb(60 40 30 / 16%);
+}
+.glossary-card-above {
+  transform: translateY(-100%);
+}
+@media print {
+  .glossary-card {
+    display: none;
+  }
+}

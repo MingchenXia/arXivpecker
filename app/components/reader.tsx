@@ -26,6 +26,8 @@ import {
 } from '../lib/app';
 import { bridgePost } from '../lib/bridge-client';
 import { arxivKey, citedArxivPapers } from '../lib/cited-papers';
+import { buildGlossary } from '../lib/glossary';
+import { GlossaryList } from './glossary';
 import type { CitedArxivPaper } from '../lib/cited-papers';
 import {
   applyWorkingPatches,
@@ -147,6 +149,7 @@ export function Reader({
   const [question, setQuestion] = useState('');
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [outlineTab, setOutlineTab] = useState<'units' | 'notation'>('units');
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [assistantSize, setAssistantSize] = useState<AssistantSize | null>(null);
   const [paperChatOpen, setPaperChatOpen] = useState(false);
@@ -207,6 +210,7 @@ export function Reader({
       focusPath && activePath ? editionNodes.filter((item) => activePath.nodeIds.includes(item.id)) : editionNodes,
     [activePath, editionNodes, focusPath],
   );
+  const glossary = useMemo(() => (audit ? buildGlossary(audit.sourceBlocks ?? [], audit.nodes) : []), [audit]);
   const node =
     editionNodes.find((item) => item.id === selectedNodeId) ??
     sourceUnits.find((item) => item.id === selectedNodeId) ??
@@ -658,9 +662,22 @@ export function Reader({
           <aside className="reader-outline reader-drawer" data-reader-floating-panel>
             <div className="drawer-head">
               <div>
-                <span className="reader-kicker">Logical outline</span>
-                <b>{units.length} units</b>
+                <span className="reader-kicker">{outlineTab === 'units' ? 'Logical outline' : 'Notation'}</span>
+                <b>{outlineTab === 'units' ? `${units.length} units` : `${glossary.length} symbols`}</b>
               </div>
+              <nav className="outline-tabs" aria-label="Outline view">
+                {(['units', 'notation'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    className={outlineTab === tab ? 'active' : ''}
+                    aria-pressed={outlineTab === tab}
+                    onClick={() => setOutlineTab(tab)}
+                  >
+                    {tab === 'units' ? 'Units' : 'Notation'}
+                  </button>
+                ))}
+              </nav>
               <button
                 type="button"
                 onPointerDown={(event) => {
@@ -673,37 +690,41 @@ export function Reader({
                 ×
               </button>
             </div>
-            <div className="space-y-0.5">
-              {units.map((item) => {
-                const changed = patchForNode(patches, item.id);
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => jumpToDocumentUnit(item.id)}
-                    className={`outline-unit ${selectedNodeId === item.id ? 'outline-unit-active' : ''}`}
-                  >
-                    <span className={`outline-kind ${kindClass(item.kind)}`}>{item.kind[0].toUpperCase()}</span>
-                    <span className="min-w-0">
-                      <small>{displayUnitLabel(item)}</small>
-                      <b>
-                        <MathText value={item.title} />
-                      </b>
-                    </span>
-                    {changed && (
-                      <i
-                        className="working-dot"
-                        title={changed.kind === 'add' ? 'Added in working edition' : 'Edited in working edition'}
-                      >
-                        W
-                      </i>
-                    )}
-                    {item.status !== 'verified' && !changed && (
-                      <i className="ml-auto h-1.5 w-1.5 flex-none rounded-full bg-[#b8873c]" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+            {outlineTab === 'notation' ? (
+              <GlossaryList glossary={glossary} />
+            ) : (
+              <div className="space-y-0.5">
+                {units.map((item) => {
+                  const changed = patchForNode(patches, item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => jumpToDocumentUnit(item.id)}
+                      className={`outline-unit ${selectedNodeId === item.id ? 'outline-unit-active' : ''}`}
+                    >
+                      <span className={`outline-kind ${kindClass(item.kind)}`}>{item.kind[0].toUpperCase()}</span>
+                      <span className="min-w-0">
+                        <small>{displayUnitLabel(item)}</small>
+                        <b>
+                          <MathText value={item.title} />
+                        </b>
+                      </span>
+                      {changed && (
+                        <i
+                          className="working-dot"
+                          title={changed.kind === 'add' ? 'Added in working edition' : 'Edited in working edition'}
+                        >
+                          W
+                        </i>
+                      )}
+                      {item.status !== 'verified' && !changed && (
+                        <i className="ml-auto h-1.5 w-1.5 flex-none rounded-full bg-[#b8873c]" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </aside>
         )}
         <main
@@ -747,6 +768,7 @@ export function Reader({
               libraryByArxivId={libraryByArxivId}
               addCitedPapers={addCitedPapers}
               openPaper={(paperId) => openUnit(paperId, '')}
+              glossary={glossary}
             />
           )}
         </main>

@@ -17,6 +17,8 @@ import { AIText, Latex, MathText } from './math';
 import { makeId, reportReaderProcess } from '../lib/app';
 import { bridgeUrl } from '../lib/bridge-client';
 import { arxivKey } from '../lib/cited-papers';
+import type { GlossaryEntry } from '../lib/glossary';
+import { GlossaryHover } from './glossary';
 import {
   applyWorkingPatches,
   displayUnitLabel,
@@ -146,6 +148,7 @@ type InteractiveDocumentProps = {
   libraryByArxivId: Record<string, string>;
   addCitedPapers: (arxivIds: string[]) => Promise<void>;
   openPaper: (paperId: string) => void;
+  glossary: GlossaryEntry[];
 };
 
 function InteractiveDocumentComponent({
@@ -172,6 +175,7 @@ function InteractiveDocumentComponent({
   libraryByArxivId,
   addCitedPapers,
   openPaper,
+  glossary,
 }: InteractiveDocumentProps) {
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const documentRootRef = useRef<HTMLElement>(null);
@@ -392,6 +396,7 @@ function InteractiveDocumentComponent({
   }, [audit.nodes, nodes, patches, sectionRanges, setSelectedNodeId, sourceBlocks]);
   return (
     <article ref={documentRootRef} className="interactive-document source-document">
+      <GlossaryHover root={documentRootRef} glossary={glossary} />
       <header className="interactive-lead">
         <h1>
           <MathText value={paper.title} />
@@ -952,7 +957,8 @@ const MemoizedInteractiveDocument = memo(
     previous.expanded === next.expanded &&
     previous.marks === next.marks &&
     previous.patches === next.patches &&
-    previous.libraryByArxivId === next.libraryByArxivId,
+    previous.libraryByArxivId === next.libraryByArxivId &&
+    previous.glossary === next.glossary,
 );
 
 // The memoized document ignores callback identity so typing or scrolling does not
