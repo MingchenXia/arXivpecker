@@ -124,7 +124,9 @@ export default function Home() {
   const readerSnapshotAppliedRef = useRef(false);
   const dirtyReaderPapersRef = useRef(new Set<string>());
   const readerSaveTimerRef = useRef<number | undefined>(undefined);
-  const flushReaderSavesRef = useRef(() => {});
+  const flushReaderSavesRef = useRef<() => Promise<void>>(async () => {});
+  // The latest reader state, for work that finishes long after it started (version updates).
+  const readerStateRef = useRef(readerState);
 
   function notify(message: string) {
     setNotice(message);
@@ -150,20 +152,47 @@ export default function Home() {
       return next;
     });
   }
-  function applySnapshot(snapshot: VaultSnapshot) {
+  /**
+   * Replaces the library with a vault snapshot. Reader edits not yet saved are newer
+   * than any snapshot, so they are kept (and still saved) unless the snapshot is
+   * meant to replace that paper's reader state, as a version update does.
+   */
+  function applySnapshot(snapshot: VaultSnapshot, { replaceReaderFor = [] }: { replaceReaderFor?: string[] } = {}) {
+    const present = new Set(snapshot.papers.map((item) => item.id));
+    const keep = new Set(
+      [...dirtyReaderPapersRef.current].filter(
+        (paperId) => present.has(paperId) && !replaceReaderFor.includes(paperId),
+      ),
+    );
+    const local = readerStateRef.current;
+    const withLocal = <T,>(fromSnapshot: Record<string, T> | undefined, fromLocal: Record<string, T>) => ({
+      ...(fromSnapshot ?? {}),
+      ...Object.fromEntries(
+        [...keep].filter((paperId) => paperId in fromLocal).map((paperId) => [paperId, fromLocal[paperId]]),
+      ),
+    });
     readerSnapshotAppliedRef.current = true;
-    dirtyReaderPapersRef.current.clear();
+    dirtyReaderPapersRef.current = keep;
+    if (keep.size) {
+      window.clearTimeout(readerSaveTimerRef.current);
+      readerSaveTimerRef.current = window.setTimeout(() => void flushReaderSavesRef.current(), 500);
+    }
     setPapers(snapshot.papers);
     setAudits(
       Object.fromEntries(
         Object.entries(snapshot.audits).map(([paperId, paperAudit]) => [paperId, normalizeAuditCitations(paperAudit)]),
       ),
     );
-    setNotes(normalizeNotes(snapshot.notes));
-    setNodeNotes(snapshot.nodeNotes);
-    setNodeAnswers(snapshot.nodeAnswers);
-    setExpanded(snapshot.expanded);
-    setMarks(snapshot.marks ?? {});
+    setNotes(
+      normalizeNotes([
+        ...snapshot.notes.filter((note) => !keep.has(note.paperId)),
+        ...local.notes.filter((note) => keep.has(note.paperId)),
+      ]),
+    );
+    setNodeNotes(withLocal(snapshot.nodeNotes, local.nodeNotes));
+    setNodeAnswers(withLocal(snapshot.nodeAnswers, local.nodeAnswers));
+    setExpanded(withLocal(snapshot.expanded, local.expanded));
+    setMarks(withLocal(snapshot.marks, local.marks));
     setPatches(snapshot.patches ?? {});
     setUpdates(snapshot.updates ?? {});
     setAuditJobs(snapshot.auditJobs ?? {});
@@ -251,16 +280,21 @@ export default function Home() {
   // edit made just before a switch, reaches the vault. Papers with a running
   // audit or update wait until that job finishes, as before.
   useEffect(() => {
-    flushReaderSavesRef.current = () => {
+    readerStateRef.current = readerState;
+    flushReaderSavesRef.current = async () => {
       window.clearTimeout(readerSaveTimerRef.current);
+      const saves = [];
       for (const paperId of [...dirtyReaderPapersRef.current]) {
         if (paperJobs[paperId]) continue;
         dirtyReaderPapersRef.current.delete(paperId);
-        saveReaderState(paperId, readerState).catch(() => {
-          dirtyReaderPapersRef.current.add(paperId);
-          notify('Some reader changes could not be saved locally. They will be retried with your next change.');
-        });
+        saves.push(
+          saveReaderState(paperId, readerState).catch(() => {
+            dirtyReaderPapersRef.current.add(paperId);
+            notify('Some reader changes could not be saved locally. They will be retried with your next change.');
+          }),
+        );
       }
+      await Promise.all(saves);
     };
   });
   useEffect(() => {
@@ -274,15 +308,15 @@ export default function Home() {
     for (const paperId of changedReaderPapers(previous, readerState)) dirtyReaderPapersRef.current.add(paperId);
     if (!dirtyReaderPapersRef.current.size) return;
     window.clearTimeout(readerSaveTimerRef.current);
-    readerSaveTimerRef.current = window.setTimeout(() => flushReaderSavesRef.current(), 500);
+    readerSaveTimerRef.current = window.setTimeout(() => void flushReaderSavesRef.current(), 500);
   }, [vaultReady, readerState]);
   useEffect(() => {
     if (!dirtyReaderPapersRef.current.size) return;
     window.clearTimeout(readerSaveTimerRef.current);
-    readerSaveTimerRef.current = window.setTimeout(() => flushReaderSavesRef.current(), 500);
+    readerSaveTimerRef.current = window.setTimeout(() => void flushReaderSavesRef.current(), 500);
   }, [paperJobs]);
   useEffect(() => {
-    const flush = () => flushReaderSavesRef.current();
+    const flush = () => void flushReaderSavesRef.current();
     window.addEventListener('pagehide', flush);
     return () => window.removeEventListener('pagehide', flush);
   }, []);
@@ -642,16 +676,21 @@ export default function Home() {
         detail: 'Reattaching notes and marks; three-way merging working edits.',
         status: 'running',
       });
+      // The comparison and audit take minutes. Merge the reader's state as it is now,
+      // including notes, marks, and edits made meanwhile, and save other papers'
+      // pending edits first so the committed snapshot already contains them.
+      await flushReaderSavesRef.current();
+      const current = readerStateRef.current;
       const migration = migrateReaderWork({
         paper: target,
         previous: previousAudit,
         next: latestAudit,
-        notes: notes.filter((item) => item.paperId === target.id),
-        nodeNotes: nodeNotes[target.id] ?? {},
-        nodeAnswers: nodeAnswers[target.id] ?? {},
-        expanded: expanded[target.id] ?? {},
-        marks: marks[target.id] ?? {},
-        patches: patches[target.id] ?? [],
+        notes: current.notes.filter((item) => item.paperId === target.id),
+        nodeNotes: current.nodeNotes[target.id] ?? {},
+        nodeAnswers: current.nodeAnswers[target.id] ?? {},
+        expanded: current.expanded[target.id] ?? {},
+        marks: current.marks[target.id] ?? {},
+        patches: patchesRef.current[target.id] ?? [],
       });
       const aiCorrections = automaticEditorialPatches(latestAudit, migration.patches);
       const nextPatches = [...migration.patches, ...aiCorrections];
@@ -679,8 +718,8 @@ export default function Home() {
         'The latest version could not be committed locally.',
         { require: ['snapshot'] },
       );
-      applySnapshot(commitData.snapshot);
-      setSelectedNodeId((current) => migration.maps.unitMap[current] ?? latestAudit.nodes[0]?.id ?? '');
+      applySnapshot(commitData.snapshot, { replaceReaderFor: [target.id] });
+      setSelectedNodeId((selected) => migration.maps.unitMap[selected] ?? latestAudit.nodes[0]?.id ?? '');
       setUpdatePanel(commitData.update ?? null);
       reportReaderProcess({
         id: processId,

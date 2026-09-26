@@ -602,6 +602,18 @@ export function migrateReaderWork({
         fromId: id,
         toId: target,
       });
+    } else {
+      // A mark whose environment has no counterpart used to vanish without a trace.
+      const item = {
+        type: 'mark' as const,
+        label: `Reading mark (${value})`,
+        status: 'review' as const,
+        detail: 'The marked environment has no counterpart in the new version.',
+        fromId: id,
+        toId: '',
+      };
+      items.push(item);
+      conflicts.push(item);
     }
   }
   const migratedPatches: WorkingPatch[] = [];
