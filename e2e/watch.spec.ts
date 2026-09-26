@@ -10,6 +10,14 @@ const citing = (id: string, arxivId = '') => ({
   url: arxivId ? `https://arxiv.org/abs/${arxivId}` : `https://doi.org/10.1/${id}`,
 });
 
+// The e2e library is shared by every test (and a retry): take the added paper out again.
+test.afterEach(async ({ request }) => {
+  await request.post(`${bridgeOrigin}/vault/paper/delete`, {
+    headers: { Origin: 'http://localhost:3000' },
+    data: { paperId: 'arxiv-2609.00002' },
+  });
+});
+
 test('the library shows new arXiv versions and new citing papers', async ({ page, request }) => {
   let citingWorks = [citing('W1')];
   // Other tests may already have updated the paper: report one version past the library's.
@@ -69,11 +77,11 @@ test('the library shows new arXiv versions and new citing papers', async ({ page
   // Closing the list marks the new ones as seen.
   await citations.locator('summary').click();
   await expect(citations.locator('summary')).toHaveText('Cited by 2');
-  const vault = await (await request.get(`${bridgeOrigin}/vault`)).json();
-  expect(JSON.parse(vault.nodeAnswers[eisensteinPaperId].__watch__).latestVersion).toBe(`2608.24719${next}`);
-
-  await request.post(`${bridgeOrigin}/vault/paper/delete`, {
-    headers: { Origin: 'http://localhost:3000' },
-    data: { paperId: 'arxiv-2609.00002' },
-  });
+  // Reader state is saved after a short pause.
+  await expect
+    .poll(async () => {
+      const vault = await (await request.get(`${bridgeOrigin}/vault`)).json();
+      return JSON.parse(vault.nodeAnswers[eisensteinPaperId]?.__watch__ ?? '{}').latestVersion;
+    })
+    .toBe(`2608.24719${next}`);
 });
