@@ -29,3 +29,9 @@ npm run test:e2e
 They start the bridge on a throwaway copy of the starter library, so your own library is never touched. With a Chromium already installed elsewhere, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to its path instead of installing one. Add new test scripts to the `test` entry in `package.json` so CI picks them up.
 
 Do not commit `proofroom-library/`, local environment files, credentials, generated builds, or personal reader profiles. Add reusable demo papers only through `examples/starter-library/`, with portable relative source paths and no Codex thread ID.
+
+## Releasing
+
+1. Run `npm version <x.y.z> --no-git-tag-version` to set the version in `package.json` and `package-lock.json`.
+2. Add a `## x.y.z — YYYY-MM-DD` section at the top of `CHANGELOG.md`.
+3. Once that is merged to `main`, run the **Release** workflow from the Actions tab. It tags `vx.y.z` and publishes the changelog section as the GitHub release. Pushing the tag yourself also starts it.
