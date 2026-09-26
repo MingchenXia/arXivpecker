@@ -766,8 +766,29 @@ function authorMacroTable(source) {
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
     if (group) macros.set(name, { replacement: group.content, arity: Number(match[4] || 0), defaultArg: match[5] });
   }
+  const pairedRanges = [];
+  for (const match of text.matchAll(
+    /\\DeclarePairedDelimiter(XPP|X)?\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*(?:\[(\d)\])?/g,
+  )) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
+    // Delimiters are often single tokens: \\DeclarePairedDelimiter\\paren().
+    const parts = readMacroArguments(text, (match.index ?? 0) + match[0].length, pairedDelimiterParts(match[1]));
+    if (!parts) continue;
+    pairedRanges.push([match.index ?? 0, parts.end]);
+    const [pre, left, right, post, body] =
+      match[1] === 'XPP'
+        ? parts.contents
+        : ['', parts.contents[0], parts.contents[1], '', match[1] ? parts.contents[2] : '#1'];
+    macros.set(
+      match[2] || match[3],
+      pairedDelimiterMacro(pre, left, right, post, body, match[1] ? Number(match[4] || 0) : 1),
+    );
+  }
   for (const match of text.matchAll(/\\def\s*\\([A-Za-z@]+)\s*((?:#\d\s*)*)\{/g)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
+    // A helper such as \\given defined inside a paired delimiter's body is
+    // local to each use of that delimiter; pairedDelimiterMacro applies it.
+    if (insideSourceRanges(match.index ?? 0, pairedRanges)) continue;
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
     let arity = Math.max(0, ...[...String(match[2] || '').matchAll(/#(\d)/g)].map((item) => Number(item[1])));
     let replacement = group?.content || '';
@@ -784,6 +805,20 @@ function authorMacroTable(source) {
     if (group)
       macros.set(match[2] || match[3], { replacement: `\\operatorname${match[1]}{${group.content}}`, arity: 0 });
   }
+  for (const match of text.matchAll(
+    /\\(New|Renew|Provide|Declare)(?:Expandable)?DocumentCommand\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*\{/g,
+  )) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
+    const name = match[2] || match[3];
+    const spec = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    const body = spec && readMacroArgument(text, spec.end);
+    if (!body || (match[1] === 'Provide' && macros.has(name))) continue;
+    const macro = documentCommandMacro(spec.content, body.content);
+    if (macro) macros.set(name, macro);
+    // An argument type or conditional this reader cannot follow leaves the
+    // command undefined rather than half-expanded.
+    else macros.delete(name);
+  }
   for (const match of text.matchAll(/\\let\s*\\([A-Za-z@]+)\s*(?:=\s*)?\\([A-Za-z@]+)/g)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
     const takesArgument = /^(?:widehat|widetilde|overline|underline)$/.test(match[2]);
@@ -795,9 +830,178 @@ function authorMacroTable(source) {
   return macros;
 }
 
+// mathtools reads `\\abs{x}`, the scaling `\\abs*{x}`, and a fixed size
+// `\\abs[\\big]{x}`. The reader scales the plain form too; inside the body,
+// \\delimsize is the size of the delimiter it precedes.
+function pairedDelimiterMacro(pre, left, right, post, body, arity) {
+  const locals = [];
+  const ownBody = body.replace(/\\def\s*\\([A-Za-z@]+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g, (_definition, name, value) => {
+    locals.push([new RegExp(`\\\\${name}(?![A-Za-z@])`, 'g'), value]);
+    return '';
+  });
+  const sized = (content, middle) =>
+    content
+      .replace(
+        /\\delimsize(?![A-Za-z@])\s*(?=[|/]|\\(?:\||vert|Vert|lvert|rvert|lVert|rVert|backslash|langle|rangle)(?![A-Za-z@]))/g,
+        () => middle,
+      )
+      .replace(/\\delimsize(?![A-Za-z@])\s*/g, '');
+  const delimited = (open, middle, close) =>
+    joinControlWords(pre, open, left.trim() || '.', sized(ownBody, middle), close, right.trim() || '.', post);
+  return {
+    replacement: delimited('\\left', '\\middle', '\\right'),
+    signature: ['s', {}, ...Array.from({ length: arity }, () => 'm')],
+    expand: ([, size, ...values]) => {
+      const fixed = /^\s*\\(big|Big|bigg|Bigg)[lrm]?\s*$/.exec(size || '')?.[1];
+      const [open, middle, close] = fixed
+        ? [`\\${fixed}l`, `\\${fixed}`, `\\${fixed}r`]
+        : ['\\left', '\\middle', '\\right'];
+      return {
+        template: delimited(open, middle, close),
+        values: values.map((value) =>
+          locals.reduce((result, [name, local]) => result.replace(name, () => sized(local, middle)), value),
+        ),
+      };
+    },
+  };
+}
+
+// xparse argument types that read like \\newcommand's: mandatory `m`, the
+// optional `o` and `O{default}`, and the star `s`. `+` only allows paragraphs.
+function documentCommandMacro(spec, body) {
+  const signature = [];
+  for (let index = 0; index < spec.length; index += 1) {
+    const type = spec[index];
+    if (/[\s+]/.test(type)) continue;
+    if (type === 'm' || type === 's') signature.push(type);
+    else if (type === 'o') signature.push({});
+    else if (type === 'O') {
+      const fallback = readMacroArgument(spec, index + 1);
+      if (!fallback) return null;
+      signature.push({ default: fallback.content });
+      index = fallback.end - 1;
+    } else return null;
+  }
+  // Every branch must resolve, whichever arguments a use supplies.
+  const absent = signature.map((kind) => (kind === 's' ? false : kind === 'm' ? '' : kind.default));
+  const present = signature.map((kind) => kind === 's' || '');
+  if (resolveDocumentConditionals(body, absent) === null || resolveDocumentConditionals(body, present) === null)
+    return null;
+  return {
+    replacement: body,
+    signature,
+    expand: (args) => {
+      const template = resolveDocumentConditionals(body, args);
+      // A star or an absent optional argument has no text of its own.
+      return template === null
+        ? null
+        : { template, values: args.map((value) => (typeof value === 'string' ? value : '')) };
+    },
+  };
+}
+
+// Resolves \\IfNoValueTF, \\IfValueTF, and \\IfBooleanTF (and their T and F
+// forms) on a bare argument. Returns null if any other xparse test remains.
+function resolveDocumentConditionals(body, args) {
+  let text = body;
+  for (let guard = 0; guard < 256; guard += 1) {
+    const match = /\\If(NoValue|Value|Boolean)(TF|T|F)(?![A-Za-z@])\s*/.exec(text);
+    if (!match) break;
+    const test = balancedGroup(text, match.index + match[0].length);
+    const parameter = test && /^\s*#(\d)\s*$/.exec(test.content);
+    if (!parameter) return null;
+    const value = args[Number(parameter[1]) - 1];
+    const holds = match[1] === 'Boolean' ? value === true : (value === undefined) === (match[1] === 'NoValue');
+    let position = test.end;
+    let chosen = '';
+    for (const branch of match[2]) {
+      while (/\s/.test(text[position] || '')) position += 1;
+      const group = balancedGroup(text, position);
+      if (!group) return null;
+      if ((branch === 'T') === holds) chosen = group.content;
+      position = group.end;
+    }
+    text = text.slice(0, match.index) + chosen + text.slice(position);
+  }
+  return /\\(?:If[A-Za-z]*(?:TF|T|F)|BooleanTrue|BooleanFalse|NoValue)(?![A-Za-z@])/.test(text) ? null : text;
+}
+
+// Joins TeX fragments, keeping a control word at the end of one fragment from
+// absorbing a letter at the start of the next.
+function joinControlWords(...parts) {
+  return parts.reduce(
+    (joined, part) => (/\\[A-Za-z@]+$/.test(joined) && /^[A-Za-z@]/.test(part) ? `${joined} ${part}` : joined + part),
+    '',
+  );
+}
+
+// A mandatory argument is a balanced group or, as in TeX, a single token.
+function readMacroArgument(text, position) {
+  while (/\s/.test(text[position] || '')) position += 1;
+  const group = balancedGroup(text, position);
+  if (group) return group;
+  const token = text[position] === '\\' ? /^\\[A-Za-z@]+|^\\./.exec(text.slice(position))?.[0] : text[position];
+  return token ? { content: token, end: position + token.length } : null;
+}
+
+function readMacroArguments(text, position, count) {
+  const contents = [];
+  let end = position;
+  while (contents.length < count) {
+    const argument = readMacroArgument(text, end);
+    if (!argument) return null;
+    contents.push(argument.content);
+    end = argument.end;
+  }
+  return { contents, end };
+}
+
+// The plain, X, and XPP forms take 2, 3, and 5 arguments after the name.
+function pairedDelimiterParts(form) {
+  return form === 'XPP' ? 5 : form === 'X' ? 3 : 2;
+}
+
+// Reads a use of a macro with a star or optional arguments in its signature.
+// An absent optional argument is undefined, xparse's NoValue.
+function expandSignatureUse(text, position, macro) {
+  const args = [];
+  let end = position;
+  for (const kind of macro.signature) {
+    if (kind === 'm') {
+      const argument = readMacroArgument(text, end);
+      if (!argument) return null;
+      args.push(argument.content);
+      end = argument.end;
+      continue;
+    }
+    // Look past spaces for `*` or `[`, but keep them when neither follows:
+    // they may end the control word.
+    let next = end;
+    while (/\s/.test(text[next] || '')) next += 1;
+    if (kind === 's') {
+      args.push(text[next] === '*');
+      if (text[next] === '*') end = next + 1;
+      continue;
+    }
+    const optional = balancedGroup(text, next, '[', ']');
+    args.push(optional ? optional.content : kind.default);
+    if (optional) end = optional.end;
+  }
+  const expansion = macro.expand(args);
+  return expansion && { replacement: substituteMacroArguments(expansion.template, expansion.values), end };
+}
+
 // Reads one use of an author macro whose name ends at `position`: its
 // arguments, then the replacement text with the arguments substituted.
 function expandMacroUse(text, position, macro) {
+  const use = macro.signature ? expandSignatureUse(text, position, macro) : expandArityUse(text, position, macro);
+  // A replacement ending in a control word must not absorb the letter after
+  // the use: `\\norm{x}y` would otherwise become the undefined `\\rVerty`.
+  if (use && /\\[A-Za-z@]+$/.test(use.replacement) && /[A-Za-z@]/.test(text[use.end] || '')) use.replacement += ' ';
+  return use;
+}
+
+function expandArityUse(text, position, macro) {
   const args = [];
   // TeX uses whitespace to terminate a zero-argument control word. Preserve
   // that separator or `\\leq R` becomes the undefined command `\\leqslantR`.
@@ -808,19 +1012,16 @@ function expandMacroUse(text, position, macro) {
     if (optional) position = optional.end;
   }
   for (let argIndex = args.length; argIndex < macro.arity; argIndex += 1) {
-    while (/\s/.test(text[position] || '')) position += 1;
-    const group = balancedGroup(text, position);
-    if (group) {
-      args.push(group.content);
-      position = group.end;
-      continue;
-    }
-    const token = text[position] === '\\' ? /^\\[A-Za-z@]+|^\\./.exec(text.slice(position))?.[0] : text[position];
-    if (!token) return null;
-    args.push(token);
-    position += token.length;
+    const argument = readMacroArgument(text, position);
+    if (!argument) return null;
+    args.push(argument.content);
+    position = argument.end;
   }
-  let replacement = macro.replacement;
+  return { replacement: substituteMacroArguments(macro.replacement, args), end: position };
+}
+
+function substituteMacroArguments(template, args) {
+  let replacement = template;
   args.forEach((argument, index) => {
     replacement = replacement.replace(
       macroParameters[index] || new RegExp(`#${index + 1}`, 'g'),
@@ -833,7 +1034,7 @@ function expandMacroUse(text, position, macro) {
       },
     );
   });
-  return { replacement, end: position };
+  return replacement;
 }
 
 const macroParameters = Array.from({ length: 9 }, (_, index) => new RegExp(`#${index + 1}`, 'g'));
@@ -2422,7 +2623,7 @@ function stripDocumentDeclarations(source) {
   const literalRanges = literalSourceRanges(text);
   const ranges = [];
   const commandPattern =
-    /\\(newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator|newenvironment|renewenvironment|newtheorem|renewtheorem|def|gdef|edef|xdef|mathchardef|chardef|let|theoremstyle|numberwithin|counterwithin|counterwithout)\*?/g;
+    /\\(newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator|DeclarePairedDelimiter(?:XPP|X)?|(?:New|Renew|Provide|Declare)(?:Expandable)?DocumentCommand|newenvironment|renewenvironment|newtheorem|renewtheorem|def|gdef|edef|xdef|mathchardef|chardef|let|theoremstyle|numberwithin|counterwithin|counterwithout)\*?/g;
   const skipSpace = (position) => {
     while (/\s/.test(text[position] || '')) position += 1;
     return position;
@@ -2459,6 +2660,26 @@ function stripDocumentDeclarations(source) {
       position = takeMacroName(position);
       if (position < 0) continue;
       const replacement = takeGroup(position);
+      if (!replacement) continue;
+      position = replacement.end;
+    } else if (command.startsWith('DeclarePairedDelimiter')) {
+      position = takeMacroName(position);
+      if (position < 0) continue;
+      const arity = takeOptional(position);
+      if (arity) position = arity.end;
+      const parts = readMacroArguments(
+        text,
+        position,
+        pairedDelimiterParts(command.replace('DeclarePairedDelimiter', '')),
+      );
+      if (!parts) continue;
+      position = parts.end;
+    } else if (command.endsWith('DocumentCommand')) {
+      position = takeMacroName(position);
+      if (position < 0) continue;
+      const spec = takeGroup(position);
+      if (!spec) continue;
+      const replacement = takeGroup(spec.end);
       if (!replacement) continue;
       position = replacement.end;
     } else if (/^(?:newenvironment|renewenvironment)$/.test(command)) {

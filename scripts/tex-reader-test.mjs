@@ -823,6 +823,82 @@ assert.match(
   'A real author macro must still expand outside literal source examples.',
 );
 
+const expandedFormulas = (preamble, body) =>
+  [...expandAuthorMacros(`${preamble}\\begin{document}${body}\\end{document}`).matchAll(/\$([^$]*)\$/g)].map(
+    (match) => match[1],
+  );
+const assertTypesets = (formulas) => {
+  for (const formula of formulas)
+    assert.doesNotThrow(() => katex.renderToString(formula, { throwOnError: true, strict: 'ignore' }), formula);
+};
+assert.deepEqual(
+  expandedFormulas(String.raw`\newcommand{\norm}[1]{\left\lVert#1\right\rVert}`, String.raw`$\norm{x}y$`),
+  [String.raw`\left\lVert x\right\rVert y`],
+  'A replacement ending in a control word must not absorb the letter after the use.',
+);
+// Without these declarations, KaTeX shows an undefined \abs{x} as "abs x".
+const pairedDelimiters = expandedFormulas(
+  String.raw`\DeclarePairedDelimiter\abs{\lvert}{\rvert}
+\DeclarePairedDelimiter{\ceil}{\lceil}{\rceil}
+\DeclarePairedDelimiter\paren()
+\DeclarePairedDelimiterX\inner[2]{\langle}{\rangle}{#1,#2}
+\DeclarePairedDelimiterX\set[1]\lbrace\rbrace{\def\given{\;\delimsize\vert\;}#1}
+\DeclarePairedDelimiterX{\cond}[2]{(}{)}{#1\delimsize|#2}
+\DeclarePairedDelimiterXPP\Prob[1]{\mathbb{P}}(){}{#1}`,
+  String.raw`$\abs{x}$ $\abs*{\frac12}$ $\abs[\big]{x}$ $\abs[\Big]{x}$ $\abs[\bigg]{x}$ $\abs[\Bigg]{x}$ $\ceil{x}$
+$\paren{x}y$ $\inner{a}{b}$ $\inner[\big]{a}{b}$ $\set{x\given x>0}$ $\cond{A}{B}$ $\cond[\Big]{A}{B}$ $\Prob{A}$`,
+);
+assert.deepEqual(pairedDelimiters, [
+  String.raw`\left\lvert x\right\rvert`,
+  String.raw`\left\lvert\frac12\right\rvert`,
+  String.raw`\bigl\lvert x\bigr\rvert`,
+  String.raw`\Bigl\lvert x\Bigr\rvert`,
+  String.raw`\biggl\lvert x\biggr\rvert`,
+  String.raw`\Biggl\lvert x\Biggr\rvert`,
+  String.raw`\left\lceil x\right\rceil`,
+  String.raw`\left(x\right)y`,
+  String.raw`\left\langle a,b\right\rangle`,
+  String.raw`\bigl\langle a,b\bigr\rangle`,
+  String.raw`\left\lbrace x\;\middle\vert\; x>0\right\rbrace`,
+  String.raw`\left(A\middle|B\right)`,
+  String.raw`\Bigl(A\Big|B\Bigr)`,
+  String.raw`\mathbb{P}\left(A\right)`,
+]);
+assertTypesets(pairedDelimiters);
+
+const documentCommands = expandedFormulas(
+  String.raw`\NewDocumentCommand\nrm{m}{\lVert #1\rVert}
+\NewDocumentCommand{\Norm}{s O{} m}{\IfBooleanTF{#1}{\left\lVert #3\right\rVert}{\lVert #3\rVert}_{#2}}
+\DeclareDocumentCommand\opt{o +m}{\IfNoValueTF{#1}{f(#2)}{f_{#1}(#2)}}
+\NewDocumentCommand\sub{m o}{#1\IfValueT{#2}{_{#2}}}
+\ProvideDocumentCommand\nrm{m}{WRONG}
+\NewDocumentCommand\verbatimArgument{v}{#1}
+\NewDocumentCommand\blank{m}{\IfBlankTF{#1}{a}{b}}`,
+  String.raw`$\nrm{x}y$ $\Norm{x}$ $\Norm*[2]{x}$ $\opt{x}$ $\opt [n] {x}$ $\sub{x}$ $\sub{x}[i]$
+$\verbatimArgument|x|$ $\blank{x}$`,
+);
+assert.deepEqual(documentCommands, [
+  String.raw`\lVert x\rVert y`,
+  String.raw`\lVert x\rVert_{}`,
+  String.raw`\left\lVert x\right\rVert_{2}`,
+  'f(x)',
+  'f_{n}(x)',
+  'x',
+  'x_{i}',
+  // Argument types and tests the reader cannot follow stay undefined, never
+  // half-expanded.
+  String.raw`\verbatimArgument|x|`,
+  String.raw`\blank{x}`,
+]);
+assertTypesets(documentCommands.slice(0, 7));
+assert.equal(
+  readableLatex(
+    String.raw`\DeclarePairedDelimiter\paren() \DeclarePairedDelimiterX\inner[2]{\langle}{\rangle}{#1,#2} \NewDocumentCommand{\nrm}{m}{\lVert #1\rVert} Text.`,
+  ),
+  'Text.',
+  'Paired-delimiter and document-command declarations must not leak into reader text.',
+);
+
 const horizontalFill = readableLatex(String.raw`Conclusion.\hfil Middle.\hfill $\Box$`);
 assert.doesNotMatch(
   horizontalFill,
