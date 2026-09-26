@@ -20,7 +20,7 @@ async function readExpandedTex(
   depth = 0,
   mainDirectory = path.dirname(entryFile),
   documentDirectory = mainDirectory,
-  subfile = false,
+  mode = 'document',
 ) {
   if (depth > 12 || seen.has(entryFile)) return '';
   const relative = path.relative(sourceRoot, entryFile);
@@ -29,12 +29,15 @@ async function readExpandedTex(
   if (relativePathEscapes(path.relative(await realpath(sourceRoot), await realpath(entryFile)))) return '';
   seen.add(entryFile);
   let source = decodeSourceBuffer(await readFile(entryFile));
-  if (subfile) source = documentBody(source);
+  if (mode === 'subfile') source = documentBody(source);
+  if (mode === 'package') source = beforeEndinput(source);
   // `\\include` needs braces; `\\input` also accepts a bare file name (`\\input macros`).
   // The import package adds \import{dir/}{file}, its \inputfrom and \includefrom
   // aliases, and their \sub... forms; the subfiles package adds \subfile{file}.
+  // A package or class shipped with the source (cgeometry.sty next to main.tex)
+  // contributes its declarations after the line that loads it.
   const include =
-    /\\(?:input|include)\s*\{([^}]+)\}|\\input\s+([A-Za-z0-9_./-]+)|\\(sub)?(?:import|inputfrom|includefrom)\*?\s*\{([^}]*)\}\s*\{([^}]+)\}|\\subfile(?:include)?\s*\{([^}]+)\}/g;
+    /\\(?:input|include)\s*\{([^}]+)\}|\\input\s+([A-Za-z0-9_./-]+)|\\(sub)?(?:import|inputfrom|includefrom)\*?\s*\{([^}]*)\}\s*\{([^}]+)\}|\\subfile(?:include)?\s*\{([^}]+)\}|\\(usepackage|RequirePackage|documentclass)\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g;
   const literalRanges = literalSourceRanges(source);
   let expanded = '';
   let cursor = 0;
@@ -42,7 +45,34 @@ async function readExpandedTex(
     const start = match.index ?? 0;
     if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(source, start)) continue;
     expanded += source.slice(cursor, match.index);
-    const [, inputName, bareName, sub, folder = '', importName, subfileName] = match;
+    const [, inputName, bareName, sub, folder = '', importName, subfileName, packageCommand, packageNames] = match;
+    if (packageCommand) {
+      expanded += match[0];
+      cursor = start + match[0].length;
+      const extension = packageCommand === 'documentclass' ? '.cls' : '.sty';
+      for (const name of packageNames.split(',').map((item) => item.trim())) {
+        if (!/^[A-Za-z0-9_./-]+$/.test(name)) continue;
+        const bases = [path.dirname(entryFile), mainDirectory, sourceRoot];
+        for (const candidate of new Set(bases.map((base) => path.resolve(base, `${name}${extension}`)))) {
+          try {
+            const declarations = await readExpandedTex(
+              candidate,
+              sourceRoot,
+              seen,
+              depth + 1,
+              mainDirectory,
+              documentDirectory,
+              'package',
+            );
+            if (declarations) expanded += `\n${declarations}\n`;
+            break;
+          } catch {
+            /* Not shipped with the source: a standard package. */
+          }
+        }
+      }
+      continue;
+    }
     const requested = (inputName ?? bareName ?? importName ?? subfileName).trim();
     const filename = /\.[A-Za-z0-9]+$/.test(requested) ? requested : `${requested}.tex`;
     // TeX resolves every include against the main document's folder, even from
@@ -66,7 +96,7 @@ async function readExpandedTex(
           depth + 1,
           imports ? path.dirname(candidate) : mainDirectory,
           documentDirectory,
-          subfileName !== undefined,
+          subfileName !== undefined ? 'subfile' : 'document',
         );
         break;
       } catch {
@@ -77,7 +107,91 @@ async function readExpandedTex(
     cursor = start + match[0].length;
   }
   expanded += source.slice(cursor);
-  return expanded;
+  return mode === 'package' ? packageDeclarations(expanded) : expanded;
+}
+
+// TeX stops reading a file at \endinput; a package often keeps notes after it.
+function beforeEndinput(source) {
+  const literalRanges = literalSourceRanges(source);
+  const end = [...source.matchAll(/\\endinput(?![A-Za-z@])/g)].find(
+    (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(source, match.index ?? 0),
+  );
+  return end ? source.slice(0, end.index) : source;
+}
+
+// Commands whose redefinition would change how this reader finds the paper's
+// structure, references, or text; a style file may redefine them for print.
+const structuralCommands = new Set(
+  (
+    'part chapter section subsection subsubsection paragraph subparagraph item label ref eqref pageref autoref ' +
+    'cref Cref nameref cite caption footnote footnotemark maketitle title author date thanks and address email ' +
+    'begin end emph textbf textit texttt textsc textrm textup input include includegraphics appendix ' +
+    'bibliography bibliographystyle printbibliography tableofcontents newtheorem proof qed qedhere par newline ' +
+    'url href hyperref'
+  ).split(' '),
+);
+
+/**
+ * The declarations of a package or class shipped with the source that this reader
+ * understands: theorem environments, counters, cleveref names, and macros. The
+ * rest of a style file (page layout, internal @-commands, redefinitions of
+ * \section or \maketitle) is for print, and some of it would mislead the reader.
+ */
+function packageDeclarations(source) {
+  const text = String(source || '');
+  const literalRanges = literalSourceRanges(text);
+  const pattern =
+    /\\(newtheorem|spnewtheorem|declaretheorem|theoremstyle|newcommand|providecommand|renewcommand|DeclareRobustCommand|DeclareMathOperator|DeclarePairedDelimiter(?:XPP|X)?|(?:New|Renew|Provide|Declare)(?:Expandable)?DocumentCommand|def|let|numberwithin|counterwithin|counterwithout|newaliascnt|crefname|Crefname|crefalias|usepackage|RequirePackage|@addtoreset|@removefromreset)(?![A-Za-z@])/g;
+  const defining =
+    /^(?:newcommand|providecommand|renewcommand|DeclareRobustCommand|DeclareMathOperator|DeclarePairedDelimiter\w*|\w*DocumentCommand|def|let)$/;
+  const statements = [];
+  let covered = 0;
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start < covered || insideSourceRanges(start, literalRanges) || isLatexCommentedAt(text, start)) continue;
+    const command = match[1];
+    let cursor = start + match[0].length;
+    // Arguments may continue on the next line, but not past a blank line.
+    const spaces = () => {
+      let newlines = 0;
+      while (/\s/.test(text[cursor] ?? '')) {
+        if (text[cursor] === '\n' && ++newlines > 1) break;
+        cursor += 1;
+      }
+    };
+    let name = '';
+    if (defining.test(command)) {
+      spaces();
+      if (text[cursor] === '*') cursor += 1;
+      spaces();
+      const named = /^(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))/.exec(text.slice(cursor, cursor + 200));
+      if (!named) continue;
+      name = named[1] || named[2];
+      cursor += named[0].length;
+      if (command === 'let') {
+        const target = /^\s*=?\s*\\(?:[A-Za-z@]+|.)/.exec(text.slice(cursor, cursor + 200));
+        if (!target) continue;
+        cursor += target[0].length;
+      }
+      if (command === 'def') cursor += /^(?:#\d)*/.exec(text.slice(cursor, cursor + 40))[0].length;
+    }
+    while (command !== 'let') {
+      spaces();
+      const group =
+        text[cursor] === '['
+          ? balancedGroup(text, cursor, '[', ']')
+          : text[cursor] === '{'
+            ? balancedGroup(text, cursor)
+            : null;
+      if (text[cursor] === '*') cursor += 1;
+      else if (group) cursor = group.end;
+      else break;
+    }
+    covered = cursor;
+    if (name && (name.includes('@') || structuralCommands.has(name))) continue;
+    statements.push(text.slice(start, cursor).trim());
+  }
+  return statements.join('\n');
 }
 
 // A subfile is a complete document that compiles on its own; the main document
@@ -351,7 +465,7 @@ function normalizeMathTextCommands(source) {
 function unwrapLatexTextCommands(source) {
   let text = String(source || '');
   const command =
-    /\\(footnote|footnotetext|caption|emph|textbf|textit|texttt|textsc|textrm|textsf|underline|centerline|mbox|url|path)(?:\[[^\]]*\])?\s*\{/g;
+    /\\(footnote|footnotetext|caption|emph|textbf|textit|texttt|textsc|textrm|textsf|textup|textnormal|textsl|textmd|underline|centerline|mbox|url|path)(?:\[[^\]]*\])?\s*\{/g;
   for (let pass = 0; pass < 4; pass += 1) {
     let output = '';
     let cursor = 0;
@@ -648,6 +762,114 @@ function citeCommandMentions(globalNotes = '', groups = '') {
   });
 }
 
+const textAccents = {
+  "'": '́',
+  '`': '̀',
+  '^': '̂',
+  '"': '̈',
+  '~': '̃',
+  '=': '̄',
+  '.': '̇',
+  u: '̆',
+  v: '̌',
+  H: '̋',
+  c: '̧',
+  k: '̨',
+  r: '̊',
+  b: '̱',
+  d: '̣',
+};
+const textLetters = {
+  i: 'ı',
+  j: 'ȷ',
+  l: 'ł',
+  L: 'Ł',
+  o: 'ø',
+  O: 'Ø',
+  ss: 'ß',
+  ae: 'æ',
+  AE: 'Æ',
+  oe: 'œ',
+  OE: 'Œ',
+  aa: 'å',
+  AA: 'Å',
+};
+const textSymbols = {
+  S: '§',
+  P: '¶',
+  textsection: '§',
+  textparagraph: '¶',
+  dag: '†',
+  ddag: '‡',
+  textdagger: '†',
+  textdaggerdbl: '‡',
+  copyright: '©',
+  textcopyright: '©',
+  pounds: '£',
+  textsterling: '£',
+  guillemotleft: '«',
+  guillemotright: '»',
+  guillemetleft: '«',
+  guillemetright: '»',
+  textquotedblleft: '“',
+  textquotedblright: '”',
+  textendash: '–',
+  textemdash: '—',
+  textellipsis: '…',
+  ldots: '…',
+  dots: '…',
+  textbullet: '•',
+};
+// The letter under an accent: a letter, or the dotless \i and \j of \'{\i}.
+const accentBase = String.raw`(?:\\([ij])(?![A-Za-z@])[ \t]?|([A-Za-z]))`;
+const symbolAccent = new RegExp(String.raw`\\(['\`^"~=.])\s*(?:\{\s*${accentBase}\s*\}|${accentBase})`, 'g');
+// \u, \c, \v, ... are also prefixes of control words (\upsilon, \cdot, \vec), so
+// their letter must be braced or follow a space: \c{c}, \u a.
+const letterAccent = new RegExp(String.raw`\\([uvHckrbd])(?:\s*\{\s*${accentBase}\s*\}|\s+${accentBase})`, 'g');
+
+/**
+ * Turns text-mode TeX that has a character of its own into that character, outside
+ * mathematics: accents (\c{t}, \'{\i}), letters (\o, \ss), and symbols such as
+ * \S and the guillemets. A control word swallows one following space, as in TeX,
+ * so `\S 2` reads §2 and `T\o nnesen` Tønnesen. Also drops text-mode glue and font
+ * switches that have no readable form.
+ */
+function decodeTextSymbols(source) {
+  const text = String(source || '');
+  const decode = (part) =>
+    part
+      // An accent over the dotless \\i is í: the accent takes the dot's place.
+      .replace(symbolAccent, (...match) =>
+        `${match.slice(2, 6).find(Boolean)}${textAccents[match[1]]}`.normalize('NFC'),
+      )
+      .replace(letterAccent, (...match) =>
+        `${match.slice(2, 6).find(Boolean)}${textAccents[match[1]]}`.normalize('NFC'),
+      )
+      .replace(/\{\\(ss|ae|AE|oe|OE|aa|AA|[ijlLoO])\}/g, (_match, name) => textLetters[name])
+      .replace(/\\(ss|ae|AE|oe|OE|aa|AA|[ijlLoO])(?![A-Za-z@])(?:\{\}|[ \t])?/g, (_match, name) => textLetters[name])
+      .replace(
+        new RegExp(String.raw`\\(${Object.keys(textSymbols).join('|')})(?![A-Za-z@])(?:\{\}|[ \t])?`, 'g'),
+        (_match, name) => textSymbols[name],
+      )
+      // A bare \qed ends a proof written without the proof environment.
+      .replace(/\\qed(?:symbol)?(?![A-Za-z@])/g, '$\\qed$')
+      .replace(
+        /\\(?:appendix|upshape|normalfont|itshape|slshape|scshape|bfseries|mdseries|rmfamily|sffamily|ttfamily|textup|textnormal)(?![A-Za-z@])[ \t]?/g,
+        '',
+      )
+      // The control space after an abbreviation (resp.\ , e.g.\ ) is a space; \@ and \/
+      // only adjust spacing. Math that reaches here without delimiters keeps \, and \ .
+      .replace(/(?<=\.)\\ /g, ' ')
+      .replace(/(?<!\\)\\[@/]/g, '');
+  let output = '';
+  let cursor = 0;
+  for (const [start, end] of mathSourceRanges(text)) {
+    output += decode(text.slice(cursor, start)) + text.slice(start, end);
+    cursor = end;
+  }
+  return output + decode(text.slice(cursor));
+}
+
 function readableLatex(source) {
   // A \verb example is literal: no command inside it (\ref, \label, %) is interpreted.
   const literals = [];
@@ -717,15 +939,7 @@ function readableLatex(source) {
     // standalone, non-letter commands; otherwise math is silently corrupted.
     .replace(/\\l(?![A-Za-z@])(?:\{\})?\s?/g, 'ł')
     .replace(/\\L(?![A-Za-z@])(?:\{\})?\s?/g, 'Ł')
-    .replace(/\\o\{\}/g, 'ø')
-    .replace(/\\O\{\}/g, 'Ø')
-    .replace(/\\ss\b/g, 'ß')
-    .replace(/\\ae\b/g, 'æ')
-    .replace(/\\AE\b/g, 'Æ')
-    .replace(/\\oe\b/g, 'œ')
-    .replace(/\\OE\b/g, 'Œ')
-    .replace(/\\aa\b/g, 'å')
-    .replace(/\\AA\b/g, 'Å')
+    // \\o, \\ss, \\AA and the other letters are decoded outside math by decodeTextSymbols.
     .replace(
       /\\iddots(?![A-Za-z@])/g,
       '\\mathinner{\\raisebox{-.4em}{$\\cdot$}\\mkern2mu\\cdot\\mkern2mu\\raisebox{.4em}{$\\cdot$}}',
@@ -749,7 +963,8 @@ function readableLatex(source) {
     .replace(/\\end\{(?:enumerate|itemize|description)\}/g, '')
     // A list item starts its own paragraph; a numbered or described item shows
     // its label in place of the bullet (marked until paragraphs are split).
-    .replace(/\\item(?![A-Za-z@])\s*(?:\[([^\]]*)\])?/g, (_match, label) =>
+    // An unwrapped \\textup{\\cite[...]{...}} after \\item is a citation, not a label.
+    .replace(/\\item(?![A-Za-z@])\s*(?:\[(?!\[cite:)([^\]]*)\])?/g, (_match, label) =>
       label === undefined ? '\n• ' : `\n• \u0007${label.trim()}\u0007 `,
     )
     // Subfigure wrappers are layout; their captions stay as text.
@@ -767,7 +982,7 @@ function readableLatex(source) {
   // Author TeX is line-wrapped for source control, not for typography. Preserve
   // paragraph breaks and explicit TeX `\\`, but reflow soft source newlines so
   // proofs read like the typeset paper instead of a code listing.
-  return normalizeTextLineBreaks(readable)
+  return normalizeTextLineBreaks(decodeTextSymbols(readable))
     .replace(/\n\s*•/g, '\n\n•')
     .split(/\n\s*\n/)
     .map((paragraph) =>
@@ -814,7 +1029,7 @@ function cleanBibliographyFragment(value) {
 function extractBibliography(source) {
   const text = String(source || '');
   const literalRanges = literalSourceRanges(text);
-  const matches = [...text.matchAll(/\\bibitem(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)].filter(
+  const matches = [...text.matchAll(/\\bibitem(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g)].filter(
     (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(text, match.index ?? 0),
   );
   const references = new Map();
@@ -824,7 +1039,13 @@ function extractBibliography(source) {
       (match.index ?? 0) + match[0].length,
       matches[index + 1]?.index ?? text.indexOf('\\end{thebibliography}', (match.index ?? 0) + match[0].length),
     );
-    references.set(match[1], bibliographyRecord(match[1], raw, raw.split(/\\newblock\b/)));
+    const record = bibliographyRecord(match[2], raw, raw.split(/\\newblock\b/));
+    // \bibitem[BJ22]{key} prints its optional argument as the label; natbib's
+    // [Author(2020)Long] form is not a label.
+    const printed = readableLatex(match[1] ?? '')
+      .replace(/[{}]/g, '')
+      .trim();
+    references.set(match[2], /^[\w+.:'-]{1,16}$/.test(printed) ? { ...record, label: printed } : record);
   }
   if (!matches.length)
     for (const { key, raw } of handWrittenBibliography(text)?.entries || [])
@@ -1054,13 +1275,18 @@ function bibtexField(entry, name) {
 }
 
 function cleanBibtexField(value) {
-  return readableLatex(
-    String(value || '')
-      .replace(/[{}]/g, '')
-      .replace(/\\&/g, '&'),
-  )
-    .replace(/\s+/g, ' ')
-    .trim();
+  // Decode accents while their braces still delimit them: stripping the braces of
+  // Musta\c{t}\u{a} first would fuse them into \ct\ua. Braces in math stay.
+  const decoded = decodeTextSymbols(String(value || ''));
+  const ranges = mathSourceRanges(decoded);
+  let text = '';
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    text += decoded.slice(cursor, start).replace(/[{}]/g, '') + decoded.slice(start, end);
+    cursor = end;
+  }
+  text += decoded.slice(cursor).replace(/[{}]/g, '');
+  return readableLatex(text.replace(/\\&/g, '&')).replace(/\s+/g, ' ').trim();
 }
 
 function cleanBibtexUrl(value) {
@@ -1086,14 +1312,24 @@ function extractBibtex(source) {
     const journal = cleanBibtexField(bibtexField(entry, 'journal') || bibtexField(entry, 'booktitle'));
     const doi = cleanBibtexField(bibtexField(entry, 'doi'));
     const eprint = cleanBibtexField(bibtexField(entry, 'eprint'));
-    const explicitUrl = cleanBibtexUrl(bibtexField(entry, 'url'));
+    // A web resource such as the Stacks project gives its address in howpublished or note.
+    const explicitUrl = cleanBibtexUrl(
+      bibtexField(entry, 'url') ||
+        /\\url\s*\{([^}]+)\}/.exec(`${bibtexField(entry, 'howpublished')} ${bibtexField(entry, 'note')}`)?.[1],
+    );
     const arxivId = /^(?:[a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?$/i.test(eprint) ? eprint.replace(/v\d+$/i, '') : '';
+    // biblatex prints a shorthand in place of the label ([Stacks]); its label field
+    // stands in only when the entry lacks the author and year a label is made of.
+    const label =
+      cleanBibtexField(bibtexField(entry, 'shorthand')) ||
+      (!authors || !year ? cleanBibtexField(bibtexField(entry, 'label')) : '');
     const text = [authors, title, journal, year].filter(Boolean).join('. ');
     const searchUrl = `https://scholar.google.com/scholar?q=${encodeURIComponent([title, authors].filter(Boolean).join(' '))}`;
     const url =
       explicitUrl || (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : searchUrl);
     references.set(key, {
       key,
+      ...(label ? { label } : {}),
       title,
       authors,
       text,
@@ -1691,6 +1927,17 @@ function mergeSourceRanges(ranges) {
   return merged;
 }
 
+// An environment's optional argument, as a RegExp source with one capture. Braces
+// may protect a ] or a reference inside it: \begin{theorem}[{$=$ \cref{main}}].
+const environmentOption = String.raw`\[((?:\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}|[^\]{}])*)\]`;
+
+/** A theorem or proof title without the braces that only protected it: [{...}]. */
+function environmentTitle(value) {
+  const title = String(value || '').trim();
+  const group = title.startsWith('{') ? balancedGroup(title, 0) : null;
+  return group && group.end === title.length ? group.content.trim() : title;
+}
+
 function sourceProofEvents(source, units = [], declarationSource = source) {
   const value = String(source || '');
   const literalRanges = literalSourceRanges(value);
@@ -1707,7 +1954,10 @@ function sourceProofEvents(source, units = [], declarationSource = source) {
   }
   const proofNames = [...proofEnvironments].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   if (!proofNames) return [];
-  const pattern = new RegExp(`\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
+  const pattern = new RegExp(
+    `\\\\begin\\{(${proofNames})\\}(?:${environmentOption})?([\\s\\S]*?)\\\\end\\{\\1\\}`,
+    'g',
+  );
   const events = [];
   for (const match of value.matchAll(pattern)) {
     const start = match.index ?? 0;
@@ -2564,10 +2814,10 @@ function extractSourceUnits(source) {
     .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
     .join('|');
   if (!names) return [];
-  const unitPattern = new RegExp(`\\\\begin\\{(${names})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
+  const unitPattern = new RegExp(`\\\\begin\\{(${names})\\}(?:${environmentOption})?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
   const proofNames = [...proofEnvironments].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const embeddedProofPattern = new RegExp(
-    `\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`,
+    `\\\\begin\\{(${proofNames})\\}(?:${environmentOption})?([\\s\\S]*?)\\\\end\\{\\1\\}`,
     'g',
   );
   const { theoremNumbers } = latexNumbering(originalSource, normalizedSource, declarations);
@@ -2584,7 +2834,7 @@ function extractSourceUnits(source) {
       kind: environments.get(match[1]),
       displayName: displayNames.get(match[1]) || readableLatex(match[1]),
       printedNumber: theoremNumbers.get(start) ?? '',
-      title: match[2] || '',
+      title: environmentTitle(match[2]),
       texLabel: label.key,
       texLabelType: label.type,
       start,
@@ -2635,7 +2885,7 @@ function extractSourceUnits(source) {
     'gi',
   );
   const proofPattern = new RegExp(
-    `\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`,
+    `\\\\begin\\{(${proofNames})\\}(?:${environmentOption})?([\\s\\S]*?)\\\\end\\{\\1\\}`,
     'g',
   );
   for (const proof of normalizedSource.matchAll(proofPattern)) {
@@ -2732,7 +2982,7 @@ function joinReferences(parts) {
  */
 function referenceFormatter(source, declarations) {
   const text = String(source || '');
-  const cleveref = /\\usepackage\s*(?:\[([^\]]*)\])?\s*\{[^}]*\bcleveref\b[^}]*\}/.exec(text);
+  const cleveref = /\\(?:usepackage|RequirePackage)\s*(?:\[([^\]]*)\])?\s*\{[^}]*\bcleveref\b[^}]*\}/.exec(text);
   const capitalise = /\bcapitali[sz]e\b/.test(cleveref?.[1] || '');
   const noabbrev = /\bnoabbrev\b/.test(cleveref?.[1] || '');
   const crefNames = new Map();
@@ -3750,6 +4000,100 @@ async function enrichAuditFromTex(rawText, primarySource) {
   return JSON.stringify(audit);
 }
 
+/** The groups of every active \name[optional]{...} in `text`, in order. */
+function commandArguments(text, name) {
+  const literalRanges = literalSourceRanges(text);
+  const groups = [];
+  for (const match of text.matchAll(new RegExp(String.raw`\\${name}(?![A-Za-z@])\s*(?:\[[^\]]*\]\s*)?\{`, 'g'))) {
+    if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
+    const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
+    if (group) groups.push(group.content);
+  }
+  return groups;
+}
+
+/** Removes every \name{...} (with an optional [..]) from `text`, braces included. */
+function withoutCommands(text, names) {
+  let value = text;
+  for (const name of names)
+    for (const content of commandArguments(value, name))
+      value = value
+        .replace(new RegExp(String.raw`\\${name}(?![A-Za-z@])\s*(?:\[[^\]]*\]\s*)?\{`), '\u0002')
+        .replace(`\u0002${content}}`, '');
+  return value;
+}
+
+// Front-matter commands that annotate names and titles rather than being part of them.
+const frontMatterNotes = [
+  'thanks',
+  'footnote',
+  'inst',
+  'orcid',
+  'orcidlink',
+  'email',
+  'address',
+  'curraddr',
+  'urladdr',
+  'affiliation',
+  'affil',
+  'textsuperscript',
+  'IEEEauthorrefmark',
+  'IEEEauthorblockA',
+  'ead',
+  'fnref',
+  'corref',
+];
+
+/** Plain reader text for a title or name: notes, line breaks, and markers removed. */
+function frontMatterText(value) {
+  return readableLatex(withoutCommands(value, frontMatterNotes).replace(/\\\\(?:\[[^\]]*\])?|\\newline\b/g, ' '))
+    .replace(
+      /\[\[cite:([^|\]]+)(?:\|([^\]]*))?\]\]/g,
+      (_match, key, locator) => `[${key}${locator ? `, ${locator}` : ''}]`,
+    )
+    .replace(/\\footnotemark(?:\[[^\]]*\])?/g, '')
+    .replace(/[{}]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The title, authors, and abstract a paper's TeX declares, as reader text; '' for
+ * any it lacks. Authors are listed as the arXiv does: "A, B, C". Fills in the
+ * record of a paper uploaded from a local source.
+ */
+function texFrontMatter(source) {
+  const text = expandAuthorMacros(stripLatexComments(String(source || '')));
+  const title = frontMatterText(commandArguments(text, 'title')[0] ?? '');
+  const names = [];
+  for (const group of commandArguments(text, 'author')) {
+    // IEEEtran puts each name in \IEEEauthorblockN and its affiliation beside it.
+    const blocks = commandArguments(group, 'IEEEauthorblockN');
+    for (const block of blocks.length ? blocks : [group])
+      for (const person of block.split(/\\(?:and|AND|And)(?![A-Za-z@])/)) {
+        // Lines after \\ hold an affiliation or address, not another name.
+        const line = person.split(/\\\\/)[0];
+        for (const name of frontMatterText(line)
+          // Affiliation markers: $^{1}$, ^{a,b}, *, daggers, and trailing numbers.
+          .replace(/\$\^\{?[^$]*\}?\$|\^\{[^}]*\}/g, '')
+          .split(/\s*,\s*|\s+and\s+/))
+          if (name.replace(/[\s\d*†‡§¶,.$^]/g, '')) names.push(name.replace(/^[\s,]+|[\s,*†‡\d]+$/g, ''));
+      }
+  }
+  const literalRanges = literalSourceRanges(text);
+  const environment = [...text.matchAll(/\\begin\{abstract\}([\s\S]*?)\\end\{abstract\}/g)].find(
+    (match) => !insideSourceRanges(match.index ?? 0, literalRanges) && !isLatexCommentedAt(text, match.index ?? 0),
+  );
+  const abstractSource = environment?.[1] ?? commandArguments(text, 'abstract')[0] ?? '';
+  const abstract = readableLatex(withoutCommands(abstractSource, ['thanks', 'footnote', 'label']))
+    .replace(
+      /\[\[cite:([^|\]]+)(?:\|([^\]]*))?\]\]/g,
+      (_match, key, locator) => `[${key}${locator ? `, ${locator}` : ''}]`,
+    )
+    .trim();
+  return { title, authors: [...new Set(names)].join(', '), abstract };
+}
+
 export {
   buildSourceBlocks,
   decodeSourceBuffer,
@@ -3762,4 +4106,5 @@ export {
   readableLatex,
   resolveLatexReferences,
   sameExpandedTexSource,
+  texFrontMatter,
 };

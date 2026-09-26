@@ -201,6 +201,33 @@ try {
   assert.equal(direct.primarySource.kind, 'tex');
   assert.equal(direct.primarySource.fileCount, 1);
 
+  // An upload knows only its file name; the TeX front matter names the paper.
+  const frontMatterTex = String.raw`\documentclass{article}
+\title{The envelope property,\\ with an appendix\thanks{Supported by a grant.}}
+\author{Yanbo Fang, Jiyuan Han and Mingchen Xia}
+\begin{document}\maketitle
+\begin{abstract}We prove the envelope conjecture for $X$ \cite{BJ22}.\end{abstract}
+\section{Introduction} Text.
+\end{document}`;
+  const placeholder = {
+    ...paper('local-front-matter', 'bj envelope'),
+    authors: 'Unknown authors',
+    abstract: '',
+  };
+  const named = await post(url, '/vault/source-upload', {
+    paper: placeholder,
+    upload: { fileName: 'bj_envelope.tex', dataBase64: Buffer.from(frontMatterTex).toString('base64') },
+  });
+  assert.equal(named.paper.title, 'The envelope property, with an appendix');
+  assert.equal(named.paper.authors, 'Yanbo Fang, Jiyuan Han, Mingchen Xia');
+  assert.equal(named.paper.abstract, 'We prove the envelope conjecture for $X$ [BJ22].');
+  const typedTitle = await post(url, '/vault/source-upload', {
+    paper: { ...placeholder, arxivId: 'local-front-matter-titled', title: 'My reading copy' },
+    upload: { fileName: 'bj_envelope.tex', dataBase64: Buffer.from(frontMatterTex).toString('base64') },
+  });
+  assert.equal(typedTitle.paper.title, 'My reading copy', 'A title the reader typed must be kept.');
+  assert.equal(typedTitle.paper.authors, 'Yanbo Fang, Jiyuan Han, Mingchen Xia');
+
   const invalidPdf = await jsonRequest(url, '/vault/source-upload', {
     paper: paper('local-invalid-pdf', 'Invalid PDF upload'),
     upload: { fileName: 'paper.pdf', dataBase64: Buffer.from('not actually a PDF').toString('base64') },

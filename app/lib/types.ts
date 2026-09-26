@@ -37,6 +37,8 @@ export type ReadingMark = '' | 'understood' | 'question' | 'error';
 export type Anchor = { label: string; page: number | null; confidence: 'verified' | 'approximate' | 'unverified' };
 export type CitationReference = {
   key: string;
+  /** The label the paper prints, when its bibliography sets one: a biblatex shorthand or \bibitem[label]. */
+  label?: string;
   locator: string;
   statement: string;
   definitions?: { notation: string; definition: string; source: string }[];

@@ -15,6 +15,7 @@ import {
   readableLatex,
   resolveLatexReferences,
   sameExpandedTexSource,
+  texFrontMatter,
 } from './tex-source.mjs';
 import { enrichAuditFromTexOffThread } from './tex-worker.mjs';
 
@@ -1304,6 +1305,131 @@ assert.equal(
   ar5ivFigureUrl('local-upload', 'famcurv.eps'),
   '',
   'Uploaded papers must never trigger a guessed remote asset URL.',
+);
+
+// A package shipped with the source declares theorems, counters, and macros; its
+// print-only code (a redefined \section, @-commands, notes after \endinput) is ignored.
+{
+  const packageRoot = await mkdtemp(path.join(tmpdir(), 'arxivpecker-package-'));
+  try {
+    await writeFile(
+      path.join(packageRoot, 'main.tex'),
+      String.raw`\documentclass{article}
+\usepackage{amsmath,notes}
+\newtheorem{maincorollary}[maintheorem]{Corollary}
+\begin{document}
+\section{Introduction}
+\begin{maintheorem}\label{main}Every $u\in\PSH$ is usc.\end{maintheorem}
+\begin{maincorollary}\label{cor}It follows.\end{maincorollary}
+\begin{theorem}[{$=$ \cref{main}}]\label{restated}Again.\end{theorem}
+By \cref{main,cor} and \cref{restated}.
+\end{document}`,
+    );
+    await writeFile(
+      path.join(packageRoot, 'notes.sty'),
+      String.raw`\ProvidesPackage{notes}
+\RequirePackage[nameinlink,capitalize]{cleveref}
+\RequirePackage{inner}
+\newtheorem{maintheorem}{Theorem}[part]
+\renewcommand\themaintheorem{\Alph{maintheorem}}
+\newcommand{\PSH}{\mathrm{PSH}}
+\renewcommand\section{\@startsection{section}{1}{\z@}{-3ex}{2ex}{\bfseries}}
+\def\@internal#1{#1}
+\endinput
+\newcommand{\PSH}{\mathrm{WRONG}}`,
+    );
+    await writeFile(path.join(packageRoot, 'inner.sty'), String.raw`\newtheorem{theorem}{Theorem}[section]`);
+    const expanded = await readExpandedTex(path.join(packageRoot, 'main.tex'), packageRoot);
+    assert.doesNotMatch(
+      expanded,
+      /WRONG|@startsection|@internal/,
+      'Only reader-relevant package declarations are read.',
+    );
+    const packaged = resolveLatexReferences(expanded, extractSourceUnits(expanded));
+    const units = extractSourceUnits(packaged);
+    assert.deepEqual(
+      units.map((unit) => [unit.environment, unit.printedNumber, unit.title]),
+      [
+        ['maintheorem', 'A', ''],
+        ['maincorollary', 'B', ''],
+        ['theorem', '1.1', '$=$ Theorem A'],
+      ],
+      'Theorems from a local package are numbered as it declares them, and a braced title loses only its braces.',
+    );
+    assert.match(units[0].statement, /\\mathrm\{PSH\}|\\PSH/);
+    assert.match(packaged, /By Theorem A and Corollary B and Theorem 1\.1\./, "The package's cleveref options apply.");
+  } finally {
+    await rm(packageRoot, { recursive: true, force: true });
+  }
+}
+
+// Text-mode TeX with a character of its own reads as that character; mathematics is untouched.
+assert.equal(
+  readableLatex(String.raw`See \S 1, \S\S 4--5 and \cite[\S5.2]{BJ22}; resp.\ in $\S 3$.`),
+  'See §1, §§4--5 and [[cite:BJ22|§5.2]]; resp. in $\\S 3$.',
+);
+assert.equal(
+  readableLatex(
+    String.raw`\begin{enumerate}\item \textup{\cite[Lemma~1.6]{BJ}} holds \textup(always\textup).\end{enumerate}`,
+  ),
+  '• [[cite:BJ|Lemma\u00a01.6]] holds (always).',
+  'An unwrapped \\textup{\\cite...} after \\item is a citation, not the item label.',
+);
+assert.equal(readableLatex(String.raw`This completes the proof.\qed`), 'This completes the proof.$\\qed$');
+assert.equal(readableLatex(String.raw`\appendix`), '', '\\appendix is structure, not text.');
+assert.equal(
+  readableLatex(
+    String.raw`T\o nnesen, Ruadha\'{\i}, topolog\'\i a, B{\l}ocki, \AA hag, \guillemotleft x\guillemotright`,
+  ),
+  'Tønnesen, Ruadhaí, topología, B{ł}ocki, Åhag, «x»',
+);
+
+// BibTeX accents are decoded before their braces go; a shorthand is the printed label.
+{
+  const bibRoot = await mkdtemp(path.join(tmpdir(), 'arxivpecker-bib-'));
+  try {
+    await writeFile(
+      path.join(bibRoot, 'main.tex'),
+      String.raw`\documentclass{article}\begin{document}\cite{Stacks,JM12}\bibliography{refs}\end{document}`,
+    );
+    await writeFile(
+      path.join(bibRoot, 'refs.bib'),
+      String.raw`@misc{Stacks, author = {{The Stacks Project Authors}}, title = {Stacks Project},
+  howpublished = {\url{https://stacks.math.columbia.edu}}, year = {2020}, shorthand = {Stacks}}
+@article{JM12, author = {Jonsson, Mattias and Musta\c{t}\u{a}, Mircea and W{\l}odarczyk, J.},
+  title = {Fine topology, \v{S}ilov boundary, and {$(dd^c)^n$}}, year = {2012}}`,
+    );
+    const source = await readExpandedTex(path.join(bibRoot, 'main.tex'), bibRoot);
+    const references = await extractBibliographyTree(source, bibRoot, path.join(bibRoot, 'main.tex'));
+    assert.equal(references.get('Stacks').label, 'Stacks');
+    assert.equal(references.get('Stacks').url, 'https://stacks.math.columbia.edu');
+    assert.equal(references.get('JM12').authors, 'Jonsson, Mattias · Mustaţă, Mircea · Włodarczyk, J.');
+    assert.equal(references.get('JM12').title, 'Fine topology, Šilov boundary, and $(dd^c)^n$');
+    assert.equal(references.get('JM12').label, undefined);
+  } finally {
+    await rm(bibRoot, { recursive: true, force: true });
+  }
+}
+assert.equal(
+  extractBibliography(
+    String.raw`\begin{thebibliography}{9}\bibitem[BJ22]{bj}S. Boucksom.\bibitem[{Smith(2020)}]{sm}J. Smith.\end{thebibliography}`,
+  ).get('bj').label,
+  'BJ22',
+  '\\bibitem[BJ22] prints its label; a natbib label is not one.',
+);
+
+// A paper's own title, authors, and abstract.
+assert.deepEqual(
+  texFrontMatter(String.raw`\documentclass{amsart}
+\title[Short]{A long title\\ on two lines\thanks{Funded.}}
+\author{Alice B. Smith}\address{Univ}\email{a@b.c}
+\author{Carl D\'iaz$^{1}$}
+\begin{document}\begin{abstract}We prove $x=1$ \cite{K}.\end{abstract}\maketitle\end{document}`),
+  { title: 'A long title on two lines', authors: 'Alice B. Smith, Carl Díaz', abstract: 'We prove $x=1$ [K].' },
+);
+assert.equal(
+  texFrontMatter(String.raw`\author{Ann One\inst{1} \and Bob Two\\ University of X}`).authors,
+  'Ann One, Bob Two',
 );
 
 console.log(

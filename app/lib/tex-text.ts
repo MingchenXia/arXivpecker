@@ -182,18 +182,70 @@ function decodeTeXText(value: string) {
     i: 'ı',
     j: 'ȷ',
   };
+  // The letter under an accent may be the dotless \\i or \\j (\\'{\\i} is í), which
+  // swallows one following space as a control word does.
+  const base = String.raw`(?:\\([ij])(?![A-Za-z@])[ \t]?|([A-Za-z]))`;
+  const accented = (...match: string[]) =>
+    `${match.slice(2, 6).find(Boolean)}${accents[match[1]] ?? ''}`.normalize('NFC');
+  return (
+    value
+      .replace(new RegExp(String.raw`\{\\(['\`^"~=.uvHckrbd])\s*(?:\{\s*${base}\s*\}|${base})\}`, 'g'), accented)
+      .replace(new RegExp(String.raw`\\(['\`^"~=.])\s*(?:\{\s*${base}\s*\}|${base})`, 'g'), accented)
+      // \\u, \\c, \\v, ... also begin control words (\\upsilon, \\cdot, \\vec): their
+      // letter must be braced or follow a space.
+      .replace(new RegExp(String.raw`\\([uvHckrbd])(?:\s*\{\s*${base}\s*\}|\s+${base})`, 'g'), accented)
+      .replace(/\{\\(ae|AE|oe|OE|aa|AA|o|O|l|L|ss|i|j)\}/g, (_match, name) => specials[name] ?? _match)
+      // A control word swallows one following space, as in TeX: T\\o nnesen is Tønnesen.
+      .replace(
+        /\\(ae|AE|oe|OE|aa|AA|o|O|l|L|ss)(?![A-Za-z@])(?:\{\}|[ \t])?/g,
+        (_match, name) => specials[name] ?? _match,
+      )
+  );
+}
+
+const textSymbols: Record<string, string> = {
+  S: '§',
+  P: '¶',
+  textsection: '§',
+  textparagraph: '¶',
+  dag: '†',
+  ddag: '‡',
+  copyright: '©',
+  pounds: '£',
+  guillemotleft: '«',
+  guillemotright: '»',
+  guillemetleft: '«',
+  guillemetright: '»',
+  textendash: '–',
+  textemdash: '—',
+  textellipsis: '…',
+};
+const textSymbolPattern = new RegExp(
+  String.raw`\\(${Object.keys(textSymbols).join('|')})(?![A-Za-z@])(?:\{\}|[ \t])?`,
+  'g',
+);
+
+/**
+ * Text-mode TeX with no place in math, outside formulas: \\S 2 is §2, a bare \\qed
+ * the end-of-proof mark, and control spaces, font switches, and \\appendix go.
+ */
+function decodeTextOnlyCommands(value: string) {
   return value
-    .replace(/\{\\(['`^"~=\.uvHckrbd])\s*\{?([A-Za-z])\}?\}/g, (_match, accent, letter) =>
-      `${letter}${accents[accent] ?? ''}`.normalize('NFC'),
+    .split(/(\$\$[\s\S]*?\$\$|\$[^$]*?\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))/g)
+    .map((part, index) =>
+      index % 2
+        ? part
+        : part
+            .replace(textSymbolPattern, (_match, name: string) => textSymbols[name])
+            .replace(/\\qed(?:symbol)?(?![A-Za-z@])/g, '$\\qed$')
+            .replace(
+              /\\(?:appendix|upshape|normalfont|itshape|slshape|scshape|bfseries|mdseries|textup|textnormal)(?![A-Za-z@])[ \t]?/g,
+              '',
+            )
+            .replace(/(?<!\\)\\ /g, ' ')
+            .replace(/(?<!\\)\\[@/-]/g, ''),
     )
-    .replace(/\\(['`^"~=\.])\s*\{?([A-Za-z])\}?/g, (_match, accent, letter) =>
-      `${letter}${accents[accent] ?? ''}`.normalize('NFC'),
-    )
-    .replace(/\\([uvHckrbd])\s*\{([A-Za-z])\}/g, (_match, accent, letter) =>
-      `${letter}${accents[accent] ?? ''}`.normalize('NFC'),
-    )
-    .replace(/\{\\(ae|AE|oe|OE|aa|AA|o|O|l|L|ss|i|j)\}/g, (_match, name) => specials[name] ?? _match)
-    .replace(/\\(ae|AE|oe|OE|aa|AA|o|O|l|L|ss)\b/g, (_match, name) => specials[name] ?? _match);
+    .join('');
 }
 
 function unwrapTextColorCommands(source: string) {
@@ -284,17 +336,18 @@ export function cleanTeXProse(value: string) {
     .replace(/\\bibitem(?:\[[^\]]*\])?\{[^{}]*\}\s*/g, '')
     .replace(/\\newblock\s*/g, ' ')
     .replace(/\{\\(?:em|it|bf)\s+([^{}]*)\}/g, '$1')
-    .replace(/\\(?:emph|textit|textbf|texttt|textsc|textrm|textsf)\{([^{}]*)\}/g, '$1')
+    .replace(/\\(?:emph|textit|textbf|texttt|textsc|textrm|textsf|textup|textnormal|textsl|textmd)\{([^{}]*)\}/g, '$1')
     .replace(/\\begin\{tcolorbox\}(?:\[[^\]]*\])?|\\end\{tcolorbox\}/g, '')
-    .replace(/\\(?:emph|textit|textbf|texttt|textsc|textrm|textsf)\{([^{}]*)\}/g, '$1')
-    .replace(/\\(?:emph|textit|textbf|texttt|textsc|textrm|textsf)\{([^{}]*)\}/g, '$1')
+    .replace(/\\(?:emph|textit|textbf|texttt|textsc|textrm|textsf|textup|textnormal|textsl|textmd)\{([^{}]*)\}/g, '$1')
+    .replace(/\\(?:emph|textit|textbf|texttt|textsc|textrm|textsf|textup|textnormal|textsl|textmd)\{([^{}]*)\}/g, '$1')
     .replace(/\\(?:em|it|bf)\b\s*/g, '')
     .replace(/\\(?:noindent|quad|qquad)\b/g, ' ')
     .replace(/\\hfil(?:l)?\b/g, '')
     .replace(/\\label\{[^{}]*\}/g, '')
     .replace(/\\(LaTeX|TeX)\b\\?/g, '$1')
     .replace(/\\\$/g, '\uE000')
-    .replace(/\\([%&#_])/g, '$1');
+    .replace(/\\([%&#_])/g, '$1')
+    .replace(/[\s\S]*/, decodeTextOnlyCommands);
 }
 export function cleanBibliographicText(value: string) {
   const parts = cleanTeXProse(value).split(/(\$\$[\s\S]*?\$\$|\$[^$]*?\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\))/g);
@@ -336,6 +389,7 @@ export function citationTitle(citation: CitationReference | undefined, key: stri
 }
 
 export function citationAlphaLabel(citation: CitationReference | undefined, key: string) {
+  if (citation?.label) return citation.label;
   const authorText = citation?.authors || '';
   const people = authorText
     .split(/\s+(?:and|·)\s+/i)
