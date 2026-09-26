@@ -9,7 +9,8 @@ import { cloudStatus, createCloudShare } from './cloud-share.mjs';
 import { CodexAppServer } from './codex-app-server.mjs';
 import { extractLatexDocument } from './codex-prompts.mjs';
 import { PaperVault, relativePathEscapes } from './paper-vault.mjs';
-import { decodeSourceBuffer, enrichAuditFromTex, sameExpandedTexSource } from './tex-source.mjs';
+import { decodeSourceBuffer, sameExpandedTexSource } from './tex-source.mjs';
+import { enrichAuditFromTexOffThread } from './tex-worker.mjs';
 
 const PORT = Number(process.env.PROOFROOM_CODEX_PORT || 4318);
 const HOST = '127.0.0.1';
@@ -503,7 +504,7 @@ async function analyzePaperSource(
   });
   const text =
     primarySource.kind === 'tex' || primarySource.kind === 'ai-tex'
-      ? await enrichAuditFromTex(analyzed.text, primarySource)
+      ? await enrichAuditFromTexOffThread(analyzed.text, primarySource)
       : analyzed.text;
   return {
     ...analyzed,

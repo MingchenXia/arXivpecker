@@ -15,6 +15,7 @@ import {
   resolveLatexReferences,
   sameExpandedTexSource,
 } from './tex-source.mjs';
+import { enrichAuditFromTexOffThread } from './tex-worker.mjs';
 
 const source = String.raw`\documentclass{article}
 \usepackage{amsmath}
@@ -255,6 +256,27 @@ try {
       ['Theorem 1.3', 'Main theorem statement.', ''],
     ],
     'Results the AI audit skipped must be appended as source nodes.',
+  );
+
+  // The bridge enriches on a worker thread; it must return exactly the
+  // in-thread result, propagate its errors, and fall back when no worker starts.
+  const workerAudit = JSON.stringify({ nodes: [{ id: 'ai-theorem', kind: 'theorem', label: 'Theorem 1.3' }] });
+  const workerSource = { kind: 'tex', entryFile: path.join(auditRoot, 'main.tex'), sourceDirectory: auditRoot };
+  const inThread = await enrichAuditFromTex(workerAudit, workerSource);
+  assert.equal(await enrichAuditFromTexOffThread(workerAudit, workerSource), inThread);
+  const missingSource = { ...workerSource, entryFile: path.join(auditRoot, 'missing.tex') };
+  const inThreadError = await enrichAuditFromTex(workerAudit, missingSource).then(
+    () => assert.fail('A missing entry file must reject.'),
+    (error) => error,
+  );
+  await assert.rejects(enrichAuditFromTexOffThread(workerAudit, missingSource), {
+    message: inThreadError.message,
+    code: inThreadError.code,
+  });
+  assert.equal(
+    await enrichAuditFromTexOffThread(workerAudit, { ...workerSource, onProgress() {} }),
+    inThread,
+    'A source record that cannot cross to a worker must be enriched on this thread.',
   );
 
   // A symbolic link inside the source tree must not pull in a file outside it.
