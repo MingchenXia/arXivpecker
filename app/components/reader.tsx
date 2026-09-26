@@ -25,6 +25,8 @@ import {
   writeStorage,
 } from '../lib/app';
 import { bridgePost } from '../lib/bridge-client';
+import { arxivKey, citedArxivPapers } from '../lib/cited-papers';
+import type { CitedArxivPaper } from '../lib/cited-papers';
 import {
   applyWorkingPatches,
   buildPaperExport,
@@ -78,6 +80,8 @@ type ReaderProps = {
   answers: Record<string, string>;
   saveAnswer: (key: string, value: string) => void;
   isUnderstood: (unit: GraphNode) => boolean;
+  libraryByArxivId: Record<string, string>;
+  addCitedPapers: (arxivIds: string[]) => Promise<void>;
   savePaperMessages: (messages: PaperChatMessage[]) => void;
   patches: WorkingPatch[];
   savePatches: (patches: WorkingPatch[]) => Promise<void>;
@@ -114,6 +118,8 @@ export function Reader({
   answers,
   saveAnswer,
   isUnderstood,
+  libraryByArxivId,
+  addCitedPapers,
   savePaperMessages,
   patches,
   savePatches,
@@ -738,6 +744,9 @@ export function Reader({
               attachCitation={attachCitationSource}
               expandProofStep={expandProofStep}
               expandProofRequest={expandProofRequest}
+              libraryByArxivId={libraryByArxivId}
+              addCitedPapers={addCitedPapers}
+              openPaper={(paperId) => openUnit(paperId, '')}
             />
           )}
         </main>
@@ -1010,6 +1019,10 @@ export function Reader({
           setTarget={setReferenceTarget}
           attach={attachCitationSource}
           close={() => setReferenceOpen(false)}
+          cited={audit ? citedArxivPapers(audit) : []}
+          libraryByArxivId={libraryByArxivId}
+          addCitedPapers={addCitedPapers}
+          openPaper={(paperId) => openUnit(paperId, '')}
         />
       )}
       {markupOpen && <AnnotationToolbar close={() => setMarkupOpen(false)} />}
@@ -1540,6 +1553,10 @@ function ReferenceReaderPanel({
   setTarget,
   attach,
   close,
+  cited,
+  libraryByArxivId,
+  addCitedPapers,
+  openPaper,
 }: {
   paper: Paper;
   graph: Graph;
@@ -1547,7 +1564,22 @@ function ReferenceReaderPanel({
   setTarget: (value: ReferenceTarget | null) => void;
   attach: (citation: CitationReference, file: File) => Promise<string>;
   close: () => void;
+  cited: CitedArxivPaper[];
+  libraryByArxivId: Record<string, string>;
+  addCitedPapers: (arxivIds: string[]) => Promise<void>;
+  openPaper: (paperId: string) => void;
 }) {
+  const [adding, setAdding] = useState(false);
+  const missing = cited.filter((item) => !libraryByArxivId[arxivKey(item.arxivId)]);
+  async function add(arxivIds: string[]) {
+    setAdding(true);
+    try {
+      await addCitedPapers(arxivIds);
+    } finally {
+      setAdding(false);
+    }
+  }
+  const targetPaperId = target?.arxivId ? libraryByArxivId[arxivKey(target.arxivId)] : undefined;
   const [value, setValue] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('');
@@ -1633,6 +1665,15 @@ function ReferenceReaderPanel({
           {target?.title && <span>{target.title}</span>}
         </div>
         <div>
+          {target?.arxivId &&
+            target.paperId !== paper.id &&
+            (targetPaperId ? (
+              <button onClick={() => openPaper(targetPaperId)}>Open in reader</button>
+            ) : (
+              <button onClick={() => void add([target.arxivId ?? ''])} disabled={adding}>
+                {adding ? 'Adding…' : 'Add to library'}
+              </button>
+            ))}
           {target?.url && (
             <a href={target.url} target="_blank" rel="noreferrer">
               Browser ↗
@@ -1693,6 +1734,55 @@ function ReferenceReaderPanel({
         </label>
         {uploadStatus && <p className="reference-upload-status">{uploadStatus}</p>}
       </div>
+      {cited.length > 0 && (
+        <details className="reference-cited">
+          <summary>
+            Cited on arXiv · {cited.length}
+            {missing.length > 0 && (
+              <button
+                onClick={(event) => {
+                  event.preventDefault();
+                  void add(missing.map((item) => item.arxivId));
+                }}
+                disabled={adding}
+              >
+                {adding ? 'Adding…' : `Add ${missing.length} to library`}
+              </button>
+            )}
+          </summary>
+          <ul>
+            {cited.map((item) => {
+              const paperId = libraryByArxivId[arxivKey(item.arxivId)];
+              return (
+                <li key={item.arxivId}>
+                  <button
+                    className="reference-cited-title"
+                    onClick={() =>
+                      setTarget({
+                        title: item.title,
+                        arxivId: item.arxivId,
+                        url: `https://arxiv.org/pdf/${item.arxivId}`,
+                      })
+                    }
+                  >
+                    <small>
+                      [{item.key}] arXiv:{item.arxivId}
+                    </small>
+                    <MathText value={item.title} />
+                  </button>
+                  {paperId ? (
+                    <button onClick={() => openPaper(paperId)}>Open</button>
+                  ) : (
+                    <button onClick={() => void add([item.arxivId])} disabled={adding}>
+                      Add
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      )}
       {target?.url ? (
         <iframe title={`Reference: ${target.title}`} src={target.url} />
       ) : (

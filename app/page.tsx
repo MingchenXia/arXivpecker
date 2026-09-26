@@ -39,6 +39,7 @@ import { bridgeGet, bridgePost, bridgeUrl, readerApiGet, saveReaderState } from 
 import { changedReaderPapers } from './lib/reader-state';
 import type { ReaderStateSlices } from './lib/reader-state';
 import { understoodUnits } from './lib/study';
+import { arxivKey } from './lib/cited-papers';
 import {
   arxivBaseId,
   arxivVersionNumber,
@@ -118,6 +119,23 @@ export default function Home() {
     [activePaperId, notes],
   );
   const isUnitUnderstood = useMemo(() => understoodUnits(marks, audits), [marks, audits]);
+  const addingCitedRef = useRef(new Set<string>());
+  // Keyed by content, so the memoized paper view re-renders only when the set of
+  // arXiv papers in the library changes, not whenever the list is replaced.
+  const libraryArxivEntries = papers
+    .filter((item) => !item.arxivId.startsWith('local-'))
+    .map((item) => `${arxivKey(item.arxivId)} ${item.id}`)
+    .join('\n');
+  const libraryByArxivId = useMemo(
+    () =>
+      Object.fromEntries(
+        libraryArxivEntries
+          .split('\n')
+          .filter(Boolean)
+          .map((entry) => entry.split(' ')),
+      ) as Record<string, string>,
+    [libraryArxivEntries],
+  );
   const readerState = useMemo<ReaderStateSlices>(
     () => ({ notes, nodeNotes, nodeAnswers, expanded, marks }),
     [notes, nodeNotes, nodeAnswers, expanded, marks],
@@ -766,6 +784,39 @@ export default function Home() {
       throw error;
     }
   }
+  /** Adds cited arXiv papers to the library without auditing them or leaving the current paper. */
+  async function addCitedPapers(arxivIds: string[]) {
+    const wanted = [...new Set(arxivIds.map(arxivKey))].filter(
+      (id) => id && !libraryByArxivId[id] && !addingCitedRef.current.has(id),
+    );
+    if (!wanted.length) return;
+    for (const id of wanted) addingCitedRef.current.add(id);
+    const processId = `cited-import:${wanted.join(',')}`;
+    const label = wanted.length === 1 ? `Adding arXiv:${wanted[0]}` : `Adding ${wanted.length} cited papers`;
+    const failed: string[] = [];
+    for (const [index, id] of wanted.entries()) {
+      reportReaderProcess({ id: processId, label, detail: `${index + 1} of ${wanted.length}`, status: 'running' });
+      try {
+        const data = await readerApiGet(`/api/arxiv?id=${encodeURIComponent(id)}`, 'Paper not found on arXiv.');
+        if (!data.papers?.[0]) throw new Error(readString(data.error, 'Paper not found on arXiv.'));
+        await savePaper({ ...data.papers[0], state: 'To read' } as Paper);
+      } catch {
+        failed.push(id);
+      }
+    }
+    for (const id of wanted) addingCitedRef.current.delete(id);
+    const added = wanted.length - failed.length;
+    const summary = `${added} cited paper${added === 1 ? '' : 's'} added to the library${
+      failed.length ? `; not found or unreachable: ${failed.map((id) => `arXiv:${id}`).join(', ')}` : ''
+    }.`;
+    reportReaderProcess({
+      id: processId,
+      label: added ? 'Cited papers added' : 'Cited papers not added',
+      detail: summary,
+      status: failed.length === wanted.length ? 'error' : 'complete',
+    });
+    notify(`${summary}${added ? ' Audit them to link citations to their results in the graph.' : ''}`);
+  }
   async function importLocalSource(
     file: File,
     suppliedTitle: string,
@@ -1187,6 +1238,8 @@ export default function Home() {
               }))
             }
             isUnderstood={isUnitUnderstood}
+            libraryByArxivId={libraryByArxivId}
+            addCitedPapers={addCitedPapers}
             savePaperMessages={(messages) =>
               paper &&
               setNodeAnswers((current) => ({

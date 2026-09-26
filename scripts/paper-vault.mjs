@@ -2,6 +2,7 @@ import { constants as fsConstants } from 'node:fs';
 import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { citationEdges } from './citation-links.mjs';
 
 const VAULT_VERSION = 1;
 
@@ -981,6 +982,13 @@ export class PaperVault {
           });
       }
     }
+    const citationSources = records.map((record) => ({
+      id: record.paper.id,
+      arxivId: record.paper.arxivId,
+      title: record.paper.title,
+      nodes: workingNodes((record.audit?.nodes ?? []).filter(isObject), record.patches ?? []),
+    }));
+    for (const edge of citationEdges(citationSources)) if (known.has(edge.from) && known.has(edge.to)) edges.push(edge);
     for (const link of index.links) {
       const from = `${link.from.paperId}::${link.from.nodeId}`;
       const to = `${link.to.paperId}::${link.to.nodeId}`;

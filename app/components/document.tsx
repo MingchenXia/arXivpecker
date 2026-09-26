@@ -16,6 +16,7 @@ import { createPortal } from 'react-dom';
 import { AIText, Latex, MathText } from './math';
 import { makeId, reportReaderProcess } from '../lib/app';
 import { bridgeUrl } from '../lib/bridge-client';
+import { arxivKey } from '../lib/cited-papers';
 import {
   applyWorkingPatches,
   displayUnitLabel,
@@ -142,6 +143,9 @@ type InteractiveDocumentProps = {
   attachCitation: (citation: CitationReference, file: File) => Promise<string>;
   expandProofStep: (node: AuditNode, step: string, index: number) => Promise<string>;
   expandProofRequest: (node: AuditNode, request: string) => Promise<string>;
+  libraryByArxivId: Record<string, string>;
+  addCitedPapers: (arxivIds: string[]) => Promise<void>;
+  openPaper: (paperId: string) => void;
 };
 
 function InteractiveDocumentComponent({
@@ -165,6 +169,9 @@ function InteractiveDocumentComponent({
   attachCitation,
   expandProofStep,
   expandProofRequest,
+  libraryByArxivId,
+  addCitedPapers,
+  openPaper,
 }: InteractiveDocumentProps) {
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const documentRootRef = useRef<HTMLElement>(null);
@@ -605,6 +612,8 @@ function InteractiveDocumentComponent({
           }
           if (block.kind === 'bibliography') {
             const unit = sourceBlockAsNode(block, patches);
+            const citedArxivId = block.citations?.[0]?.arxivId ?? '';
+            const citedPaperId = citedArxivId ? libraryByArxivId[arxivKey(citedArxivId)] : '';
             return (
               <section
                 key={block.id}
@@ -614,6 +623,18 @@ function InteractiveDocumentComponent({
               >
                 <span className="source-bibliography-key">[{block.title}]</span>
                 <MathText value={unit.statement} block lazy />
+                {citedArxivId && (
+                  <button
+                    className="source-bibliography-library"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (citedPaperId) openPaper(citedPaperId);
+                      else void addCitedPapers([citedArxivId]);
+                    }}
+                  >
+                    {citedPaperId ? 'Open in library' : 'Add to library'}
+                  </button>
+                )}
               </section>
             );
           }
@@ -930,7 +951,8 @@ const MemoizedInteractiveDocument = memo(
     previous.notes === next.notes &&
     previous.expanded === next.expanded &&
     previous.marks === next.marks &&
-    previous.patches === next.patches,
+    previous.patches === next.patches &&
+    previous.libraryByArxivId === next.libraryByArxivId,
 );
 
 // The memoized document ignores callback identity so typing or scrolling does not
@@ -966,6 +988,9 @@ export function InteractiveDocument(props: InteractiveDocumentProps) {
         latest.current.expandProofStep(...args),
       expandProofRequest: (...args: Parameters<InteractiveDocumentProps['expandProofRequest']>) =>
         latest.current.expandProofRequest(...args),
+      addCitedPapers: (...args: Parameters<InteractiveDocumentProps['addCitedPapers']>) =>
+        latest.current.addCitedPapers(...args),
+      openPaper: (...args: Parameters<InteractiveDocumentProps['openPaper']>) => latest.current.openPaper(...args),
     }),
     [],
   );

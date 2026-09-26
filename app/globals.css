@@ -8015,3 +8015,93 @@ body.assistant-resizing {
   overflow-x: auto;
   font-size: 12px;
 }
+
+/* Cited arXiv papers: add to the library from the bibliography or the reference reader. */
+.source-bibliography-library {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: -6px;
+  border: 1px solid #e1d7cf;
+  border-radius: 4px;
+  padding: 2px 7px;
+  color: #8f1d2c;
+  font-family: Inter, ui-sans-serif, sans-serif;
+  font-size: 12px;
+  font-weight: 750;
+}
+.source-bibliography-library:hover {
+  background: #f4ede6;
+}
+.reference-reader > header button:not([aria-label]) {
+  border-radius: 4px;
+  background: #8f1d2c;
+  padding: 3px 8px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+.reference-reader > header button:disabled {
+  opacity: 0.45;
+}
+.reference-cited {
+  max-height: 34%;
+  overflow-y: auto;
+  border-bottom: 1px solid #e4dbd3;
+  padding: 6px 10px;
+  color: #504842;
+  font-size: 12px;
+}
+.reference-cited summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.reference-cited summary button,
+.reference-cited li > button:last-child {
+  flex: none;
+  border-radius: 4px;
+  background: #8f1d2c;
+  padding: 3px 8px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+.reference-cited button:disabled {
+  opacity: 0.45;
+}
+.reference-cited ul {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 2px;
+  padding: 0;
+  list-style: none;
+}
+.reference-cited li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.reference-cited-title {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  border-radius: 4px;
+  padding: 3px 4px;
+  text-align: left;
+}
+.reference-cited-title:hover {
+  background: #f4ede6;
+}
+.reference-cited-title small {
+  color: #958a82;
+  font-size: 11px;
+}
+.reference-cited-title .math-text {
+  overflow: hidden;
+  font-family: Georgia, 'Times New Roman', serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -147,3 +147,24 @@ assert.equal(
 assert.equal(extractCodeBlock('```\nexample : True := trivial\n```'), 'example : True := trivial');
 assert.equal(extractCodeBlock('No code.'), '');
 console.log('Reader logic: study records verified.');
+
+// Cited arXiv papers are listed once each, bibliography first.
+const { arxivKey, citedArxivPapers } = await import('../app/lib/cited-papers.ts');
+const citation = (key, arxivId, title = key) => ({ key, arxivId, title, authors: '', locator: '' });
+assert.equal(arxivKey(' arXiv:2401.01234v3 '), '2401.01234');
+assert.deepEqual(
+  citedArxivPapers({
+    sourceBlocks: [
+      { citations: [citation('B', '2402.00002v2')] },
+      { citations: [citation('none', '')] },
+      { citations: [citation('A', '2401.00001')] },
+    ],
+    nodes: [{ citations: [citation('A', '2401.00001v1'), citation('C', 'math/0601001')] }],
+  }).map((paper) => [paper.key, paper.arxivId]),
+  [
+    ['B', '2402.00002'],
+    ['A', '2401.00001'],
+    ['C', 'math/0601001'],
+  ],
+);
+console.log('Reader logic: cited arXiv papers verified.');

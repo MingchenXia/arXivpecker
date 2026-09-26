@@ -232,7 +232,7 @@ type GraphEdge = {
   from: string;
   to: string;
   relation: CrossLink['relation'];
-  source: 'manual' | 'audit';
+  source: 'manual' | 'audit' | 'citation';
   note?: string;
 };
 export type Graph = { version: number; updatedAt: string | null; nodes: GraphNode[]; edges: GraphEdge[] };

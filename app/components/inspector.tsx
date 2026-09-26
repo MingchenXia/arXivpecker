@@ -1181,7 +1181,10 @@ export function NodeInspector({
                         onClick={() => other && openUnit(other.paperId, other.nodeId)}
                         className="min-w-0 flex-1 text-left"
                       >
-                        <b>{edge.relation}</b>
+                        <b>
+                          {edge.relation}
+                          {edge.source === 'citation' ? ' · cited' : ''}
+                        </b>
                         <span>{other ? `${other.paperTitle} · ${displayUnitLabel(other)}` : 'Referenced result'}</span>
                       </button>
                       {manual && (

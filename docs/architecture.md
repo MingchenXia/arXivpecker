@@ -10,7 +10,7 @@ arXivpecker is a local-first reader with two cooperating processes:
 - `scripts/codex-app-server.mjs` drives the locally signed-in Codex app-server over JSON-RPC (threads, turns, timeouts, archived-session recovery); `scripts/codex-prompts.mjs` holds the prompts and structured-output schemas it sends.
 - `scripts/tex-source.mjs` reads a paper's TeX tree (includes, author macros, references, bibliography), numbers results, equations, sections, and floats as LaTeX would, and extracts theorem units and reader blocks. It is pure apart from reading files, so the TeX tests import it directly. The bridge runs it on a worker thread (`scripts/tex-worker.mjs`) so a long paper never stalls other requests; enrichment is linear in document size (about 1.2 s for 1.75 MB of TeX).
   - A full LaTeX parser (unified-latex) was evaluated as a replacement and rejected: it parsed 20–80× slower (23 s and 3.5 GB for 1.75 MB), does not expand `\def`, `\DeclareMathOperator`, or `\let`, and would still leave numbering, references, proofs, and bibliography to this module.
-- `scripts/paper-vault.mjs` owns the durable paper-folder format, notes, edits, audits, version history, and cross-paper graph.
+- `scripts/paper-vault.mjs` owns the durable paper-folder format, notes, edits, audits, version history, and cross-paper graph. Besides the audit's own dependencies and the reader's manual links, the graph links a unit to the exact result of another library paper it cites with a locator such as `\cite[Theorem 2.1]{key}` (`scripts/citation-links.mjs`).
 - `examples/starter-library/` is immutable repository data used only to seed a fresh installation.
 - `proofroom-library/` is the user's writable library and is intentionally ignored by Git.
 
