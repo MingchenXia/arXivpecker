@@ -507,8 +507,8 @@ export default function Home() {
   }
   async function cancelAudit(paperId: string) {
     try {
+      // The job event that follows reports the stop; a notice here could arrive after it.
       await bridgePost('/analyze/cancel', { paperId }, 'The AI audit could not be stopped.');
-      notify('Stopping the AI audit. Its Codex thread is kept, so it can be continued later.');
     } catch (error) {
       notify(error instanceof Error ? error.message : 'The AI audit could not be stopped.');
     }

@@ -54,3 +54,18 @@ test('a handled activity-tray navigation is not replayed on return to the reader
   await page.waitForTimeout(800);
   await expect(page.locator('.paper-chat-shell')).toBeHidden();
 });
+
+test('formulas are typeset as they near the viewport, and all of them before printing', async ({ page }) => {
+  const errors = recordPageErrors(page);
+  await openReader(page);
+  // Far-away formulas wait as TeX until the reader scrolls near them.
+  await expect.poll(() => page.locator('.math-pending').count()).toBeGreaterThan(100);
+  const initial = await page.locator('.katex').count();
+  for (let step = 0; step < 6; step += 1) await page.mouse.wheel(0, 3000);
+  await expect.poll(() => page.locator('.katex').count()).toBeGreaterThan(initial);
+  // Printing (from the browser or the reader) must never show raw TeX.
+  await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+  await expect(page.locator('.math-pending')).toHaveCount(0);
+  expect(await page.locator('.katex').count()).toBeGreaterThan(1000);
+  expect(errors).toEqual([]);
+});

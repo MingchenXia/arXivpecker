@@ -613,7 +613,7 @@ function InteractiveDocumentComponent({
                 onClick={() => setSelectedNodeId(unit.id)}
               >
                 <span className="source-bibliography-key">[{block.title}]</span>
-                <MathText value={unit.statement} block />
+                <MathText value={unit.statement} block lazy />
               </section>
             );
           }
@@ -1570,10 +1570,10 @@ function EditableTexBlock({
         {value ? (
           numbered ? (
             <VisualLineNumbers contentKey={value}>
-              <MathText value={value} block citations={citations} />
+              <MathText value={value} block citations={citations} lazy />
             </VisualLineNumbers>
           ) : (
-            <MathText value={value} block citations={citations} />
+            <MathText value={value} block citations={citations} lazy />
           )
         ) : (
           <p>{emptyText}</p>

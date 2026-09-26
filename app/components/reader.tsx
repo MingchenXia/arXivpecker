@@ -10,7 +10,7 @@ import {
 import { indexedVisibleProof, InteractiveDocument } from './document';
 import { ReaderIcon } from './icons';
 import { NodeInspector, VersionComparisonPanel } from './inspector';
-import { MathText } from './math';
+import { MathText, typesetAllMath } from './math';
 import {
   assistantSizeKey,
   fileAsBase64,
@@ -1069,6 +1069,8 @@ function PrintPanel({
     await new Promise<void>((resolve) =>
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
     );
+    // The copy must contain every formula, including those not yet scrolled near.
+    typesetAllMath();
     const source = document.querySelector<HTMLElement>('.source-document');
     if (!source) {
       printWindow.close();

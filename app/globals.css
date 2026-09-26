@@ -8815,3 +8815,18 @@ body.assistant-resizing {
     max-height: calc(100vh - 60px) !important;
   }
 }
+
+/* Formulas far from the viewport show their TeX source until they are typeset. */
+.math-pending {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86em;
+  color: #6b716a;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.math-display.math-pending {
+  display: block;
+  min-height: 2.6em;
+  margin: 0.8em 0;
+  text-align: center;
+}

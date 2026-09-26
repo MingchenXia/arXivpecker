@@ -1,4 +1,5 @@
 import { MouseEvent as ReactMouseEvent, memo, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import {
   citationAlphaLabel,
   citationTitle,
@@ -29,68 +30,137 @@ export function Latex({ value, small = false }: { value: string; small?: boolean
   );
 }
 
+type MathPart = {
+  text: string;
+  math: boolean;
+  display: boolean;
+  source?: string;
+  /** Set on a formula that has not been typeset yet. */
+  expression?: string;
+  citation?: { key: string; locator: string };
+};
+
+// Splitting text from formulas is cheap; typesetting with KaTeX is the cost.
+function tokenizeMathText(value: string, explicitOnly: boolean) {
+  const source = cleanTeXProse(value || '');
+  // Audits produced from source TeX are asked to preserve $...$ delimiters. The
+  // final alternatives also recover compact TeX-like islands when an older audit
+  // omitted them, keeping expressions such as χ|det|^s and L_v(χ_v,s)^{-1}
+  // together instead of rendering only their superscripts.
+  const pattern = explicitOnly
+    ? /(\[\[cite:[^\]]+\]\]|\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([\s\S]+?\\\))/g
+    : /(\[\[cite:[^\]]+\]\]|\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([\s\S]+?\\\)|\([^()$\n\[\]]{0,180}(?:\^|_|\\[A-Za-z]+|\{[^}]*\})[^()$\n\[\]]{0,180}\)|[A-Za-z0-9Ͱ-Ͽ\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*(?:\^|_|\\|[|≤≥∈×=])[A-Za-z0-9Ͱ-Ͽ\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*|(?:Re|Im|GL|SL|Sp|SO|SU|Spec|Hom|Ext|Tor|dim|ker|coker|rank|det|tr|vol|[A-Z])\([^()\s]{1,180}\)(?:(?:_|\^)(?:\{[^{}\n]{1,80}\}|[A-Za-z0-9Ͱ-Ͽ+-]))*|[Ͱ-Ͽ])/g;
+  const result: MathPart[] = [];
+  let cursor = 0;
+  for (const match of source.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > cursor)
+      result.push({ text: cleanRenderedTextFragment(source.slice(cursor, index)), math: false, display: false });
+    const token = match[0];
+    cursor = index + token.length;
+    if (token.startsWith('[[cite:')) {
+      const [key, locator = ''] = token.slice(7, -2).split('|');
+      result.push({ text: token, math: false, display: false, citation: { key, locator } });
+      continue;
+    }
+    const display = token.startsWith('$$') || token.startsWith('\\[');
+    const expression = token.startsWith('$$')
+      ? token.slice(2, -2)
+      : token.startsWith('$')
+        ? token.slice(1, -1)
+        : token.startsWith('\\(') || token.startsWith('\\[')
+          ? token.slice(2, -2)
+          : token;
+    result.push({ text: token, math: false, display, source: token, expression });
+  }
+  if (cursor < source.length)
+    result.push({ text: cleanRenderedTextFragment(source.slice(cursor)), math: false, display: false });
+  return result;
+}
+
+function typesetParts(parts: MathPart[]): MathPart[] {
+  return parts.map((part) => {
+    if (part.expression === undefined) return part;
+    const rendered = renderMath(part.expression, part.display);
+    return rendered
+      ? { text: rendered, math: true, display: part.display, source: part.source }
+      : { text: cleanRenderedTextFragment(part.source ?? ''), math: false, display: false };
+  });
+}
+
+// One observer for every deferred formula. Typesetting starts well before a block
+// scrolls into view, so readers rarely see the TeX placeholder.
+const pendingTypesetting = new Map<Element, () => void>();
+let typesetObserver: IntersectionObserver | null = null;
+
+function nearViewportObserver() {
+  if (!typesetObserver && typeof IntersectionObserver !== 'undefined')
+    typesetObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const typeset = entry.isIntersecting ? pendingTypesetting.get(entry.target) : undefined;
+          if (!typeset) continue;
+          pendingTypesetting.delete(entry.target);
+          typesetObserver?.unobserve(entry.target);
+          typeset();
+        }
+      },
+      { rootMargin: '1500px 0px' },
+    );
+  return typesetObserver;
+}
+
+/** Typesets every deferred formula now, before the page is printed or copied. */
+export function typesetAllMath() {
+  const pending = [...pendingTypesetting.values()];
+  pendingTypesetting.clear();
+  typesetObserver?.disconnect();
+  if (pending.length) flushSync(() => pending.forEach((typeset) => typeset()));
+}
+
+if (typeof window !== 'undefined') window.addEventListener('beforeprint', typesetAllMath);
+
+/**
+ * Renders prose with inline and display mathematics. With `lazy`, formulas are
+ * typeset only once the text comes near the viewport; long papers otherwise build
+ * tens of thousands of KaTeX nodes that nobody is looking at.
+ */
 export const MathText = memo(function MathText({
   value,
   block = false,
   citations = [],
   explicitOnly = false,
+  lazy = false,
 }: {
   value: string;
   block?: boolean;
   citations?: CitationReference[];
   explicitOnly?: boolean;
+  lazy?: boolean;
 }) {
-  const parts = useMemo(() => {
-    const source = cleanTeXProse(value || '');
-    // Audits produced from source TeX are asked to preserve $...$ delimiters. The
-    // final alternatives also recover compact TeX-like islands when an older audit
-    // omitted them, keeping expressions such as χ|det|^s and L_v(χ_v,s)^{-1}
-    // together instead of rendering only their superscripts.
-    const pattern = explicitOnly
-      ? /(\[\[cite:[^\]]+\]\]|\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([\s\S]+?\\\))/g
-      : /(\[\[cite:[^\]]+\]\]|\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$]+?\$|\\\([\s\S]+?\\\)|\([^()$\n\[\]]{0,180}(?:\^|_|\\[A-Za-z]+|\{[^}]*\})[^()$\n\[\]]{0,180}\)|[A-Za-z0-9\u0370-\u03ff\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*(?:\^|_|\\|[|≤≥∈×=])[A-Za-z0-9\u0370-\u03ff\\\[\](){}_^|+*/=<>≤≥∈×−,:-]*|(?:Re|Im|GL|SL|Sp|SO|SU|Spec|Hom|Ext|Tor|dim|ker|coker|rank|det|tr|vol|[A-Z])\([^()\s]{1,180}\)(?:(?:_|\^)(?:\{[^{}\n]{1,80}\}|[A-Za-z0-9\u0370-\u03ff+-]))*|[\u0370-\u03ff])/g;
-    const result: {
-      text: string;
-      math: boolean;
-      display: boolean;
-      source?: string;
-      citation?: { key: string; locator: string };
-    }[] = [];
-    let cursor = 0;
-    for (const match of source.matchAll(pattern)) {
-      const index = match.index ?? 0;
-      if (index > cursor)
-        result.push({ text: cleanRenderedTextFragment(source.slice(cursor, index)), math: false, display: false });
-      const token = match[0];
-      if (token.startsWith('[[cite:')) {
-        const [key, locator = ''] = token.slice(7, -2).split('|');
-        result.push({ text: token, math: false, display: false, citation: { key, locator } });
-        cursor = index + token.length;
-        continue;
-      }
-      const display = token.startsWith('$$') || token.startsWith('\\[');
-      const expression = token.startsWith('$$')
-        ? token.slice(2, -2)
-        : token.startsWith('$')
-          ? token.slice(1, -1)
-          : token.startsWith('\\(') || token.startsWith('\\[')
-            ? token.slice(2, -2)
-            : token;
-      const rendered = renderMath(expression, display);
-      result.push(
-        rendered
-          ? { text: rendered, math: true, display, source: token }
-          : { text: cleanRenderedTextFragment(token), math: false, display: false },
-      );
-      cursor = index + token.length;
+  // One ref type that fits both the <div> and the <span> this component may render.
+  const container = useRef<HTMLDivElement & HTMLSpanElement>(null);
+  const [near, setNear] = useState(!lazy);
+  useEffect(() => {
+    if (near) return;
+    const element = container.current;
+    const observer = nearViewportObserver();
+    if (!element || !observer) {
+      const frame = window.requestAnimationFrame(() => setNear(true));
+      return () => window.cancelAnimationFrame(frame);
     }
-    if (cursor < source.length)
-      result.push({ text: cleanRenderedTextFragment(source.slice(cursor)), math: false, display: false });
-    return result;
-  }, [value, explicitOnly]);
+    pendingTypesetting.set(element, () => setNear(true));
+    observer.observe(element);
+    return () => {
+      pendingTypesetting.delete(element);
+      observer.unobserve(element);
+    };
+  }, [near]);
+  const tokens = useMemo(() => tokenizeMathText(value, explicitOnly), [value, explicitOnly]);
+  const parts = useMemo(() => (near ? typesetParts(tokens) : tokens), [tokens, near]);
   const Tag = block ? 'div' : 'span';
   return (
-    <Tag className={`math-text ${block ? 'math-text-block' : ''}`}>
+    <Tag ref={container} className={`math-text ${block ? 'math-text-block' : ''}`}>
       {parts.map((part, index) =>
         part.citation ? (
           <InlineCitation key={index} mention={part.citation} citations={citations} />
@@ -101,6 +171,14 @@ export const MathText = memo(function MathText({
             data-source={part.source}
             dangerouslySetInnerHTML={{ __html: part.text }}
           />
+        ) : part.expression !== undefined ? (
+          <span
+            key={index}
+            className={`${part.display ? 'math-display' : 'math-inline'} math-pending`}
+            data-source={part.source}
+          >
+            {part.source}
+          </span>
         ) : (
           <span key={index}>{part.text}</span>
         ),
