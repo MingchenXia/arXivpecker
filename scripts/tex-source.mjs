@@ -839,6 +839,54 @@ function theoremKind(title, environment) {
   return 'proposition';
 }
 
+const theoremLikeKinds = new Set([
+  'theorem',
+  'lemma',
+  'proposition',
+  'corollary',
+  'conjecture',
+  'definition',
+  'assumption',
+  'notation',
+  'remark',
+  'example',
+]);
+
+// Reads the printed number an AI label cites and the name written before it:
+// "Lemma 2.3", "Theorem 1.2 (Main)", "Proposition A.1", or "Thm. 4".
+function printedLabelNumber(label) {
+  const match = /^\s*([^\d(]*?)[\s~.:]*(\d+(?:\.\d+)*[a-z]?|(?<![A-Za-z])[A-Z](?:\.\d+)*)(?![\w']|\.\d)/.exec(
+    String(label || ''),
+  );
+  if (!match) return null;
+  const name = match[1].replace(/[\s~.:]+$/, '').trim();
+  // A lone capital without a name is prose ("A priori bound"), not "Theorem A".
+  return /^\d/.test(match[2]) || name ? { name, number: match[2] } : null;
+}
+
+function labelNameFits(name, unit) {
+  if (!name) return true;
+  const normalize = (value) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[\s~.]+/g, ' ')
+      .trim();
+  const cited = normalize(name);
+  const printed = normalize(unit.displayName);
+  if (printed && (printed.startsWith(cited) || cited.endsWith(printed))) return true;
+  // "Section 2.3" or "Equation (4)" cites document structure, never a result.
+  if (
+    /\b(?:sections?|subsections?|chapters?|parts?|appendix|equations?|eqs?|figures?|figs?|tables?|pages?)\b|§/.test(
+      cited,
+    )
+  )
+    return false;
+  // Abbreviations such as "Thm." or "Prop." still identify the result kind.
+  return theoremKind(cited, cited) === unit.kind;
+}
+
 function environmentDisplayLabel(label, displayName, printedNumber = '') {
   const name = readableLatex(displayName || '').trim();
   if (!name) return String(label || '');
@@ -1069,6 +1117,38 @@ function extractSourceUnits(source) {
     });
   }
   const byLabel = new Map(units.filter((unit) => unit.texLabel).map((unit) => [unit.texLabel, unit]));
+  // Once references are resolved, "the proof of Theorem~\ref{main}" reads
+  // "the proof of Theorem~1.3", so also accept a unit's printed name and number.
+  // Only pairs that exist are matched, so an unrelated "Lemma 2 of [5]" cannot
+  // hide a later \ref from the same sentence.
+  const escapePattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const printedSeparator = /(?:\s|~| |\\[ ,;])+/g;
+  const printedNumbers = new Map();
+  for (const unit of units) {
+    const name = unit.displayName.trim();
+    if (unit.printedNumber && name) printedNumbers.set(name, [...(printedNumbers.get(name) || []), unit.printedNumber]);
+  }
+  const printedPattern = [...printedNumbers]
+    .sort((left, right) => right[0].length - left[0].length)
+    .map(
+      ([name, numbers]) =>
+        `${escapePattern(name)}(?:\\s|~|\\u00a0|\\\\[ ,;])*(?:${[...new Set(numbers)]
+          .sort((left, right) => right.length - left.length)
+          .map(escapePattern)
+          .join('|')})`,
+    )
+    .join('|');
+  const printedKey = (value) => value.replace(printedSeparator, '').toLowerCase();
+  const printedTarget = (reference) =>
+    units.find(
+      (unit) => unit.printedNumber && printedKey(`${unit.displayName}${unit.printedNumber}`) === printedKey(reference),
+    );
+  const explicitProofPattern = new RegExp(
+    `(?:proof\\s+of|prove|complet(?:e|es|ed)\\s+the\\s+proof\\s+of|preuve\\s+(?:de|du|des)|d[ée]monstration\\s+(?:de|du|des))[\\s\\S]{0,180}?(?:\\\\ref\\s*\\{([^}]+)\\}|\\\\hyperref\\s*\\[([^\\]]+)\\]${
+      printedPattern ? `|(${printedPattern})(?![\\w']|\\.\\d)` : ''
+    })`,
+    'gi',
+  );
   const proofPattern = new RegExp(
     `\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`,
     'g',
@@ -1080,13 +1160,9 @@ function extractSourceUnits(source) {
     const nearest = units.filter((unit) => unit.end <= proofStart).at(-1) || null;
     const prelude = normalizedSource.slice(Math.max(nearest?.end ?? 0, proofStart - 2200), proofStart);
     const proofLead = `${proof[2] || ''} ${prelude}`;
-    const explicitMatch = [
-      ...proofLead.matchAll(
-        /(?:proof\s+of|prove|complet(?:e|es|ed)\s+the\s+proof\s+of|preuve\s+(?:de|du|des)|d[ée]monstration\s+(?:de|du|des))[\s\S]{0,180}?(?:\\ref\s*\{([^}]+)\}|\\hyperref\s*\[([^\]]+)\])/gi,
-      ),
-    ].at(-1);
+    const explicitMatch = [...proofLead.matchAll(explicitProofPattern)].at(-1);
     const explicit = explicitMatch?.[1] || explicitMatch?.[2];
-    let target = explicit ? byLabel.get(explicit) : null;
+    let target = explicit ? byLabel.get(explicit) : explicitMatch?.[3] ? printedTarget(explicitMatch[3]) : null;
     if (!target && nearest && !nearest.proofText) target = nearest;
     if (target && !target.proofText) {
       target.proofText = readableLatex(proof[3]);
@@ -1844,17 +1920,37 @@ async function enrichAuditFromTex(rawText, primarySource) {
   const expanded = resolveLatexReferences(unresolved, extractSourceUnits(unresolved));
   const sourceUnits = extractSourceUnits(expanded);
   const bibliography = await extractBibliographyTree(expanded, primarySource.sourceDirectory, primarySource.entryFile);
-  const cursors = new Map();
+  // Match nodes by the printed number in their label first, so an AI audit that
+  // skips one lemma cannot shift every later lemma onto its neighbour's
+  // statement and proof. Only unnumbered or unmatched nodes then take the first
+  // unclaimed unit of their kind, in source order.
+  const nodes = audit.nodes.filter((node) => node && typeof node === 'object' && theoremLikeKinds.has(node.kind));
+  const claimed = new Set();
+  const matches = new Map();
+  for (const node of nodes) {
+    const cited = printedLabelNumber(node.label);
+    if (!cited) continue;
+    const numbered = sourceUnits.filter((unit) => unit.printedNumber === cited.number && !claimed.has(unit));
+    const unit =
+      numbered.find((candidate) => candidate.kind === node.kind && labelNameFits(cited.name, candidate)) ||
+      (cited.name ? numbered.find((candidate) => labelNameFits(cited.name, candidate)) : undefined);
+    if (!unit) continue;
+    claimed.add(unit);
+    matches.set(node, unit);
+  }
+  for (const node of nodes) {
+    if (matches.has(node)) continue;
+    const unit = sourceUnits.find((candidate) => candidate.kind === node.kind && !claimed.has(candidate));
+    if (!unit) continue;
+    claimed.add(unit);
+    matches.set(node, unit);
+  }
   for (const node of audit.nodes) {
     if (!node || typeof node !== 'object') continue;
     const aiCitations = Array.isArray(node.citations) ? node.citations : [];
     node.citations = [];
-    const kind = String(node.kind || '');
-    const sameKind = sourceUnits.filter((unit) => unit.kind === kind);
-    const index = cursors.get(kind) || 0;
-    const sourceUnit = sameKind[index];
+    const sourceUnit = matches.get(node);
     if (!sourceUnit) continue;
-    cursors.set(kind, index + 1);
     if (sourceUnit.statement) node.statement = sourceUnit.statement;
     node.displayName = sourceUnit.displayName || '';
     node.label = environmentDisplayLabel(node.label, sourceUnit.displayName, sourceUnit.printedNumber);

@@ -6,6 +6,7 @@ import katex from 'katex';
 import { ar5ivFigureUrl } from './codex-bridge.mjs';
 import {
   buildSourceBlocks,
+  enrichAuditFromTex,
   expandAuthorMacros,
   extractBibliographyTree,
   extractSourceUnits,
@@ -216,6 +217,46 @@ try {
     'A compiled .bbl must supply references when no .bib file is present.',
   );
 
+  // An AI audit that skips Lemma 1.1 must still give "Lemma 1.2" its own
+  // statement and proof, and keep the skipped lemma as a source node.
+  const auditRoot = path.join(sourceRoot, 'audit');
+  await mkdir(auditRoot);
+  await writeFile(
+    path.join(auditRoot, 'main.tex'),
+    String.raw`\documentclass{article}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\begin{document}
+\section{Results}
+\begin{lemma}\label{lem:first}First lemma statement.\end{lemma}
+\begin{lemma}\label{lem:second}Second lemma statement.\end{lemma}
+\begin{proof}Second lemma proof.\end{proof}
+\begin{theorem}\label{thm:main}Main theorem statement.\end{theorem}
+\end{document}`,
+  );
+  const enrichedAudit = JSON.parse(
+    await enrichAuditFromTex(
+      JSON.stringify({
+        nodes: [{ id: 'ai-lemma', kind: 'lemma', label: 'Lemma 1.2', title: 'Second', statement: 'AI paraphrase.' }],
+      }),
+      { entryFile: path.join(auditRoot, 'main.tex'), sourceDirectory: auditRoot },
+    ),
+  );
+  const aiLemma = enrichedAudit.nodes.find((node) => node.id === 'ai-lemma');
+  assert.equal(aiLemma.label, 'Lemma 1.2');
+  assert.equal(aiLemma.statement, 'Second lemma statement.');
+  assert.equal(aiLemma.proofText, 'Second lemma proof.', 'A numbered AI node must receive its own proof.');
+  assert.deepEqual(
+    enrichedAudit.nodes
+      .filter((node) => node.id.startsWith('source-unit-'))
+      .map((node) => [node.label, node.statement, node.proofText]),
+    [
+      ['Lemma 1.1', 'First lemma statement.', ''],
+      ['Theorem 1.3', 'Main theorem statement.', ''],
+    ],
+    'Results the AI audit skipped must be appended as source nodes.',
+  );
+
   // A symbolic link inside the source tree must not pull in a file outside it.
   const outsideRoot = await mkdtemp(path.join(tmpdir(), 'arxivpecker-outside-'));
   try {
@@ -257,6 +298,31 @@ assert.equal(
   delayedUnits[1].proofText,
   '',
   'A delayed proof must remain attached to its explicitly referenced result.',
+);
+
+// Resolving references turns "the proof of Theorem~\ref{main}" into "the proof
+// of Theorem~1.2"; the delayed proof must still find its theorem.
+const proseProofSource = String.raw`\newtheorem{theorem}{Theorem}[section]\newtheorem{lemma}[theorem]{Lemma}
+\begin{document}\section{Results}
+\begin{lemma}\label{lem:aux}Auxiliary.\end{lemma}
+\begin{proof}Auxiliary argument.\end{proof}
+\begin{theorem}\label{main}Main claim.\end{theorem}
+\begin{lemma}\label{lem:late}Late lemma.\end{lemma}
+\begin{proof}Late lemma argument.\end{proof}
+We now complete the proof of Theorem~\ref{main} using Lemma~\ref{lem:aux}.
+\begin{proof}Main argument.\end{proof}
+\end{document}`;
+const proseProofResolved = resolveLatexReferences(proseProofSource, extractSourceUnits(proseProofSource));
+assert.match(proseProofResolved, /the proof of Theorem~1\.2 using Lemma~1\.1/);
+const proseProofUnits = extractSourceUnits(proseProofResolved);
+assert.deepEqual(
+  proseProofUnits.map((unit) => [unit.printedNumber, unit.proofText]),
+  [
+    ['1.1', 'Auxiliary argument.'],
+    ['1.2', 'Main argument.'],
+    ['1.3', 'Late lemma argument.'],
+  ],
+  'A proof introduced in prose by a resolved printed number must stay linked to that result.',
 );
 
 const delayedProofBlocks = buildSourceBlocks(delayedResolved, delayedUnits, new Map());
