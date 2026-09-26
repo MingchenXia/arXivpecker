@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import katex from 'katex';
-import { buildSourceBlocks, expandAuthorMacros, extractSourceUnits, readableLatex, resolveLatexReferences } from './codex-bridge.mjs';
+import { buildSourceBlocks, expandAuthorMacros, extractSourceUnits, readableLatex, resolveLatexReferences } from './tex-source.mjs';
 
 let seed = 0x5eed1234;
 function random() {

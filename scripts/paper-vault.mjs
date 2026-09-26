@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 
 const VAULT_VERSION = 1;
 
-function relativePathEscapes(relative) {
+export function relativePathEscapes(relative) {
   return path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`);
 }
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CodexAppServer } from './codex-bridge.mjs';
+import { CodexAppServer } from './codex-app-server.mjs';
 
 const threadId = 'saved-paper-audit';
 const archived = () => new Error(`session ${threadId} is archived. Run codex unarchive first.`);

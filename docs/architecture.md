@@ -3,7 +3,9 @@
 arXivpecker is a local-first reader with two cooperating processes:
 
 - `app/` contains the browser interface and the arXiv metadata route.
-- `scripts/codex-bridge.mjs` connects the interface to the locally signed-in Codex app-server. It never requires an OpenAI API key.
+- `scripts/codex-bridge.mjs` is the localhost HTTP bridge: request routing, source acquisition and uploads, and figure assets. It never requires an OpenAI API key.
+- `scripts/codex-app-server.mjs` drives the locally signed-in Codex app-server over JSON-RPC (threads, turns, timeouts, archived-session recovery); `scripts/codex-prompts.mjs` holds the prompts and structured-output schemas it sends.
+- `scripts/tex-source.mjs` reads a paper's TeX tree (includes, author macros, references, bibliography) and extracts theorem units and reader blocks. It is pure apart from reading files, so the TeX tests import it directly.
 - `scripts/paper-vault.mjs` owns the durable paper-folder format, notes, edits, audits, version history, and cross-paper graph.
 - `examples/starter-library/` is immutable repository data used only to seed a fresh installation.
 - `proofroom-library/` is the user's writable library and is intentionally ignored by Git.

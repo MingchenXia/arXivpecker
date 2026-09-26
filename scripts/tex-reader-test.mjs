@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import katex from 'katex';
-import { ar5ivFigureUrl, buildSourceBlocks, expandAuthorMacros, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences, sameExpandedTexSource } from './codex-bridge.mjs';
+import { ar5ivFigureUrl } from './codex-bridge.mjs';
+import { buildSourceBlocks, expandAuthorMacros, extractSourceUnits, readExpandedTex, readableLatex, resolveLatexReferences, sameExpandedTexSource } from './tex-source.mjs';
 
 const source = String.raw`\documentclass{article}
 \usepackage{amsmath}
