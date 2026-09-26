@@ -13,13 +13,20 @@ try {
   const snapshot = await vault.snapshot();
   assert.equal(snapshot.papers.length, 3, 'A fresh library must contain exactly three starter papers.');
   assert.equal(snapshot.profile, null, 'The starter library must not suppress first-time setup.');
-  assert.deepEqual(snapshot.papers.map((paper) => paper.arxivId).sort(), ['2607.17203', '2608.24719v1', 'local-333f9f47-cd02-424f-b473-587dc480d69f'].sort());
+  assert.deepEqual(
+    snapshot.papers.map((paper) => paper.arxivId).sort(),
+    ['2607.17203', '2608.24719v1', 'local-333f9f47-cd02-424f-b473-587dc480d69f'].sort(),
+  );
 
   for (const paper of snapshot.papers) {
     const record = await vault.recordFor(paper.id);
     const source = JSON.parse(await readFile(path.join(vault.paperDirectory(record), 'paper.json'), 'utf8')).source;
     if (source?.sourceDirectory) {
-      assert.equal(path.isAbsolute(source.sourceDirectory), true, 'Runtime source paths must be hydrated for the current clone.');
+      assert.equal(
+        path.isAbsolute(source.sourceDirectory),
+        true,
+        'Runtime source paths must be hydrated for the current clone.',
+      );
       await stat(source.sourceDirectory);
     }
     if (source?.mainTex) await stat(source.mainTex);
@@ -27,7 +34,11 @@ try {
 
   for (const paper of snapshot.papers) await vault.removePaper(paper.id);
   const reopened = await new PaperVault(target, { starterRoot }).snapshot();
-  assert.equal(reopened.papers.length, 0, 'Removing every paper must not bring the starter papers back on the next launch.');
+  assert.equal(
+    reopened.papers.length,
+    0,
+    'Removing every paper must not bring the starter papers back on the next launch.',
+  );
   console.log('Starter library: 3 papers, portable sources, first-time setup enabled.');
 } finally {
   await rm(target, { recursive: true, force: true });

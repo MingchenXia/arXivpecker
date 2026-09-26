@@ -1,6 +1,16 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { auditPrompt, comparisonPrompt, editorialPrompt, latexConversionPrompt, makeAuditSchema, makeEditorialSchema, makeVersionComparisonSchema, nodeQuestionPrompt, paperQuestionPrompt } from './codex-prompts.mjs';
+import {
+  auditPrompt,
+  comparisonPrompt,
+  editorialPrompt,
+  latexConversionPrompt,
+  makeAuditSchema,
+  makeEditorialSchema,
+  makeVersionComparisonSchema,
+  nodeQuestionPrompt,
+  paperQuestionPrompt,
+} from './codex-prompts.mjs';
 
 const WORKDIR = process.cwd();
 // Mathematical audits may need to run for hours. They keep running by default
@@ -16,14 +26,21 @@ const CODEX_TURN_HARD_TIMEOUT_MS = optionalTimeoutFromEnv(['CODEX_TURN_HARD_TIME
 const CODEX_STARTUP_RPC_TIMEOUT_MS = Math.max(30_000, Number(process.env.CODEX_STARTUP_RPC_TIMEOUT_MS) || 60_000);
 // Resuming a large archived audit can require Codex to restore its full rollout
 // from disk. It is a lifecycle operation, not a normal lightweight RPC.
-const CODEX_THREAD_RESTORE_TIMEOUT_MS = Math.max(60_000, Number(process.env.CODEX_THREAD_RESTORE_TIMEOUT_MS) || 2 * 60 * 1000);
+const CODEX_THREAD_RESTORE_TIMEOUT_MS = Math.max(
+  60_000,
+  Number(process.env.CODEX_THREAD_RESTORE_TIMEOUT_MS) || 2 * 60 * 1000,
+);
 
 function isArchivedSessionError(error) {
   return /\b(?:session|thread)\b[^\r\n]*\b(?:is|was|has been) archived\b/i.test(error?.message ?? '');
 }
 
 class CodexAppServer {
-  constructor({ turnIdleTimeoutMs = CODEX_TURN_IDLE_TIMEOUT_MS, turnHardTimeoutMs = CODEX_TURN_HARD_TIMEOUT_MS, threadRestoreTimeoutMs = CODEX_THREAD_RESTORE_TIMEOUT_MS } = {}) {
+  constructor({
+    turnIdleTimeoutMs = CODEX_TURN_IDLE_TIMEOUT_MS,
+    turnHardTimeoutMs = CODEX_TURN_HARD_TIMEOUT_MS,
+    threadRestoreTimeoutMs = CODEX_THREAD_RESTORE_TIMEOUT_MS,
+  } = {}) {
     this.process = null;
     this.starting = null;
     this.nextId = 1;
@@ -35,7 +52,8 @@ class CodexAppServer {
     this.lastError = null;
     this.turnIdleTimeoutMs = Math.max(0, Number(turnIdleTimeoutMs) || 0);
     const hardTimeout = Number(turnHardTimeoutMs);
-    this.turnHardTimeoutMs = Number.isFinite(hardTimeout) && hardTimeout > 0 ? Math.max(this.turnIdleTimeoutMs, hardTimeout) : 0;
+    this.turnHardTimeoutMs =
+      Number.isFinite(hardTimeout) && hardTimeout > 0 ? Math.max(this.turnIdleTimeoutMs, hardTimeout) : 0;
     this.threadRestoreTimeoutMs = Math.max(60_000, threadRestoreTimeoutMs);
   }
 
@@ -46,7 +64,10 @@ class CodexAppServer {
       const child = spawn('codex', ['app-server'], { cwd: WORKDIR, stdio: ['pipe', 'pipe', 'pipe'] });
       this.process = child;
       const lines = createInterface({ input: child.stdout });
-      const startupTimeout = setTimeout(() => reject(new Error('Codex app-server did not finish its local startup checks.')), CODEX_STARTUP_RPC_TIMEOUT_MS * 2 + 5_000);
+      const startupTimeout = setTimeout(
+        () => reject(new Error('Codex app-server did not finish its local startup checks.')),
+        CODEX_STARTUP_RPC_TIMEOUT_MS * 2 + 5_000,
+      );
 
       lines.on('line', (line) => this.handleLine(line));
       child.stderr.on('data', (chunk) => {
@@ -55,13 +76,19 @@ class CodexAppServer {
       });
       child.on('error', (error) => this.stopWithError(error, child));
       child.stdin.on('error', (error) => this.stopWithError(error, child));
-      child.on('exit', (code) => this.stopWithError(new Error(`Codex app-server exited (${code ?? 'unknown'}).`), child));
+      child.on('exit', (code) =>
+        this.stopWithError(new Error(`Codex app-server exited (${code ?? 'unknown'}).`), child),
+      );
 
       (async () => {
         try {
-          await this.call('initialize', {
-            clientInfo: { name: 'arxivpecker_local_reader', title: 'arXivpecker local reader', version: '0.2.0' },
-          }, CODEX_STARTUP_RPC_TIMEOUT_MS);
+          await this.call(
+            'initialize',
+            {
+              clientInfo: { name: 'arxivpecker_local_reader', title: 'arXivpecker local reader', version: '0.2.0' },
+            },
+            CODEX_STARTUP_RPC_TIMEOUT_MS,
+          );
           this.notify('initialized', {});
           const [accountResult, modelsResult] = await Promise.all([
             this.call('account/read', { refreshToken: false }, CODEX_STARTUP_RPC_TIMEOUT_MS),
@@ -76,10 +103,14 @@ class CodexAppServer {
           reject(error);
         }
       })();
-    }).catch((error) => {
-      this.stopWithError(error);
-      throw error;
-    }).finally(() => { this.starting = null; });
+    })
+      .catch((error) => {
+        this.stopWithError(error);
+        throw error;
+      })
+      .finally(() => {
+        this.starting = null;
+      });
     return this.starting;
   }
 
@@ -89,7 +120,10 @@ class CodexAppServer {
     if (sourceProcess && sourceProcess !== this.process) return;
     const failedProcess = this.process;
     this.lastError = error instanceof Error ? error.message : String(error);
-    for (const { reject, timer } of this.pending.values()) { clearTimeout(timer); reject(error); }
+    for (const { reject, timer } of this.pending.values()) {
+      clearTimeout(timer);
+      reject(error);
+    }
     this.pending.clear();
     for (const turn of this.turns.values()) turn.reject(error);
     this.turns.clear();
@@ -111,16 +145,27 @@ class CodexAppServer {
         reject(new Error(`${method} timed out.`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.write({ method, id, params }); }
-      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
+      try {
+        this.write({ method, id, params });
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
-  notify(method, params) { this.write({ method, params }); }
+  notify(method, params) {
+    this.write({ method, params });
+  }
 
   handleLine(line) {
     let message;
-    try { message = JSON.parse(line); } catch { return; }
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return;
+    }
     if (message.id !== undefined) {
       const request = this.pending.get(message.id);
       if (!request) return;
@@ -158,7 +203,9 @@ class CodexAppServer {
       const turnId = params.turn?.id;
       const turn = this.turns.get(turnId);
       if (!turn) return;
-      const inlineMessages = (params.turn.items ?? []).filter((item) => item.type === 'agentMessage').map((item) => item.text ?? '');
+      const inlineMessages = (params.turn.items ?? [])
+        .filter((item) => item.type === 'agentMessage')
+        .map((item) => item.text ?? '');
       const text = [...turn.messages, ...inlineMessages].filter(Boolean).at(-1) ?? '';
       this.turns.delete(turnId);
       if (params.turn.status === 'completed' && text) turn.resolve({ text, status: params.turn.status });
@@ -216,7 +263,12 @@ class CodexAppServer {
         void this.call('turn/interrupt', { threadId: params.threadId, turnId }, 10000).catch(() => {});
         reject(error);
       };
-      const idleTimeout = () => interruptAndReject(new Error(`${taskLabel} received no Codex progress for ${Math.round(this.turnIdleTimeoutMs / 60_000)} minutes and was interrupted.`));
+      const idleTimeout = () =>
+        interruptAndReject(
+          new Error(
+            `${taskLabel} received no Codex progress for ${Math.round(this.turnIdleTimeoutMs / 60_000)} minutes and was interrupted.`,
+          ),
+        );
       const touch = () => {
         if (!this.turnIdleTimeoutMs) return;
         clearTimeout(idleTimer);
@@ -241,11 +293,30 @@ class CodexAppServer {
       };
       this.turns.set(turnId, turn);
       touch();
-      if (this.turnHardTimeoutMs) hardTimer = setTimeout(() => interruptAndReject(new Error(`${taskLabel} reached the ${Math.round(this.turnHardTimeoutMs / 60_000)}-minute safety limit and was interrupted.`)), this.turnHardTimeoutMs);
+      if (this.turnHardTimeoutMs)
+        hardTimer = setTimeout(
+          () =>
+            interruptAndReject(
+              new Error(
+                `${taskLabel} reached the ${Math.round(this.turnHardTimeoutMs / 60_000)}-minute safety limit and was interrupted.`,
+              ),
+            ),
+          this.turnHardTimeoutMs,
+        );
     });
   }
 
-  async analyze({ paper, profile, localInventory = [], primarySource = null, correctnessAudit = true, detailedAudit = true, updateContext = null, resumeThreadId = '', onThreadReady = null }) {
+  async analyze({
+    paper,
+    profile,
+    localInventory = [],
+    primarySource = null,
+    correctnessAudit = true,
+    detailedAudit = true,
+    updateContext = null,
+    resumeThreadId = '',
+    onThreadReady = null,
+  }) {
     await this.start();
     const model = profile.model || this.models.find((item) => item.isDefault)?.model || undefined;
     let threadId = String(resumeThreadId || '');
@@ -256,22 +327,41 @@ class CodexAppServer {
         cwd: WORKDIR,
         approvalPolicy: 'never',
         sandbox: 'read-only',
-        developerInstructions: 'You are a mathematical reading assistant. Do not modify any files. Primary-source accuracy is more important than speed.',
+        developerInstructions:
+          'You are a mathematical reading assistant. Do not modify any files. Primary-source accuracy is more important than speed.',
       });
       threadId = created.thread?.id;
       if (!threadId) throw new Error('Codex did not create an analysis thread.');
       this.loadedThreads.add(threadId);
     }
     if (onThreadReady) await onThreadReady(threadId);
-    const output = await this.runTurn({
-      threadId,
-      input: [{ type: 'text', text: auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit, detailedAudit, updateContext, continuation: Boolean(resumeThreadId) }), text_elements: [] }],
-      model,
-      effort: profile.reasoning,
-      approvalPolicy: 'never',
-      sandboxPolicy: { type: 'readOnly', networkAccess: true },
-      outputSchema: makeAuditSchema(),
-    }, { taskLabel: 'AI audit' });
+    const output = await this.runTurn(
+      {
+        threadId,
+        input: [
+          {
+            type: 'text',
+            text: auditPrompt({
+              paper,
+              profile,
+              localInventory,
+              primarySource,
+              correctnessAudit,
+              detailedAudit,
+              updateContext,
+              continuation: Boolean(resumeThreadId),
+            }),
+            text_elements: [],
+          },
+        ],
+        model,
+        effort: profile.reasoning,
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'readOnly', networkAccess: true },
+        outputSchema: makeAuditSchema(),
+      },
+      { taskLabel: 'AI audit' },
+    );
     return { threadId, ...output };
   }
 
@@ -283,7 +373,8 @@ class CodexAppServer {
       cwd: WORKDIR,
       approvalPolicy: 'never',
       sandbox: 'read-only',
-      developerInstructions: 'You are a source-faithful mathematical transcription assistant. Do not modify files or invent missing mathematics.',
+      developerInstructions:
+        'You are a source-faithful mathematical transcription assistant. Do not modify files or invent missing mathematics.',
     });
     const threadId = created.thread?.id;
     if (!threadId) throw new Error('Codex did not create a LaTeX conversion thread.');
@@ -307,14 +398,21 @@ class CodexAppServer {
       cwd: WORKDIR,
       approvalPolicy: 'never',
       sandbox: 'read-only',
-      developerInstructions: 'You are a source-critical mathematical version comparison assistant. Do not modify files. Distinguish mathematical changes from TeX or formatting changes.',
+      developerInstructions:
+        'You are a source-critical mathematical version comparison assistant. Do not modify files. Distinguish mathematical changes from TeX or formatting changes.',
     });
     const threadId = created.thread?.id;
     if (!threadId) throw new Error('Codex did not create a comparison thread.');
     this.loadedThreads.add(threadId);
     const output = await this.runTurn({
       threadId,
-      input: [{ type: 'text', text: comparisonPrompt({ paper, fromVersion, toVersion, fromSource, toSource, profile, readerContext }), text_elements: [] }],
+      input: [
+        {
+          type: 'text',
+          text: comparisonPrompt({ paper, fromVersion, toVersion, fromSource, toSource, profile, readerContext }),
+          text_elements: [],
+        },
+      ],
       model,
       effort: profile.reasoning,
       approvalPolicy: 'never',
@@ -336,7 +434,8 @@ class CodexAppServer {
         cwd: WORKDIR,
         approvalPolicy: 'never',
         sandbox: 'read-only',
-        developerInstructions: 'You are a source-critical mathematical reading assistant. Do not modify files. Re-open the local primary source whenever the saved audit context is insufficient.',
+        developerInstructions:
+          'You are a source-critical mathematical reading assistant. Do not modify files. Re-open the local primary source whenever the saved audit context is insufficient.',
       });
       readerThreadId = created.thread?.id;
       if (!readerThreadId) throw new Error('Codex did not create a reader conversation.');
@@ -365,7 +464,8 @@ class CodexAppServer {
         cwd: WORKDIR,
         approvalPolicy: 'never',
         sandbox: 'read-only',
-        developerInstructions: 'You are a source-critical mathematical reading assistant. Do not modify files. Re-open the local primary source whenever the saved audit context is insufficient.',
+        developerInstructions:
+          'You are a source-critical mathematical reading assistant. Do not modify files. Re-open the local primary source whenever the saved audit context is insufficient.',
       });
       readerThreadId = created.thread?.id;
       if (!readerThreadId) throw new Error('Codex did not create a reader conversation.');
@@ -373,7 +473,9 @@ class CodexAppServer {
     }
     const output = await this.runTurn({
       threadId: readerThreadId,
-      input: [{ type: 'text', text: paperQuestionPrompt({ paper, currentNode, question, continuation }), text_elements: [] }],
+      input: [
+        { type: 'text', text: paperQuestionPrompt({ paper, currentNode, question, continuation }), text_elements: [] },
+      ],
       model,
       effort: profile.reasoning,
       approvalPolicy: 'never',

@@ -9,19 +9,27 @@ Return only one complete compilable LaTeX document, beginning with \\documentcla
 }
 
 function extractLatexDocument(text, paper = null) {
-  const clean = String(text || '').trim().replace(/^```(?:latex|tex)?\s*/i, '').replace(/\s*```$/i, '');
+  const clean = String(text || '')
+    .trim()
+    .replace(/^```(?:latex|tex)?\s*/i, '')
+    .replace(/\s*```$/i, '');
   const start = clean.indexOf('\\documentclass');
   const endMarker = '\\end{document}';
   const end = clean.lastIndexOf(endMarker);
   if (start < 0 || end < start) throw new Error('Codex did not return a complete LaTeX document.');
   const document = clean.slice(start, end + endMarker.length).trim();
-  if (Buffer.byteLength(document, 'utf8') > 12 * 1024 * 1024) throw new Error('The AI-converted LaTeX document exceeds the local safety limit.');
+  if (Buffer.byteLength(document, 'utf8') > 12 * 1024 * 1024)
+    throw new Error('The AI-converted LaTeX document exceeds the local safety limit.');
   const body = document.match(/\\begin\{document\}([\s\S]*)\\end\{document\}/)?.[1]?.trim() ?? '';
-  const refusal = /cannot (?:provide|transcribe|convert)|can't (?:provide|transcribe|convert)|copyright(?:ed)? paper|unable to (?:access|provide|transcribe)|I (?:can|could) help (?:with|you) (?:a )?(?:short|brief|summary)/i;
-  const hasStructure = /\\(?:section|chapter|part)\*?\s*\{|\\begin\{(?:abstract|theorem|lemma|proposition|definition|proof)\}/.test(body);
+  const refusal =
+    /cannot (?:provide|transcribe|convert)|can't (?:provide|transcribe|convert)|copyright(?:ed)? paper|unable to (?:access|provide|transcribe)|I (?:can|could) help (?:with|you) (?:a )?(?:short|brief|summary)/i;
+  const hasStructure =
+    /\\(?:section|chapter|part)\*?\s*\{|\\begin\{(?:abstract|theorem|lemma|proposition|definition|proof)\}/.test(body);
   if (refusal.test(body) || Buffer.byteLength(body, 'utf8') < 2_000 || !hasStructure) {
     const label = paper?.arxivId ? `arXiv:${paper.arxivId}` : 'this paper';
-    throw new Error(`AI could not create a complete LaTeX reading source for ${label}. Upload the author TeX (use ZIP for a multi-file project) or the original PDF and try again.`);
+    throw new Error(
+      `AI could not create a complete LaTeX reading source for ${label}. Upload the author TeX (use ZIP for a multi-file project) or the original PDF and try again.`,
+    );
   }
   return `${document}\n`;
 }
@@ -39,10 +47,42 @@ function makeAuditSchema() {
   const node = {
     type: 'object',
     additionalProperties: false,
-    required: ['id', 'kind', 'label', 'title', 'statement', 'proofText', 'citations', 'status', 'anchor', 'role', 'dependencies', 'proofSketch', 'whyItMatters', 'expandable'],
+    required: [
+      'id',
+      'kind',
+      'label',
+      'title',
+      'statement',
+      'proofText',
+      'citations',
+      'status',
+      'anchor',
+      'role',
+      'dependencies',
+      'proofSketch',
+      'whyItMatters',
+      'expandable',
+    ],
     properties: {
       id: { type: 'string' },
-      kind: { enum: ['definition', 'assumption', 'notation', 'lemma', 'proposition', 'theorem', 'corollary', 'conjecture', 'proof', 'equation', 'remark', 'example', 'section', 'external-result'] },
+      kind: {
+        enum: [
+          'definition',
+          'assumption',
+          'notation',
+          'lemma',
+          'proposition',
+          'theorem',
+          'corollary',
+          'conjecture',
+          'proof',
+          'equation',
+          'remark',
+          'example',
+          'section',
+          'external-result',
+        ],
+      },
       label: { type: 'string' },
       title: { type: 'string' },
       statement: { type: 'string' },
@@ -50,9 +90,27 @@ function makeAuditSchema() {
       citations: {
         type: 'array',
         items: {
-          type: 'object', additionalProperties: false,
+          type: 'object',
+          additionalProperties: false,
           required: ['key', 'locator', 'statement', 'definitions'],
-          properties: { key: { type: 'string' }, locator: { type: 'string' }, statement: { type: 'string' }, definitions: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['notation', 'definition', 'source'], properties: { notation: { type: 'string' }, definition: { type: 'string' }, source: { type: 'string' } } } } },
+          properties: {
+            key: { type: 'string' },
+            locator: { type: 'string' },
+            statement: { type: 'string' },
+            definitions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['notation', 'definition', 'source'],
+                properties: {
+                  notation: { type: 'string' },
+                  definition: { type: 'string' },
+                  source: { type: 'string' },
+                },
+              },
+            },
+          },
         },
       },
       status: { enum: ['verified', 'needs-verification', 'unavailable'] },
@@ -85,15 +143,21 @@ function makeAuditSchema() {
       readingPaths: {
         type: 'array',
         items: {
-          type: 'object', additionalProperties: false,
+          type: 'object',
+          additionalProperties: false,
           required: ['goal', 'nodeIds', 'reason'],
-          properties: { goal: { type: 'string' }, nodeIds: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } },
+          properties: {
+            goal: { type: 'string' },
+            nodeIds: { type: 'array', items: { type: 'string' } },
+            reason: { type: 'string' },
+          },
         },
       },
       crossPaperLinks: {
         type: 'array',
         items: {
-          type: 'object', additionalProperties: false,
+          type: 'object',
+          additionalProperties: false,
           required: ['fromNodeId', 'targetPaperId', 'targetNodeId', 'relation', 'rationale'],
           properties: {
             fromNodeId: { type: 'string' },
@@ -105,7 +169,22 @@ function makeAuditSchema() {
         },
       },
       openQuestions: { type: 'array', items: { type: 'string' } },
-      editorialCorrections: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['nodeId', 'field', 'original', 'replacement', 'rationale', 'confidence'], properties: { nodeId: { type: 'string' }, field: { enum: ['statement', 'proofText'] }, original: { type: 'string' }, replacement: { type: 'string' }, rationale: { type: 'string' }, confidence: { enum: ['high', 'medium', 'low'] } } } },
+      editorialCorrections: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['nodeId', 'field', 'original', 'replacement', 'rationale', 'confidence'],
+          properties: {
+            nodeId: { type: 'string' },
+            field: { enum: ['statement', 'proofText'] },
+            original: { type: 'string' },
+            replacement: { type: 'string' },
+            rationale: { type: 'string' },
+            confidence: { enum: ['high', 'medium', 'low'] },
+          },
+        },
+      },
     },
   };
 }
@@ -128,17 +207,29 @@ function makeVersionComparisonSchema() {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['summary', 'changedUnits', 'proofChanges', 'notationChanges', 'editorialChanges', 'dependencyImpact', 'readingRecommendation', 'warnings'],
+    required: [
+      'summary',
+      'changedUnits',
+      'proofChanges',
+      'notationChanges',
+      'editorialChanges',
+      'dependencyImpact',
+      'readingRecommendation',
+      'warnings',
+    ],
     properties: {
       summary: { type: 'string' },
       changedUnits: {
         type: 'array',
         items: {
-          type: 'object', additionalProperties: false,
+          type: 'object',
+          additionalProperties: false,
           required: ['label', 'changeType', 'before', 'after', 'significance', 'dependencyImpact'],
           properties: {
             label: { type: 'string' },
-            changeType: { enum: ['added', 'removed', 'strengthened', 'weakened', 'corrected', 'reorganized', 'wording'] },
+            changeType: {
+              enum: ['added', 'removed', 'strengthened', 'weakened', 'corrected', 'reorganized', 'wording'],
+            },
             before: { type: 'string' },
             after: { type: 'string' },
             significance: { enum: ['mathematical', 'proof-level', 'expository', 'uncertain'] },
@@ -156,29 +247,40 @@ function makeVersionComparisonSchema() {
   };
 }
 
-function auditPrompt({ paper, profile, localInventory, primarySource, correctnessAudit = true, detailedAudit = true, updateContext = null, continuation = false }) {
+function auditPrompt({
+  paper,
+  profile,
+  localInventory,
+  primarySource,
+  correctnessAudit = true,
+  detailedAudit = true,
+  updateContext = null,
+  continuation = false,
+}) {
   const libraryContext = localInventory.length
     ? JSON.stringify(localInventory, null, 2)
     : 'No other audited papers are available in the local vault yet.';
-  const sourceInstructions = primarySource?.kind === 'tex'
-    ? `A local ${primarySource.origin === 'reader-upload' ? 'reader-supplied' : 'arXiv'} TeX source bundle has already been acquired. Read it before doing anything else.
+  const sourceInstructions =
+    primarySource?.kind === 'tex'
+      ? `A local ${primarySource.origin === 'reader-upload' ? 'reader-supplied' : 'arXiv'} TeX source bundle has already been acquired. Read it before doing anything else.
 - main TeX entry: ${primarySource.entryFile}
 - source directory: ${primarySource.sourceDirectory}
 - TeX files available: ${primarySource.fileCount}
 
 Prefer these local TeX files over the PDF: preserve theorem environment labels, \\label/\\ref relationships, section structure, equations, and \\input/\\include dependencies. Use the PDF only to verify pagination or material absent from the source bundle.`
-    : primarySource?.kind === 'ai-tex'
-      ? `The arXiv source bundle had no usable TeX. At the reader's request, local AI transcribed the complete PDF into an editable LaTeX working source.
+      : primarySource?.kind === 'ai-tex'
+        ? `The arXiv source bundle had no usable TeX. At the reader's request, local AI transcribed the complete PDF into an editable LaTeX working source.
 - AI-generated LaTeX entry: ${primarySource.entryFile}
 - source directory: ${primarySource.sourceDirectory}
 
 Read that local LaTeX document first, but treat the original PDF at https://arxiv.org/pdf/${paper.arxivId} as authoritative. Verify statements against the PDF whenever the conversion may be ambiguous. State clearly in sourceSummary that the LaTeX is an AI transcription, not author-supplied source.`
-      : primarySource?.kind === 'uploaded-pdf'
-        ? `The reader supplied the primary PDF directly. Read the complete local PDF at ${primarySource.entryFile}. Treat this uploaded file as authoritative and do not attempt to substitute an arXiv document.`
-        : `The arXiv TeX source could not be used (${primarySource?.error || 'unavailable'}). Fall back to the primary PDF at https://arxiv.org/pdf/${paper.arxivId}.`;
-  const proofCaptureInstructions = primarySource?.kind === 'tex' || primarySource?.kind === 'ai-tex'
-    ? `The host application deterministically attaches complete theorem statements and proof environments from the local LaTeX tree after your turn. Set proofText to an empty string for every node; spend the response budget on accurate dependency analysis and proofSketch explanations. Do not warn about proof payload length.`
-    : `For every theorem, lemma, proposition, corollary, and proof node, statement must be a source-faithful transcription of the complete printed statement, not a summary, and proofText must contain the complete proof from the PDF, including all equations, cases, and cited intermediate results. Do not shorten a proof. Use an empty proofText only when the source genuinely has no proof or the complete proof cannot be accessed, and explain that limitation in the verification warnings.`;
+        : primarySource?.kind === 'uploaded-pdf'
+          ? `The reader supplied the primary PDF directly. Read the complete local PDF at ${primarySource.entryFile}. Treat this uploaded file as authoritative and do not attempt to substitute an arXiv document.`
+          : `The arXiv TeX source could not be used (${primarySource?.error || 'unavailable'}). Fall back to the primary PDF at https://arxiv.org/pdf/${paper.arxivId}.`;
+  const proofCaptureInstructions =
+    primarySource?.kind === 'tex' || primarySource?.kind === 'ai-tex'
+      ? `The host application deterministically attaches complete theorem statements and proof environments from the local LaTeX tree after your turn. Set proofText to an empty string for every node; spend the response budget on accurate dependency analysis and proofSketch explanations. Do not warn about proof payload length.`
+      : `For every theorem, lemma, proposition, corollary, and proof node, statement must be a source-faithful transcription of the complete printed statement, not a summary, and proofText must contain the complete proof from the PDF, including all equations, cases, and cited intermediate results. Do not shorten a proof. Use an empty proofText only when the source genuinely has no proof or the complete proof cannot be accessed, and explain that limitation in the verification warnings.`;
   const correctnessInstructions = correctnessAudit
     ? `CORRECTNESS AUDIT REQUESTED: Treat this as an adversarial mathematical referee pass, not a summary. For every formal environment, actively check whether the statement is well-formed under the declared hypotheses and whether its proof supports the exact conclusion. Try the smallest natural examples and counterexamples against universal claims. Check every division, normalization, extension across a singular set, change of quantifiers, use of compactness or a maximum principle, and transition between pointwise, local, and global assertions. In geometry and sheaf theory, explicitly distinguish a locally free sheaf from a subbundle, a sheaf injection from a fibrewise injection or nowhere-vanishing section, and an arbitrary subsheaf from a saturated one; verify that any quotient has the regularity the proof uses. Trace dependencies, inspect cited prerequisites when accessible, and use status "verified" only when this check succeeds. Use "needs-verification" for a specific gap, ambiguity, unchecked external dependency, or possible error, explain the exact failure and a concrete test case in role or verificationWarnings, and propagate the warning to downstream results that use it. Never repair or silently strengthen an argument.`
     : `CORRECTNESS AUDIT NOT REQUESTED: Preserve the complete document structure and source text, build logical dependencies, and mark source-transcribed environments as verified only in the limited sense that their text was located in the primary source. Do not claim that the mathematics or proof has been checked for correctness.`;
@@ -250,7 +352,9 @@ If the reader asks to retrieve or expand a cited result, follow the citation URL
 }
 
 function paperQuestionPrompt({ paper, currentNode, question, continuation = true }) {
-  const sourceHint = paper.folder ? `The local paper folder is proofroom-library/${paper.folder}; prefer its attachments/source TeX tree over the PDF whenever it is present, and inspect attachments/references for reader-supplied cited sources.` : `Use the primary source already inspected in the full-paper audit.`;
+  const sourceHint = paper.folder
+    ? `The local paper folder is proofroom-library/${paper.folder}; prefer its attachments/source TeX tree over the PDF whenever it is present, and inspect attachments/references for reader-supplied cited sources.`
+    : `Use the primary source already inspected in the full-paper audit.`;
   const conversationContext = continuation
     ? 'The complete paper and the durable full-paper audit from the first turn are the controlling context for this conversation.'
     : 'This is a new reader conversation created from a portable audit that has no reusable Codex thread. Inspect the local primary source and use the paper metadata below as the controlling context.';
@@ -270,9 +374,10 @@ function editorialPrompt({ paper, node }) {
 }
 
 function comparisonPrompt({ paper, fromVersion, toVersion, fromSource, toSource, profile, readerContext = null }) {
-  const describe = (version, source) => source?.kind === 'tex'
-    ? `${version}: local TeX entry ${source.entryFile} (source directory ${source.sourceDirectory})`
-    : `${version}: TeX unavailable; inspect https://arxiv.org/pdf/${version} (${source?.error || 'PDF fallback'})`;
+  const describe = (version, source) =>
+    source?.kind === 'tex'
+      ? `${version}: local TeX entry ${source.entryFile} (source directory ${source.sourceDirectory})`
+      : `${version}: TeX unavailable; inspect https://arxiv.org/pdf/${version} (${source?.error || 'PDF fallback'})`;
   return `You are comparing two primary-source versions of the same mathematical paper for a ${profile.level} reader whose goal is "${profile.goal}".
 
 Paper: ${paper.title}
@@ -288,4 +393,15 @@ Prioritize changes to definitions, assumptions, theorem/lemma/proposition statem
 Return JSON only, matching the supplied schema. The reading recommendation should tell a mathematician exactly which changed results or proofs deserve rereading.`;
 }
 
-export { auditPrompt, comparisonPrompt, editorialPrompt, extractLatexDocument, latexConversionPrompt, makeAuditSchema, makeEditorialSchema, makeVersionComparisonSchema, nodeQuestionPrompt, paperQuestionPrompt };
+export {
+  auditPrompt,
+  comparisonPrompt,
+  editorialPrompt,
+  extractLatexDocument,
+  latexConversionPrompt,
+  makeAuditSchema,
+  makeEditorialSchema,
+  makeVersionComparisonSchema,
+  nodeQuestionPrompt,
+  paperQuestionPrompt,
+};

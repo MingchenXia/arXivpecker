@@ -23,7 +23,11 @@ function stop(signal = 'SIGTERM') {
 
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => stop(signal));
 for (const child of children) {
-  child.on('error', (error) => { console.error(error.message); stop(); process.exitCode = 1; });
+  child.on('error', (error) => {
+    console.error(error.message);
+    stop();
+    process.exitCode = 1;
+  });
   child.on('exit', (code, signal) => {
     if (stopping) return;
     stop();

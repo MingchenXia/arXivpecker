@@ -30,34 +30,38 @@ function audit(nodeId, title) {
     centralQuestion: 'Does this local integration test preserve reader data?',
     mainContribution: 'It exercises the complete local vault API.',
     verificationWarnings: [],
-    nodes: [{
-      id: nodeId,
-      kind: 'theorem',
-      label: 'Theorem 1',
-      title,
-      statement: '$x=x$.',
-      proofText: 'Immediate.',
-      status: 'needs-review',
-      anchor: { label: 'Theorem 1', page: 1, confidence: 'exact' },
-      role: 'Release-test result',
-      dependencies: [],
-      proofSketch: ['Use reflexivity.'],
-      whyItMatters: 'Provides a stable graph node.',
-      expandable: true,
-    }],
-    sourceBlocks: [{
-      id: `source-${nodeId}`,
-      kind: 'result',
-      level: 2,
-      title: 'Theorem 1',
-      content: '$x=x$.',
-      proofText: 'Immediate.',
-      nodeId,
-      resultKind: 'theorem',
-      citations: [],
-      assetPaths: [],
-      caption: '',
-    }],
+    nodes: [
+      {
+        id: nodeId,
+        kind: 'theorem',
+        label: 'Theorem 1',
+        title,
+        statement: '$x=x$.',
+        proofText: 'Immediate.',
+        status: 'needs-review',
+        anchor: { label: 'Theorem 1', page: 1, confidence: 'exact' },
+        role: 'Release-test result',
+        dependencies: [],
+        proofSketch: ['Use reflexivity.'],
+        whyItMatters: 'Provides a stable graph node.',
+        expandable: true,
+      },
+    ],
+    sourceBlocks: [
+      {
+        id: `source-${nodeId}`,
+        kind: 'result',
+        level: 2,
+        title: 'Theorem 1',
+        content: '$x=x$.',
+        proofText: 'Immediate.',
+        nodeId,
+        resultKind: 'theorem',
+        citations: [],
+        assetPaths: [],
+        caption: '',
+      },
+    ],
   };
 }
 
@@ -79,7 +83,9 @@ async function waitFor(url, child, output) {
     try {
       const response = await fetch(`${url}/vault`);
       if (response.ok) return;
-    } catch { /* The bridge is still starting. */ }
+    } catch {
+      /* The bridge is still starting. */
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`Bridge did not become ready:\n${output()}`);
@@ -140,24 +146,47 @@ try {
   const missingRoute = await fetch(`${url}/not-a-route`, { headers: { Origin: 'http://localhost:3000' } });
   assert.equal(missingRoute.status, 404, 'Unknown bridge routes must return a bounded JSON 404.');
 
-  const malformed = await fetch(`${url}/vault/paper`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' }, body: '{broken' });
+  const malformed = await fetch(`${url}/vault/paper`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' },
+    body: '{broken',
+  });
   assert.equal(malformed.status, 400, 'A malformed request body is a client error.');
   assert.match((await malformed.json()).error, /must be JSON/);
 
   // fetch() always sends the real Host header, so use node:http to spoof it.
   const reboundStatus = await new Promise((resolve, reject) => {
-    httpGet({ host: '127.0.0.1', port, path: '/vault', headers: { Host: `attacker.example:${port}` } }, (reply) => { reply.resume(); resolve(reply.statusCode); }).on('error', reject);
+    httpGet({ host: '127.0.0.1', port, path: '/vault', headers: { Host: `attacker.example:${port}` } }, (reply) => {
+      reply.resume();
+      resolve(reply.statusCode);
+    }).on('error', reject);
   });
   assert.equal(reboundStatus, 403, 'A DNS-rebound host name must not read the local library.');
 
   const missingPaper = await jsonRequest(url, '/vault/paper', { paper: { title: '' } });
-  assert.equal(missingPaper.response.status, 400, 'Incomplete paper metadata must be rejected before writing to the vault.');
+  assert.equal(
+    missingPaper.response.status,
+    400,
+    'Incomplete paper metadata must be rejected before writing to the vault.',
+  );
 
-  const cloudStatus = await (await fetch(`${url}/cloud/status`, { headers: { Origin: 'http://localhost:3000' } })).json();
-  assert.equal(cloudStatus.providers.find((provider) => provider.id === 'icloud')?.available, true, 'The configured cloud provider must be discoverable.');
+  const cloudStatus = await (
+    await fetch(`${url}/cloud/status`, { headers: { Origin: 'http://localhost:3000' } })
+  ).json();
+  assert.equal(
+    cloudStatus.providers.find((provider) => provider.id === 'icloud')?.available,
+    true,
+    'The configured cloud provider must be discoverable.',
+  );
 
-  const profile = await post(url, '/vault/profile', { profile: { level: 'Researcher', areas: ['math.AG', 'not-an-area'], goal: 'Reproduce a proof', reasoning: 'high' } });
-  assert.deepEqual(profile.profile.areas, ['math.AG'], 'Profile normalization must preserve only valid mathematics areas.');
+  const profile = await post(url, '/vault/profile', {
+    profile: { level: 'Researcher', areas: ['math.AG', 'not-an-area'], goal: 'Reproduce a proof', reasoning: 'high' },
+  });
+  assert.deepEqual(
+    profile.profile.areas,
+    ['math.AG'],
+    'Profile normalization must preserve only valid mathematics areas.',
+  );
 
   const first = (await post(url, '/vault/paper', { paper: paper('2601.00001v1', 'First release-test paper') })).paper;
   const second = (await post(url, '/vault/paper', { paper: paper('2601.00002v1', 'Second release-test paper') })).paper;
@@ -185,16 +214,23 @@ try {
     upload: { fileName: 'paper.pdf', dataBase64: pdfPayload.toString('base64') },
   });
   assert.match(uploadedPdf.paper.source.localPdf, /paper\.pdf$/);
-  const localPdf = await fetch(`${url}/paper-pdf?paperId=${encodeURIComponent(uploadedPdf.paper.id)}`, { headers: { Origin: 'http://localhost:3000' } });
+  const localPdf = await fetch(`${url}/paper-pdf?paperId=${encodeURIComponent(uploadedPdf.paper.id)}`, {
+    headers: { Origin: 'http://localhost:3000' },
+  });
   assert.equal(localPdf.status, 200);
   assert.equal(localPdf.headers.get('content-type'), 'application/pdf');
   assert.deepEqual(Buffer.from(await localPdf.arrayBuffer()), pdfPayload);
-  const texAsPdf = await fetch(`${url}/paper-pdf?paperId=${encodeURIComponent(direct.paper.id)}`, { headers: { Origin: 'http://localhost:3000' } });
+  const texAsPdf = await fetch(`${url}/paper-pdf?paperId=${encodeURIComponent(direct.paper.id)}`, {
+    headers: { Origin: 'http://localhost:3000' },
+  });
   assert.equal(texAsPdf.status, 500, 'A local TeX source must not expose a fabricated original PDF.');
 
   await mkdir(project, { recursive: true });
   await Promise.all([
-    writeFile(path.join(project, 'main.tex'), String.raw`\documentclass{article}\begin{document}\input{appendix}\includegraphics{figure}\end{document}`),
+    writeFile(
+      path.join(project, 'main.tex'),
+      String.raw`\documentclass{article}\begin{document}\input{appendix}\includegraphics{figure}\end{document}`,
+    ),
     writeFile(path.join(project, 'appendix.tex'), String.raw`\section{Appendix} $\int_0^1 x\,dx=\frac12$`),
     writeFile(path.join(project, 'figure.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'),
     writeFile(path.join(project, '..valid.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>'),
@@ -205,25 +241,43 @@ try {
     upload: { fileName: 'project.zip', dataBase64: (await readFile(archive)).toString('base64') },
   });
   assert.equal(zipped.primarySource.kind, 'tex');
-  assert.equal(zipped.primarySource.fileCount, 2, 'ZIP upload must discover every TeX file and choose its main document.');
+  assert.equal(
+    zipped.primarySource.fileCount,
+    2,
+    'ZIP upload must discover every TeX file and choose its main document.',
+  );
 
-  await writeFile(path.join(root, 'escape.tex'), String.raw`\documentclass{article}\begin{document}Unsafe archive entry.\end{document}`);
+  await writeFile(
+    path.join(root, 'escape.tex'),
+    String.raw`\documentclass{article}\begin{document}Unsafe archive entry.\end{document}`,
+  );
   await runFile('zip', ['-q', unsafeArchive, '../escape.tex'], { cwd: project });
   const unsafeUpload = await jsonRequest(url, '/vault/source-upload', {
     paper: paper('local-unsafe-zip', 'Unsafe ZIP upload'),
     upload: { fileName: 'unsafe.zip', dataBase64: (await readFile(unsafeArchive)).toString('base64') },
   });
-  assert.equal(unsafeUpload.response.status, 500, 'ZIP entries that escape the project directory must be rejected before extraction.');
+  assert.equal(
+    unsafeUpload.response.status,
+    500,
+    'ZIP entries that escape the project directory must be rejected before extraction.',
+  );
   assert.match(unsafeUpload.body.error, /unsafe path/);
 
   const portableUnsafeName = '..\\portable-escape.tex';
-  await writeFile(path.join(project, portableUnsafeName), String.raw`\documentclass{article}\begin{document}Portable traversal.\end{document}`);
+  await writeFile(
+    path.join(project, portableUnsafeName),
+    String.raw`\documentclass{article}\begin{document}Portable traversal.\end{document}`,
+  );
   await runFile('zip', ['-q', portableUnsafeArchive, portableUnsafeName], { cwd: project });
   const portableUnsafeUpload = await jsonRequest(url, '/vault/source-upload', {
     paper: paper('local-portable-unsafe-zip', 'Portable unsafe ZIP upload'),
     upload: { fileName: 'portable-unsafe.zip', dataBase64: (await readFile(portableUnsafeArchive)).toString('base64') },
   });
-  assert.equal(portableUnsafeUpload.response.status, 500, 'Backslash traversal must be rejected even when the bridge runs on a POSIX host.');
+  assert.equal(
+    portableUnsafeUpload.response.status,
+    500,
+    'Backslash traversal must be rejected even when the bridge runs on a POSIX host.',
+  );
   assert.match(portableUnsafeUpload.body.error, /unsafe path/);
 
   if (process.platform !== 'win32') {
@@ -241,16 +295,27 @@ try {
   const archivePayload = await readFile(archive);
   const corruptUpload = await jsonRequest(url, '/vault/source-upload', {
     paper: paper('local-corrupt-zip', 'Truncated ZIP upload'),
-    upload: { fileName: 'corrupt.zip', dataBase64: archivePayload.subarray(0, Math.max(1, archivePayload.length - 32)).toString('base64') },
+    upload: {
+      fileName: 'corrupt.zip',
+      dataBase64: archivePayload.subarray(0, Math.max(1, archivePayload.length - 32)).toString('base64'),
+    },
   });
-  assert.equal(corruptUpload.response.status, 500, 'A truncated ZIP must fail integrity checks before writing a vault record.');
+  assert.equal(
+    corruptUpload.response.status,
+    500,
+    'A truncated ZIP must fail integrity checks before writing a vault record.',
+  );
 
   await runFile('zip', ['-q', noTexArchive, 'figure.svg'], { cwd: project });
   const noTexUpload = await jsonRequest(url, '/vault/source-upload', {
     paper: paper('local-no-tex-zip', 'ZIP upload without TeX'),
     upload: { fileName: 'no-tex.zip', dataBase64: (await readFile(noTexArchive)).toString('base64') },
   });
-  assert.equal(noTexUpload.response.status, 500, 'A ZIP without any TeX source must be rejected before writing a vault record.');
+  assert.equal(
+    noTexUpload.response.status,
+    500,
+    'A ZIP without any TeX source must be rejected before writing a vault record.',
+  );
   assert.match(noTexUpload.body.error, /does not contain a TeX file/);
 
   const expandingFile = path.join(project, 'expanding-source.tex');
@@ -261,7 +326,11 @@ try {
     paper: paper('local-expanding-zip', 'Expanding ZIP upload'),
     upload: { fileName: 'expanding.zip', dataBase64: (await readFile(expandingArchive)).toString('base64') },
   });
-  assert.equal(expandingUpload.response.status, 500, 'A highly compressible ZIP must be rejected using its expanded size, not its small upload size.');
+  assert.equal(
+    expandingUpload.response.status,
+    500,
+    'A highly compressible ZIP must be rejected using its expanded size, not its small upload size.',
+  );
   assert.match(expandingUpload.body.error, /256 MB safety limit/);
 
   const badUpload = await jsonRequest(url, '/vault/source-upload', {
@@ -270,76 +339,187 @@ try {
   });
   assert.equal(badUpload.response.status, 500, 'Unsupported upload types must be rejected.');
 
-  const firstAudit = await post(url, '/vault/audit', { paper: first, audit: audit('first-result', 'First release-test theorem') });
+  const firstAudit = await post(url, '/vault/audit', {
+    paper: first,
+    audit: audit('first-result', 'First release-test theorem'),
+  });
   await post(url, '/vault/audit', { paper: second, audit: audit('second-result', 'Second release-test theorem') });
   await post(url, '/vault/audit', { paper: zipped.paper, audit: audit('zip-result', 'ZIP release-test theorem') });
   assert.equal(firstAudit.paper.id, first.id);
 
   const reader = await post(url, '/vault/reader', {
     paperId: first.id,
-    reader: { notes: [{ id: 'note-1', paperId: first.id, text: 'Keep this note.', createdAt: '2026-01-01T00:00:00.000Z' }], nodeNotes: { 'first-result': 'Reader note' }, nodeAnswers: { 'first-result': 'Reader answer' }, expanded: { section: true }, marks: { 'first-result': 'understood', invalid: 'ignored' } },
+    reader: {
+      notes: [{ id: 'note-1', paperId: first.id, text: 'Keep this note.', createdAt: '2026-01-01T00:00:00.000Z' }],
+      nodeNotes: { 'first-result': 'Reader note' },
+      nodeAnswers: { 'first-result': 'Reader answer' },
+      expanded: { section: true },
+      marks: { 'first-result': 'understood', invalid: 'ignored' },
+    },
   });
   assert.deepEqual(reader.reader.marks, { 'first-result': 'understood' });
 
   const patched = await post(url, '/vault/patches', {
     paperId: first.id,
-    patches: [{ kind: 'replace', nodeId: 'first-result', nodeKind: 'theorem', title: 'Edited theorem', statement: '$x=x$.', proofText: 'Still immediate.', dependencies: [], proofSketch: [], source: 'manual' }, { kind: 'add', afterNodeId: 'first-result', nodeKind: 'remark', title: 'Reader addition', statement: 'A reversible local addition.', proofText: '', dependencies: ['first-result'], proofSketch: [], source: 'manual' }],
+    patches: [
+      {
+        kind: 'replace',
+        nodeId: 'first-result',
+        nodeKind: 'theorem',
+        title: 'Edited theorem',
+        statement: '$x=x$.',
+        proofText: 'Still immediate.',
+        dependencies: [],
+        proofSketch: [],
+        source: 'manual',
+      },
+      {
+        kind: 'add',
+        afterNodeId: 'first-result',
+        nodeKind: 'remark',
+        title: 'Reader addition',
+        statement: 'A reversible local addition.',
+        proofText: '',
+        dependencies: ['first-result'],
+        proofSketch: [],
+        source: 'manual',
+      },
+    ],
   });
   assert.equal(patched.patches.length, 2);
 
-  const link = await post(url, '/vault/link', { link: { from: { paperId: first.id, nodeId: 'first-result' }, to: { paperId: second.id, nodeId: 'second-result' }, relation: 'extends', note: 'Cross-paper release-test relation.' } });
+  const link = await post(url, '/vault/link', {
+    link: {
+      from: { paperId: first.id, nodeId: 'first-result' },
+      to: { paperId: second.id, nodeId: 'second-result' },
+      relation: 'extends',
+      note: 'Cross-paper release-test relation.',
+    },
+  });
   assert.equal(link.link.relation, 'extends');
   assert.ok(link.graph.edges.some((edge) => edge.source === 'manual'));
 
-  const asset = await fetch(`${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=figure.svg`, { headers: { Origin: 'http://localhost:3000' } });
+  const asset = await fetch(`${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=figure.svg`, {
+    headers: { Origin: 'http://localhost:3000' },
+  });
   assert.equal(asset.status, 200);
   assert.equal(asset.headers.get('content-type'), 'image/svg+xml');
-  assert.match(asset.headers.get('content-security-policy') ?? '', /sandbox/, 'An SVG opened directly must not run script on the bridge origin.');
-  const dottedAsset = await fetch(`${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=${encodeURIComponent('..valid.svg')}`, { headers: { Origin: 'http://localhost:3000' } });
-  assert.equal(dottedAsset.status, 200, 'A legitimate filename beginning with two dots must not be mistaken for parent traversal.');
+  assert.match(
+    asset.headers.get('content-security-policy') ?? '',
+    /sandbox/,
+    'An SVG opened directly must not run script on the bridge origin.',
+  );
+  const dottedAsset = await fetch(
+    `${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=${encodeURIComponent('..valid.svg')}`,
+    { headers: { Origin: 'http://localhost:3000' } },
+  );
+  assert.equal(
+    dottedAsset.status,
+    200,
+    'A legitimate filename beginning with two dots must not be mistaken for parent traversal.',
+  );
 
   if (process.platform !== 'win32') {
     await symlink('/etc/passwd', path.join(zipped.primarySource.sourceDirectory, 'outside.svg'));
-    const linkedAsset = await fetch(`${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=outside.svg`, { headers: { Origin: 'http://localhost:3000' } });
-    assert.equal(linkedAsset.status, 500, 'Figure lookup must reject a symbolic link that resolves outside the paper source tree.');
+    const linkedAsset = await fetch(`${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=outside.svg`, {
+      headers: { Origin: 'http://localhost:3000' },
+    });
+    assert.equal(
+      linkedAsset.status,
+      500,
+      'Figure lookup must reject a symbolic link that resolves outside the paper source tree.',
+    );
   }
 
-  const escapedAsset = await fetch(`${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=${encodeURIComponent('../../../../etc/passwd')}`, { headers: { Origin: 'http://localhost:3000' } });
+  const escapedAsset = await fetch(
+    `${url}/asset?paperId=${encodeURIComponent(zipped.paper.id)}&file=${encodeURIComponent('../../../../etc/passwd')}`,
+    { headers: { Origin: 'http://localhost:3000' } },
+  );
   assert.equal(escapedAsset.status, 500, 'Figure lookup must not read files outside the paper source tree.');
 
-  const citation = await post(url, '/vault/citation-asset', { paperId: first.id, upload: { citation: { key: 'test-ref', title: 'Reference asset' }, fileName: 'reference.txt', dataBase64: Buffer.from('reference attachment').toString('base64') } });
+  const citation = await post(url, '/vault/citation-asset', {
+    paperId: first.id,
+    upload: {
+      citation: { key: 'test-ref', title: 'Reference asset' },
+      fileName: 'reference.txt',
+      dataBase64: Buffer.from('reference attachment').toString('base64'),
+    },
+  });
   assert.equal(citation.saved.bytes, Buffer.byteLength('reference attachment'));
   await stat(path.join(root, 'library', citation.saved.relativePath));
 
-  const markdown = await post(url, '/vault/export', { paperId: first.id, export: { fileName: 'release-test.md', content: '# Release test\n', selection: { prose: true } } });
+  const markdown = await post(url, '/vault/export', {
+    paperId: first.id,
+    export: { fileName: 'release-test.md', content: '# Release test\n', selection: { prose: true } },
+  });
   assert.match(markdown.saved.relativePath, /release-test\.md$/);
   await stat(path.join(root, 'library', markdown.saved.relativePath));
 
-  const generatedVersionCache = path.join(root, 'library', zipped.paper.folder, 'attachments', 'source', 'versions', 'old-release');
+  const generatedVersionCache = path.join(
+    root,
+    'library',
+    zipped.paper.folder,
+    'attachments',
+    'source',
+    'versions',
+    'old-release',
+  );
   await mkdir(generatedVersionCache, { recursive: true });
-  await writeFile(path.join(generatedVersionCache, 'stale.tex'), String.raw`\documentclass{article}\begin{document}Stale cached version.\end{document}`);
-  const latex = await post(url, '/vault/latex-export', { paperId: zipped.paper.id, export: { edition: 'working', content: String.raw`\documentclass{article}\begin{document}Release test\end{document}` } });
+  await writeFile(
+    path.join(generatedVersionCache, 'stale.tex'),
+    String.raw`\documentclass{article}\begin{document}Stale cached version.\end{document}`,
+  );
+  const latex = await post(url, '/vault/latex-export', {
+    paperId: zipped.paper.id,
+    export: {
+      edition: 'working',
+      content: String.raw`\documentclass{article}\begin{document}Release test\end{document}`,
+    },
+  });
   assert.equal(latex.saved.format, 'zip', 'Multi-file TeX sources must export a portable ZIP edition.');
-  assert.equal(latex.saved.sourceFiles, 2, 'Generated version-comparison caches must not count as active source files.');
+  assert.equal(
+    latex.saved.sourceFiles,
+    2,
+    'Generated version-comparison caches must not count as active source files.',
+  );
   const exportedArchive = path.join(root, 'library', latex.saved.relativePath);
   await stat(exportedArchive);
   const { stdout: listing } = await runFile('unzip', ['-Z1', exportedArchive]);
   assert.match(listing, /original-source\/.*main\.tex/);
   assert.match(listing, /arxivpecker-working-edition\.tex/);
-  assert.doesNotMatch(listing, /original-source\/versions\//, 'Version-comparison caches must not leak into a working-edition source export.');
+  assert.doesNotMatch(
+    listing,
+    /original-source\/versions\//,
+    'Version-comparison caches must not leak into a working-edition source export.',
+  );
 
   if (process.platform === 'darwin') {
-    const shared = await post(url, '/cloud/share', { provider: 'icloud', title: 'Release test share', paperIds: [first.id], selection: { source: false, audit: true, notes: true, edits: true, references: false, preferences: true }, uiPreferences: { density: 'comfortable' } });
+    const shared = await post(url, '/cloud/share', {
+      provider: 'icloud',
+      title: 'Release test share',
+      paperIds: [first.id],
+      selection: { source: false, audit: true, notes: true, edits: true, references: false, preferences: true },
+      uiPreferences: { density: 'comfortable' },
+    });
     assert.equal(shared.share.paperCount, 1);
     const sharedArchive = path.join(cloudDirectory, 'arXivpecker', 'Shares', shared.share.fileName);
     await stat(sharedArchive);
     const { stdout: sharedAuditText } = await runFile('unzip', ['-p', sharedArchive, '*/papers/*/audit.json']);
-    assert.equal(JSON.parse(sharedAuditText).threadId, '', 'Portable cloud shares must not disclose a machine-local Codex thread identifier.');
+    assert.equal(
+      JSON.parse(sharedAuditText).threadId,
+      '',
+      'Portable cloud shares must not disclose a machine-local Codex thread identifier.',
+    );
   }
 
-  const started = await post(url, '/vault/audit', { paper: direct.paper, audit: audit('direct-result', 'Direct upload theorem') });
+  const started = await post(url, '/vault/audit', {
+    paper: direct.paper,
+    audit: audit('direct-result', 'Direct upload theorem'),
+  });
   assert.equal(started.paper.id, direct.paper.id);
-  const resumeStart = await post(url, '/vault/paper/order', { paperIds: [second.id, first.id, zipped.paper.id, direct.paper.id] });
+  const resumeStart = await post(url, '/vault/paper/order', {
+    paperIds: [second.id, first.id, zipped.paper.id, direct.paper.id],
+  });
   assert.equal(resumeStart.order[0], second.id);
 
   const update = await post(url, '/vault/paper/update-commit', {
@@ -347,7 +527,11 @@ try {
     audit: audit('first-result-v2', 'Revised release-test theorem'),
     reader: { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} },
     patches: [],
-    update: { fromVersion: '2601.00001v1', toVersion: '2601.00001v2', comparison: { summary: 'Release-test revision.' } },
+    update: {
+      fromVersion: '2601.00001v1',
+      toVersion: '2601.00001v2',
+      comparison: { summary: 'Release-test revision.' },
+    },
     nodeMap: { 'first-result': 'first-result-v2' },
   });
   assert.equal(update.update.toVersion, '2601.00001v2');
@@ -361,12 +545,32 @@ try {
   assert.ok(!snapshot.papers.some((item) => item.id === second.id));
   assert.ok(snapshot.updates[first.id].some((item) => item.toVersion === '2601.00001v2'));
   assert.ok(snapshot.graph.nodes.some((item) => item.nodeId === 'first-result-v2'));
-  assert.ok(!snapshot.papers.some((item) => ['local-unsafe-zip', 'local-portable-unsafe-zip', 'local-symlink-zip', 'local-corrupt-zip', 'local-expanding-zip', 'local-no-tex-zip'].includes(item.arxivId)), 'Rejected ZIP uploads must not leave empty paper records in the vault.');
+  assert.ok(
+    !snapshot.papers.some((item) =>
+      [
+        'local-unsafe-zip',
+        'local-portable-unsafe-zip',
+        'local-symlink-zip',
+        'local-corrupt-zip',
+        'local-expanding-zip',
+        'local-no-tex-zip',
+      ].includes(item.arxivId),
+    ),
+    'Rejected ZIP uploads must not leave empty paper records in the vault.',
+  );
 
-  const graphSnapshot = await (await fetch(`${url}/vault/graph`, { headers: { Origin: 'http://localhost:3000' } })).json();
-  assert.deepEqual(graphSnapshot.graph, snapshot.graph, 'The graph-only endpoint must agree with the complete vault snapshot.');
+  const graphSnapshot = await (
+    await fetch(`${url}/vault/graph`, { headers: { Origin: 'http://localhost:3000' } })
+  ).json();
+  assert.deepEqual(
+    graphSnapshot.graph,
+    snapshot.graph,
+    'The graph-only endpoint must agree with the complete vault snapshot.',
+  );
 
-  console.log('Bridge and vault integration: origin and route safety, imports, source assets, reader state, exports, cloud sharing, updates, graph links, and recoverable removal verified.');
+  console.log(
+    'Bridge and vault integration: origin and route safety, imports, source assets, reader state, exports, cloud sharing, updates, graph links, and recoverable removal verified.',
+  );
 } finally {
   child.kill('SIGTERM');
   await exited;
