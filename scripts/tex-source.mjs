@@ -1012,8 +1012,8 @@ function authorMacroTable(source) {
   return macros;
 }
 
-// mathtools reads `\\abs{x}`, the scaling `\\abs*{x}`, and a fixed size
-// `\\abs[\\big]{x}`. The reader scales the plain form too; inside the body,
+// mathtools reads `\\abs{x}` at normal size, the scaling `\\abs*{x}`, and a
+// fixed size `\\abs[\\big]{x}`, as the paper prints them; inside the body,
 // \\delimsize is the size of the delimiter it precedes.
 function pairedDelimiterMacro(pre, left, right, post, body, arity) {
   const locals = [];
@@ -1028,16 +1028,20 @@ function pairedDelimiterMacro(pre, left, right, post, body, arity) {
         () => middle,
       )
       .replace(/\\delimsize(?![A-Za-z@])\s*/g, '');
+  // An empty side is \left. when scaled, and nothing at normal size.
+  const side = (value, sizing) => value.trim() || (sizing === '\\mathopen' || sizing === '\\mathclose' ? '{}' : '.');
   const delimited = (open, middle, close) =>
-    joinControlWords(pre, open, left.trim() || '.', sized(ownBody, middle), close, right.trim() || '.', post);
+    joinControlWords(pre, open, side(left, open), sized(ownBody, middle), close, side(right, close), post);
   return {
     replacement: delimited('\\left', '\\middle', '\\right'),
     signature: ['s', {}, ...Array.from({ length: arity }, () => 'm')],
-    expand: ([, size, ...values]) => {
+    expand: ([star, size, ...values]) => {
       const fixed = /^\s*\\(big|Big|bigg|Bigg)[lrm]?\s*$/.exec(size || '')?.[1];
-      const [open, middle, close] = fixed
-        ? [`\\${fixed}l`, `\\${fixed}`, `\\${fixed}r`]
-        : ['\\left', '\\middle', '\\right'];
+      const [open, middle, close] = star
+        ? ['\\left', '\\middle', '\\right']
+        : fixed
+          ? [`\\${fixed}l`, `\\${fixed}`, `\\${fixed}r`]
+          : ['\\mathopen', '', '\\mathclose'];
       return {
         template: delimited(open, middle, close),
         values: values.map((value) =>

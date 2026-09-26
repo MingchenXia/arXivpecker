@@ -1,11 +1,10 @@
 import katex from 'katex';
 import type { CitationReference } from './types';
 
-// A mathtools-style delimiter pair: `\abs{x}` and `\abs*{x}` scale, and
-// `\abs[\big]{x}` takes a fixed size.
+// A mathtools-style delimiter pair: `\abs{x}` at normal size, the scaling
+// `\abs*{x}`, and `\abs[\big]{x}` at a fixed size.
 function pairedDelimiter(left: string, right: string) {
-  const scaled = `\\@readerpaired${left}${right}`;
-  return `\\@ifstar{${scaled}}{\\@ifnextchar[{\\@readersized${left}${right}}{${scaled}}}`;
+  return `\\@ifstar{\\@readerpaired${left}${right}}{\\@ifnextchar[{\\@readersized${left}${right}}{\\@readerplain${left}${right}}}`;
 }
 
 // Defaults for commands from common packages that KaTeX lacks. The TeX pipeline
@@ -17,6 +16,7 @@ const readerKatexMacros = {
   '\\qedhere': '\\square',
   '\\mbox': '\\text{#1}',
   '\\@readerpaired': '\\left#1#3\\right#2',
+  '\\@readerplain': '\\mathopen{#1}#3\\mathclose{#2}',
   // KaTeX's \def reads the delimited `[size]` argument; `##` defers its parameters.
   '\\@readersized': '\\def\\@readerbody[##1]##2{\\mathopen{##1#1}##2\\mathclose{##1#2}}\\@readerbody',
   '\\abs': pairedDelimiter('\\lvert', '\\rvert'),

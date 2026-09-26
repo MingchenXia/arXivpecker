@@ -848,21 +848,22 @@ const pairedDelimiters = expandedFormulas(
   String.raw`$\abs{x}$ $\abs*{\frac12}$ $\abs[\big]{x}$ $\abs[\Big]{x}$ $\abs[\bigg]{x}$ $\abs[\Bigg]{x}$ $\ceil{x}$
 $\paren{x}y$ $\inner{a}{b}$ $\inner[\big]{a}{b}$ $\set{x\given x>0}$ $\cond{A}{B}$ $\cond[\Big]{A}{B}$ $\Prob{A}$`,
 );
+// As in mathtools: the plain form keeps the normal size, the starred form scales.
 assert.deepEqual(pairedDelimiters, [
-  String.raw`\left\lvert x\right\rvert`,
+  String.raw`\mathopen\lvert x\mathclose\rvert`,
   String.raw`\left\lvert\frac12\right\rvert`,
   String.raw`\bigl\lvert x\bigr\rvert`,
   String.raw`\Bigl\lvert x\Bigr\rvert`,
   String.raw`\biggl\lvert x\biggr\rvert`,
   String.raw`\Biggl\lvert x\Biggr\rvert`,
-  String.raw`\left\lceil x\right\rceil`,
-  String.raw`\left(x\right)y`,
-  String.raw`\left\langle a,b\right\rangle`,
+  String.raw`\mathopen\lceil x\mathclose\rceil`,
+  String.raw`\mathopen(x\mathclose)y`,
+  String.raw`\mathopen\langle a,b\mathclose\rangle`,
   String.raw`\bigl\langle a,b\bigr\rangle`,
-  String.raw`\left\lbrace x\;\middle\vert\; x>0\right\rbrace`,
-  String.raw`\left(A\middle|B\right)`,
+  String.raw`\mathopen\lbrace x\;\vert\; x>0\mathclose\rbrace`,
+  String.raw`\mathopen(A|B\mathclose)`,
   String.raw`\Bigl(A\Big|B\Bigr)`,
-  String.raw`\mathbb{P}\left(A\right)`,
+  String.raw`\mathbb{P}\mathopen(A\mathclose)`,
 ]);
 assertTypesets(pairedDelimiters);
 
