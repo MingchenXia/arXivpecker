@@ -1,4 +1,5 @@
-import { cp, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -44,14 +45,55 @@ function compactPaper(paper) {
 }
 
 async function readJson(file, fallback) {
-  try { return JSON.parse(await readFile(file, 'utf8')); }
+  let text;
+  try { text = await readFile(file, 'utf8'); }
   catch { return fallback; }
+  try { return JSON.parse(text); }
+  catch {
+    // A damaged record falls back like a missing one so the rest of the library
+    // still opens, but keep the original bytes: the fallback may be saved over it.
+    await preserveCorruptJson(file);
+    return fallback;
+  }
 }
 
-async function writeJson(file, value) {
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await rename(temporary, file);
+async function preserveCorruptJson(file) {
+  try {
+    const { mtimeMs } = await stat(file);
+    const backup = `${file}.corrupt-${Math.round(mtimeMs)}`;
+    await copyFile(file, backup, fsConstants.COPYFILE_EXCL);
+    console.warn(`arXivpecker: ${file} is not valid JSON; the original was kept at ${backup}.`);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') console.warn(`arXivpecker: ${file} is not valid JSON and could not be backed up.`);
+  }
+}
+
+const pendingWrites = new Map();
+
+// Writes to one file are serialized and each uses its own temporary name. With a
+// shared name, two saves in the same millisecond interleaved their bytes or
+// renamed each other's partial file, leaving invalid JSON behind.
+function writeJson(file, value) {
+  const content = `${JSON.stringify(value, null, 2)}\n`;
+  const write = async () => {
+    const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, content, 'utf8');
+      await rename(temporary, file);
+    } catch (error) {
+      await rm(temporary, { force: true });
+      throw error;
+    }
+  };
+  const scheduled = (pendingWrites.get(file) ?? Promise.resolve()).then(write, write);
+  const tail = scheduled.catch(() => {});
+  pendingWrites.set(file, tail);
+  void tail.finally(() => { if (pendingWrites.get(file) === tail) pendingWrites.delete(file); });
+  return scheduled;
+}
+
+function isObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function readmeFor(paper) {
@@ -280,8 +322,8 @@ export class PaperVault {
     return updated;
   }
 
-  async auditJob(paperId) {
-    const record = await this.recordFor(paperId);
+  async auditJob(paperId, knownRecord = null) {
+    const record = knownRecord ?? await this.recordFor(paperId);
     const job = await readJson(path.join(this.paperDirectory(record), 'audit-progress.json'), null);
     if (!job || typeof job !== 'object') return null;
     const states = new Set(['preparing', 'running', 'paused', 'completed']);
@@ -502,12 +544,17 @@ export class PaperVault {
       const [paper, audit, reader, patches, updates, auditJob] = await Promise.all([
         readJson(path.join(directory, 'paper.json'), null),
         readJson(path.join(directory, 'audit.json'), null),
-        readJson(path.join(directory, 'reader.json'), { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} }),
-        readJson(path.join(directory, 'editions', 'working', 'patches.json'), { patches: [] }),
-        readJson(path.join(directory, 'updates.json'), { updates: [] }),
-        this.auditJob(record.id),
+        readJson(path.join(directory, 'reader.json'), null),
+        readJson(path.join(directory, 'editions', 'working', 'patches.json'), null),
+        readJson(path.join(directory, 'updates.json'), null),
+        this.auditJob(record.id, record),
       ]);
-      if (paper) records.push({ paper, audit, reader, patches: Array.isArray(patches.patches) ? patches.patches : [], updates: Array.isArray(updates.updates) ? updates.updates : [], auditJob, folder: record.folder });
+      if (!isObject(paper)) continue;
+      // Valid JSON of the wrong shape must not take the whole library down: keep
+      // the paper visible and treat the malformed part as absent.
+      const validAudit = isObject(audit) && Array.isArray(audit.nodes) ? audit : null;
+      if (audit && !validAudit) console.warn(`arXivpecker: ignoring malformed audit.json in ${record.folder}.`);
+      records.push({ paper, audit: validAudit, reader: isObject(reader) ? reader : { notes: [], nodeNotes: {}, nodeAnswers: {}, expanded: {}, marks: {} }, patches: Array.isArray(patches?.patches) ? patches.patches : [], updates: Array.isArray(updates?.updates) ? updates.updates : [], auditJob, folder: record.folder });
     }
     return records;
   }
@@ -518,7 +565,7 @@ export class PaperVault {
     ]);
     const papers = records.map((record) => record.paper);
     const audits = Object.fromEntries(records.filter((record) => record.audit).map((record) => [record.paper.id, record.audit]));
-    const notes = records.flatMap((record) => record.reader.notes ?? []);
+    const notes = records.flatMap((record) => Array.isArray(record.reader.notes) ? record.reader.notes : []);
     const nodeNotes = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.nodeNotes ?? {}]));
     const nodeAnswers = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.nodeAnswers ?? {}]));
     const expanded = Object.fromEntries(records.map((record) => [record.paper.id, record.reader.expanded ?? {}]));
@@ -535,7 +582,7 @@ export class PaperVault {
       paperId: record.paper.id,
       title: record.paper.title,
       arxivId: record.paper.arxivId,
-      units: (record.audit?.nodes ?? []).filter((node) => ['definition', 'lemma', 'proposition', 'theorem', 'corollary', 'external-result'].includes(node.kind)).slice(0, 18).map((node) => ({ id: node.id, label: node.label, title: node.title, kind: node.kind })),
+      units: (record.audit?.nodes ?? []).filter((node) => isObject(node) && ['definition', 'lemma', 'proposition', 'theorem', 'corollary', 'external-result'].includes(node.kind)).slice(0, 18).map((node) => ({ id: node.id, label: node.label, title: node.title, kind: node.kind })),
     }));
   }
 
@@ -581,21 +628,21 @@ export class PaperVault {
     const edges = [];
     const known = new Set();
     for (const record of records) {
-      for (const node of workingNodes(record.audit?.nodes ?? [], record.patches ?? [])) {
+      for (const node of workingNodes((record.audit?.nodes ?? []).filter(isObject), record.patches ?? [])) {
         const id = `${record.paper.id}::${node.id}`;
         known.add(id);
         nodes.push({ id, paperId: record.paper.id, paperTitle: record.paper.title, arxivId: record.paper.arxivId, nodeId: node.id, label: node.label, title: node.title, kind: node.kind, page: node.anchor?.page ?? null, status: node.status });
       }
     }
     for (const record of records) {
-      for (const node of workingNodes(record.audit?.nodes ?? [], record.patches ?? [])) {
+      for (const node of workingNodes((record.audit?.nodes ?? []).filter(isObject), record.patches ?? [])) {
         const from = `${record.paper.id}::${node.id}`;
-        for (const dependency of node.dependencies ?? []) {
-          const to = dependency.includes('::') ? dependency : `${record.paper.id}::${dependency}`;
+        for (const dependency of Array.isArray(node.dependencies) ? node.dependencies : []) {
+          const to = String(dependency).includes('::') ? String(dependency) : `${record.paper.id}::${dependency}`;
           if (known.has(to)) edges.push({ id: `intra:${from}:${to}`, from, to, relation: 'uses', source: 'audit' });
         }
       }
-      for (const link of record.audit?.crossPaperLinks ?? []) {
+      for (const link of Array.isArray(record.audit?.crossPaperLinks) ? record.audit.crossPaperLinks.filter(isObject) : []) {
         const from = `${record.paper.id}::${link.fromNodeId}`;
         const to = `${link.targetPaperId}::${link.targetNodeId}`;
         if (known.has(from) && known.has(to)) edges.push({ id: `audit-cross:${from}:${to}:${link.relation}`, from, to, relation: link.relation, source: 'audit', note: String(link.rationale || '') });

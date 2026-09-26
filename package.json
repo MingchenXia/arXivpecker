@@ -22,6 +22,7 @@
     "test:audit-checkpoints": "node scripts/audit-checkpoint-test.mjs",
     "test:body-limits": "node scripts/body-limit-test.mjs",
     "test:vault": "node scripts/bridge-vault-integration-test.mjs",
+    "test:vault-robustness": "node scripts/vault-robustness-test.mjs",
     "test:sessions": "node --test scripts/codex-session-test.mjs",
     "audit-formulas": "node scripts/formula-audit.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

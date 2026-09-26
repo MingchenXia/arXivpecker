@@ -27,5 +27,6 @@ jobs:
       - run: npm run test:audit-checkpoints
       - run: npm run test:body-limits
       - run: npm run test:vault
+      - run: npm run test:vault-robustness
       - run: npm run test:sessions
       - run: npm run audit-formulas
