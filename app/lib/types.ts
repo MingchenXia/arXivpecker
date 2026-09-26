@@ -300,4 +300,5 @@ export type ServiceResponse = {
   link?: CrossLink;
   batchLabel?: string;
   sources?: { from: string; to: string };
+  share?: CloudShareRecord;
 };

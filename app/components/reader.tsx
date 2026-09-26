@@ -13,19 +13,18 @@ import { NodeInspector, VersionComparisonPanel } from './inspector';
 import { MathText } from './math';
 import {
   assistantSizeKey,
-  bridgeUrl,
   fileAsBase64,
   hasOriginalPaper,
   originalPaperUrl,
   paperChatAnswerKey,
   paperScaleKey,
   parsePaperChat,
-  readServiceResponse,
   readStorage,
   readString,
   reportReaderProcess,
   writeStorage,
 } from '../lib/app';
+import { bridgePost } from '../lib/bridge-client';
 import {
   applyWorkingPatches,
   buildPaperExport,
@@ -456,13 +455,11 @@ export function Reader({
     setPaperQuestion('');
     setAskingPaperIds((current) => [...current, askedPaperId]);
     try {
-      const response = await fetch(`${bridgeUrl}/paper-question`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paper, profile, node, question: prompt, threadId: audit.threadId }),
-      });
-      const data = await readServiceResponse(response);
-      if (!response.ok) throw new Error(data.error || 'Local Codex could not answer this paper question.');
+      const data = await bridgePost(
+        '/paper-question',
+        { paper, profile, node, question: prompt, threadId: audit.threadId },
+        'Local Codex could not answer this paper question.',
+      );
       rememberAuditThread(readString(data.threadId));
       const completed: PaperChatMessage[] = [...userMessages, { role: 'assistant', text: readString(data.text) }];
       showIfCurrent(completed);
@@ -487,16 +484,14 @@ export function Reader({
   async function attachCitationSource(citation: CitationReference, file: File) {
     if (!paper) throw new Error('No paper is open.');
     const dataBase64 = await fileAsBase64(file);
-    const response = await fetch(`${bridgeUrl}/vault/citation-asset`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const data = await bridgePost(
+      '/vault/citation-asset',
+      {
         paperId: paper.id,
         upload: { citation, fileName: file.name, mime: file.type, dataBase64 },
-      }),
-    });
-    const data = await readServiceResponse(response);
-    if (!response.ok) throw new Error(data.error || 'The cited source could not be attached.');
+      },
+      'The cited source could not be attached.',
+    );
     return readString(data.saved?.relativePath);
   }
   function openReference(citation?: CitationReference) {
@@ -512,26 +507,22 @@ export function Reader({
     if (!paper || !audit?.threadId) throw new Error('Run the full-paper audit first.');
     const visibleLines = indexedVisibleProof(target.id);
     const prompt = `Expand Step ${index + 1} of the AI proof map in complete mathematical detail: “${step}”. Use the complete original proof and the durable full-paper audit as the authority. State every prerequisite used, fill in intermediate equations, explain each implication, and identify exactly where this step occurs using the reader-visible L-numbers below. Cite only line numbers supported by this map. Clearly separate text present in the source from explanatory details you supply. Do not invent a missing argument.\n\nReader-visible proof map:\n${visibleLines || 'No rendered line map is available; do not claim an L-number.'}`;
-    const response = await fetch(`${bridgeUrl}/node-question`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paper, profile, node: target, question: prompt, threadId: audit.threadId }),
-    });
-    const data = await readServiceResponse(response);
-    if (!response.ok) throw new Error(data.error || 'This proof step could not be expanded.');
+    const data = await bridgePost(
+      '/node-question',
+      { paper, profile, node: target, question: prompt, threadId: audit.threadId },
+      'This proof step could not be expanded.',
+    );
     return readString(data.text);
   }
   async function expandProofRequest(target: AuditNode, request: string) {
     if (!paper || !audit?.threadId) throw new Error('Run the full-paper audit first.');
     const visibleLines = indexedVisibleProof(target.id);
     const prompt = `The reader is working inside the complete proof of ${displayUnitLabel(target)} and asks: “${request}”. The L-labels refer exactly to the current rendered proof-line map below, including one line for each displayed formula. Give a detailed, source-faithful expansion at exactly the requested scope; include intermediate equations and prerequisites, distinguish author text from explanation, and do not invent missing mathematics.\n\nReader-visible proof map:\n${visibleLines || 'No rendered line map is available; ask the reader to reopen the proof before claiming an L-number.'}`;
-    const response = await fetch(`${bridgeUrl}/node-question`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paper, profile, node: target, question: prompt, threadId: audit.threadId }),
-    });
-    const data = await readServiceResponse(response);
-    if (!response.ok) throw new Error(data.error || 'The proof could not be expanded.');
+    const data = await bridgePost(
+      '/node-question',
+      { paper, profile, node: target, question: prompt, threadId: audit.threadId },
+      'The proof could not be expanded.',
+    );
     return readString(data.text);
   }
   if (!paper) return <EmptyVault onImport={openImport} />;
@@ -1153,16 +1144,14 @@ function PrintPanel({
     setError('');
     setSaved('');
     try {
-      const response = await fetch(`${bridgeUrl}/vault/latex-export`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await bridgePost(
+        '/vault/latex-export',
+        {
           paperId: paper.id,
           export: { edition: 'working', content: completeLatexSource(paper, audit, nodes, patches) },
-        }),
-      });
-      const data = await readServiceResponse(response);
-      if (!response.ok) throw new Error(data.error || 'The complete LaTeX source could not be saved.');
+        },
+        'The complete LaTeX source could not be saved.',
+      );
       setSaved(readString(data.saved?.relativePath));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The complete LaTeX source could not be saved.');
@@ -1852,13 +1841,11 @@ function ExportPaperPanel({
     try {
       const content = buildPaperExport(paper, audit, nodes, patches, readerNotes, notes, selection, focusIds);
       const fileName = `${paper.arxivId.replace(/[^a-zA-Z0-9.-]+/g, '-')}-${selection.focusedOnly ? 'focused-' : ''}reading-edition.md`;
-      const response = await fetch(`${bridgeUrl}/vault/export`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paperId: paper.id, export: { fileName, content, selection } }),
-      });
-      const data = await readServiceResponse(response);
-      if (!response.ok) throw new Error(data.error || 'The paper selection could not be saved.');
+      const data = await bridgePost(
+        '/vault/export',
+        { paperId: paper.id, export: { fileName, content, selection } },
+        'The paper selection could not be saved.',
+      );
       setSaved(readString(data.saved?.relativePath));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The paper selection could not be saved.');

@@ -3,7 +3,6 @@ import { ProcessMascot } from './icons';
 import { MathText } from './math';
 import {
   assistantSizeKey,
-  bridgeUrl,
   defaultProfile,
   defaultReasoning,
   elapsedLabel,
@@ -13,6 +12,7 @@ import {
   readStorage,
   reportReaderProcess,
 } from '../lib/app';
+import { bridgeGet, bridgePost } from '../lib/bridge-client';
 import { arxivBaseId, displayUnitLabel, kindClass, paperSourceLabel } from '../lib/audit';
 import { searchablePaperText } from '../lib/tex-text';
 import type {
@@ -58,13 +58,10 @@ function CloudSharing({ papers }: { papers: Paper[] }) {
     setLoading(true);
     setError('');
     try {
-      const response = await fetch(`${bridgeUrl}/cloud/status`);
-      const data = (await response.json()) as {
-        providers?: CloudProviderStatus[];
-        recent?: CloudShareRecord[];
-        error?: string;
-      };
-      if (!response.ok) throw new Error(data.error || 'Cloud connections could not be checked.');
+      const data = await bridgeGet<{ providers?: CloudProviderStatus[]; recent?: CloudShareRecord[] }>(
+        '/cloud/status',
+        'Cloud connections could not be checked.',
+      );
       const available = data.providers ?? [];
       setProviders(available);
       setRecent(data.recent ?? []);
@@ -111,21 +108,12 @@ function CloudSharing({ papers }: { papers: Paper[] }) {
         paperScale: Number(readStorage(paperScaleKey) || 1),
         assistantSize: localJson(assistantSizeKey),
       };
-      const response = await fetch(`${bridgeUrl}/cloud/share`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider,
-          paperIds: selected,
-          title,
-          selection: parts,
-          gitRemote,
-          gitBranch,
-          uiPreferences,
-        }),
-      });
-      const data = (await response.json()) as { share?: CloudShareRecord; error?: string };
-      if (!response.ok || !data.share) throw new Error(data.error || 'The cloud copy could not be created.');
+      const data = await bridgePost(
+        '/cloud/share',
+        { provider, paperIds: selected, title, selection: parts, gitRemote, gitBranch, uiPreferences },
+        'The cloud copy could not be created.',
+        { require: ['share'] },
+      );
       setSaved(data.share);
       setRecent((current) =>
         [data.share as CloudShareRecord, ...current.filter((item) => item.id !== data.share?.id)].slice(0, 20),

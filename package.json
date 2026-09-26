@@ -29,7 +29,7 @@
     "test:e2e": "playwright test",
     "test": "npm run -s test:starter && npm run -s test:reader && npm run -s test:reader-fuzz && npm run -s test:reader-logic && npm run -s test:arxiv-id && npm run -s test:audit-checkpoints && npm run -s test:body-limits && npm run -s test:vault && npm run -s test:vault-robustness && npm run -s test:sessions && npm run -s audit-formulas",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm test",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --max-warnings 0",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "typecheck": "tsc --noEmit"

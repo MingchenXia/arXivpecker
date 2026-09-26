@@ -16,8 +16,6 @@ import {
   Settings,
 } from './components/views';
 import {
-  bridgeUrl,
-  changedReaderPapers,
   defaultProfile,
   emptyGraph,
   emptyPatches,
@@ -30,16 +28,16 @@ import {
   paperChatAnswerKey,
   parseJsonObject,
   preferenceKey,
-  readServiceResponse,
   readStorage,
   readString,
   reasoningDefaultMigrationKey,
   reportReaderProcess,
-  saveReaderState,
   selectedPaperKey,
   writeStorage,
 } from './lib/app';
-import type { ReaderStateSlices } from './lib/app';
+import { bridgeGet, bridgePost, readerApiGet, saveReaderState } from './lib/bridge-client';
+import { changedReaderPapers } from './lib/reader-state';
+import type { ReaderStateSlices } from './lib/reader-state';
 import {
   arxivBaseId,
   arxivVersionNumber,
@@ -102,6 +100,7 @@ export default function Home() {
   const [loadingDiscoveries, setLoadingDiscoveries] = useState(false);
   const [notice, setNotice] = useState('');
   const noticeTimerRef = useRef<number | undefined>(undefined);
+  const discoveriesRequestRef = useRef<AbortController | null>(null);
 
   const paper = papers.find((item) => item.id === selectedPaperId) ?? papers[0];
   const audit = paper ? audits[paper.id] : undefined;
@@ -177,8 +176,7 @@ export default function Home() {
   }
   async function refreshBridge() {
     try {
-      const response = await fetch(`${bridgeUrl}/status`);
-      const data = (await response.json()) as Bridge;
+      const data = await bridgeGet<Bridge>('/status', 'The local bridge status could not be read.');
       setBridge(data);
       if (data.models?.length)
         setProfile((current) =>
@@ -204,9 +202,7 @@ export default function Home() {
       }
     }
     try {
-      const response = await fetch(`${bridgeUrl}/vault`);
-      if (!response.ok) throw new Error();
-      const snapshot = (await response.json()) as VaultSnapshot;
+      const snapshot = await bridgeGet<VaultSnapshot>('/vault', 'The local library could not be loaded.');
       applySnapshot(snapshot);
       if (snapshot.profile) writeStorage(onboardingCompleteKey, 'complete');
       else if (!restoreLocalProfile() && !setupCompleted) setOnboardingOpen(true);
@@ -222,11 +218,10 @@ export default function Home() {
     writeStorage(preferenceKey, JSON.stringify(completedProfile));
     writeStorage(onboardingCompleteKey, 'complete');
     setOnboardingOpen(false);
-    void fetch(`${bridgeUrl}/vault/profile`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile: completedProfile }),
-    });
+    // The profile is also kept in browser storage, so a failed save loses nothing.
+    bridgePost('/vault/profile', { profile: completedProfile }, 'Reading preferences could not be saved.').catch(
+      () => {},
+    );
   }
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -240,11 +235,7 @@ export default function Home() {
   useEffect(() => {
     if (!vaultReady || onboardingOpen) return;
     writeStorage(preferenceKey, JSON.stringify(profile));
-    void fetch(`${bridgeUrl}/vault/profile`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile }),
-    });
+    bridgePost('/vault/profile', { profile }, 'Reading preferences could not be saved.').catch(() => {});
   }, [profile, vaultReady, onboardingOpen]);
   useEffect(() => {
     if (vaultReady && selectedPaperId) writeStorage(selectedPaperKey, selectedPaperId);
@@ -259,14 +250,10 @@ export default function Home() {
       for (const paperId of [...dirtyReaderPapersRef.current]) {
         if (paperJobs[paperId]) continue;
         dirtyReaderPapersRef.current.delete(paperId);
-        saveReaderState(paperId, readerState)
-          .then((response) => {
-            if (!response.ok) throw new Error();
-          })
-          .catch(() => {
-            dirtyReaderPapersRef.current.add(paperId);
-            notify('Some reader changes could not be saved locally. They will be retried with your next change.');
-          });
+        saveReaderState(paperId, readerState).catch(() => {
+          dirtyReaderPapersRef.current.add(paperId);
+          notify('Some reader changes could not be saved locally. They will be retried with your next change.');
+        });
       }
     };
   });
@@ -295,13 +282,9 @@ export default function Home() {
   }, []);
 
   async function savePaper(incoming: Paper) {
-    const response = await fetch(`${bridgeUrl}/vault/paper`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paper: incoming }),
+    const data = await bridgePost('/vault/paper', { paper: incoming }, 'Could not create the paper folder.', {
+      require: ['paper'],
     });
-    const data = await readServiceResponse(response);
-    if (!response.ok || !data.paper) throw new Error(data.error || 'Could not create the paper folder.');
     const stored = data.paper;
     setPapers((current) => [
       stored,
@@ -310,25 +293,17 @@ export default function Home() {
     return stored;
   }
   async function updatePaperInfo(incoming: Paper) {
-    const response = await fetch(`${bridgeUrl}/vault/paper/update`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paper: incoming }),
+    const data = await bridgePost('/vault/paper/update', { paper: incoming }, 'Could not update the paper record.', {
+      require: ['paper'],
     });
-    const data = await readServiceResponse(response);
-    if (!response.ok || !data.paper) throw new Error(data.error || 'Could not update the paper record.');
     const stored = data.paper;
     setPapers((current) => current.map((item) => (item.id === stored.id ? stored : item)));
     notify('Paper record updated.');
   }
   async function removePaperFromVault(paperId: string) {
-    const response = await fetch(`${bridgeUrl}/vault/paper/delete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paperId }),
+    const data = await bridgePost('/vault/paper/delete', { paperId }, 'Could not remove the paper.', {
+      require: ['snapshot'],
     });
-    const data = await readServiceResponse(response);
-    if (!response.ok || !data.snapshot) throw new Error(data.error || 'Could not remove the paper.');
     applySnapshot(data.snapshot);
     notify('Paper removed from the library and archived locally for recovery.');
   }
@@ -336,12 +311,11 @@ export default function Home() {
     const previous = papers;
     setPapers(next);
     try {
-      const response = await fetch(`${bridgeUrl}/vault/paper/order`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paperIds: next.map((item) => item.id) }),
-      });
-      if (!response.ok) throw new Error();
+      await bridgePost(
+        '/vault/paper/order',
+        { paperIds: next.map((item) => item.id) },
+        'The library order could not be saved.',
+      );
     } catch {
       setPapers(previous);
       notify('The new library order could not be saved.');
@@ -388,13 +362,12 @@ export default function Home() {
       status: 'running',
     });
     try {
-      const response = await fetch(`${bridgeUrl}/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paper: target, profile, ...options, resumeAudit }),
-      });
-      const data = await readServiceResponse(response);
-      if (!response.ok || !data.paper) throw new Error(data.error || 'Local Codex analysis failed.');
+      const data = await bridgePost(
+        '/analyze',
+        { paper: target, profile, ...options, resumeAudit },
+        'Local Codex analysis failed.',
+        { require: ['paper'] },
+      );
       const stored = data.paper;
       const next = parseAudit(readString(data.text), readString(data.threadId));
       reportReaderProcess({
@@ -403,24 +376,21 @@ export default function Home() {
         detail: stored.title,
         status: 'running',
       });
-      const saved = await fetch(`${bridgeUrl}/vault/audit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paper: stored, audit: next }),
-      });
-      const snapshot = await readServiceResponse(saved);
-      if (!saved.ok || !snapshot.paper) throw new Error(snapshot.error || 'Could not save the local audit.');
+      const snapshot = await bridgePost(
+        '/vault/audit',
+        { paper: stored, audit: next },
+        'Could not save the local audit.',
+        { require: ['paper'] },
+      );
       const automatic = automaticEditorialPatches(next, patches[stored.id] ?? []);
       const prior = (patches[stored.id] ?? []).filter((patch) => !(patch.kind === 'replace' && patch.source === 'ai'));
       const correctedPatches = [...prior, ...automatic];
       if (automatic.length) {
-        const correctionResponse = await fetch(`${bridgeUrl}/vault/patches`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ paperId: stored.id, patches: correctedPatches }),
-        });
-        const correctionData = await readServiceResponse(correctionResponse);
-        if (!correctionResponse.ok) throw new Error(correctionData.error || 'Could not save audited typo corrections.');
+        const correctionData = await bridgePost(
+          '/vault/patches',
+          { paperId: stored.id, patches: correctedPatches },
+          'Could not save audited typo corrections.',
+        );
         setPatches((current) => ({ ...current, [stored.id]: correctionData.patches ?? [] }));
       }
       const sourceLabel =
@@ -496,9 +466,11 @@ export default function Home() {
         detail: target.title,
         status: 'running',
       });
-      const metadataResponse = await fetch(`/api/arxiv?id=${encodeURIComponent(arxivBaseId(target.arxivId))}`);
-      const metadata = await readServiceResponse(metadataResponse);
-      if (!metadataResponse.ok || !metadata.papers?.[0])
+      const metadata = await readerApiGet(
+        `/api/arxiv?id=${encodeURIComponent(arxivBaseId(target.arxivId))}`,
+        'The latest arXiv record could not be read.',
+      );
+      if (!metadata.papers?.[0])
         throw new Error(readString(metadata.error, 'The latest arXiv record could not be read.'));
       const latest = {
         ...(metadata.papers[0] as Paper),
@@ -537,20 +509,18 @@ export default function Home() {
           .filter((item) => item.source === 'manual')
           .map((item) => ({ kind: item.kind, nodeId: item.nodeId, title: item.title, rationale: item.rationale })),
       };
-      const comparisonResponse = await fetch(`${bridgeUrl}/compare-versions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const comparisonData = await bridgePost(
+        '/compare-versions',
+        {
           paper: target,
           profile,
           fromVersion: target.arxivId,
           toVersion: latest.arxivId,
           readerContext,
           updateMode: true,
-        }),
-      });
-      const comparisonData = await readServiceResponse(comparisonResponse);
-      if (!comparisonResponse.ok) throw new Error(comparisonData.error || 'AI version comparison failed.');
+        },
+        'AI version comparison failed.',
+      );
       const comparison = parseVersionComparison(readString(comparisonData.text));
 
       reportReaderProcess({
@@ -559,10 +529,9 @@ export default function Home() {
         detail: 'Checking the latest statements, proofs, citations, and dependencies.',
         status: 'running',
       });
-      const analysisResponse = await fetch(`${bridgeUrl}/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const analysisData = await bridgePost(
+        '/analyze',
+        {
           paper: latest,
           profile,
           correctnessAudit: true,
@@ -578,10 +547,9 @@ export default function Home() {
               verificationWarnings: previousAudit.audit.verificationWarnings,
             },
           },
-        }),
-      });
-      const analysisData = await readServiceResponse(analysisResponse);
-      if (!analysisResponse.ok) throw new Error(analysisData.error || 'The latest-version AI audit failed.');
+        },
+        'The latest-version AI audit failed.',
+      );
       const latestAudit = parseAudit(readString(analysisData.text), readString(analysisData.threadId));
 
       reportReaderProcess({
@@ -613,10 +581,9 @@ export default function Home() {
         comparison,
         migration: migration.migration,
       };
-      const commitResponse = await fetch(`${bridgeUrl}/vault/paper/update-commit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const commitData = await bridgePost(
+        '/vault/paper/update-commit',
+        {
           paper: latest,
           audit: latestAudit,
           reader: migration.reader,
@@ -624,11 +591,10 @@ export default function Home() {
           update,
           nodeMap: migration.maps.nodeMap,
           sourceRecord: analysisData.sourceRecord ?? {},
-        }),
-      });
-      const commitData = await readServiceResponse(commitResponse);
-      if (!commitResponse.ok || !commitData.snapshot)
-        throw new Error(commitData.error || 'The latest version could not be committed locally.');
+        },
+        'The latest version could not be committed locally.',
+        { require: ['snapshot'] },
+      );
       applySnapshot(commitData.snapshot);
       setSelectedNodeId((current) => migration.maps.unitMap[current] ?? latestAudit.nodes[0]?.id ?? '');
       setUpdatePanel(commitData.update ?? null);
@@ -658,9 +624,8 @@ export default function Home() {
     const processId = `paper-import:${arxivBaseId(raw) || makeId()}`;
     reportReaderProcess({ id: processId, label: 'Looking up arXiv metadata', detail: raw, status: 'running' });
     try {
-      const response = await fetch(`/api/arxiv?id=${encodeURIComponent(raw)}`);
-      const data = await readServiceResponse(response);
-      if (!response.ok || !data.papers?.[0]) throw new Error(readString(data.error, 'Paper not found on arXiv.'));
+      const data = await readerApiGet(`/api/arxiv?id=${encodeURIComponent(raw)}`, 'Paper not found on arXiv.');
+      if (!data.papers?.[0]) throw new Error(readString(data.error, 'Paper not found on arXiv.'));
       const incoming = { ...data.papers[0], state: 'Reading' } as Paper;
       const existing = papers.find(
         (item) => item.arxivId.replace(/v\d+$/i, '') === incoming.arxivId.replace(/v\d+$/i, ''),
@@ -708,13 +673,12 @@ export default function Home() {
     reportReaderProcess({ id: processId, label: 'Saving uploaded source', detail: title, status: 'running' });
     try {
       const dataBase64 = await fileAsBase64(file);
-      const response = await fetch(`${bridgeUrl}/vault/source-upload`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paper: incoming, upload: { fileName: file.name, mime: file.type, dataBase64 } }),
-      });
-      const data = await readServiceResponse(response);
-      if (!response.ok || !data.paper) throw new Error(data.error || 'The local source could not be saved.');
+      const data = await bridgePost(
+        '/vault/source-upload',
+        { paper: incoming, upload: { fileName: file.name, mime: file.type, dataBase64 } },
+        'The local source could not be saved.',
+        { require: ['paper'] },
+      );
       const stored = data.paper;
       setPapers((current) => [stored, ...current.filter((item) => item.id !== stored.id)]);
       setImporting(false);
@@ -749,13 +713,11 @@ export default function Home() {
     });
     setAskingId(targetNode.id);
     try {
-      const response = await fetch(`${bridgeUrl}/node-question`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paper, profile, node: targetNode, question, threadId: audit.threadId }),
-      });
-      const data = await readServiceResponse(response);
-      if (!response.ok) throw new Error(data.error || 'Codex did not answer this unit.');
+      const data = await bridgePost(
+        '/node-question',
+        { paper, profile, node: targetNode, question, threadId: audit.threadId },
+        'Codex did not answer this unit.',
+      );
       rememberAuditThread(paper.id, readString(data.threadId));
       setNodeAnswers((current) => ({
         ...current,
@@ -808,13 +770,7 @@ export default function Home() {
   }
   async function addLink(link: Omit<CrossLink, 'id' | 'source' | 'createdAt'>) {
     try {
-      const response = await fetch(`${bridgeUrl}/vault/link`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ link }),
-      });
-      const data = await readServiceResponse(response);
-      if (!response.ok || !data.link) throw new Error(data.error || 'Could not create the relation.');
+      const data = await bridgePost('/vault/link', { link }, 'Could not create the relation.', { require: ['link'] });
       const storedLink = data.link;
       setLinks((current) => (current.some((item) => item.id === storedLink.id) ? current : [...current, storedLink]));
       setGraph(data.graph ?? emptyGraph);
@@ -824,25 +780,20 @@ export default function Home() {
     }
   }
   async function removeLink(linkId: string) {
-    const response = await fetch(`${bridgeUrl}/vault/link/delete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ linkId }),
-    });
-    const data = await readServiceResponse(response);
-    if (response.ok) {
+    try {
+      const data = await bridgePost('/vault/link/delete', { linkId }, 'Could not remove the relation.');
       setLinks((current) => current.filter((item) => item.id !== linkId));
       setGraph(data.graph ?? emptyGraph);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not remove the relation.');
     }
   }
   async function saveWorkingPatches(paperId: string, nextPatches: WorkingPatch[]) {
-    const response = await fetch(`${bridgeUrl}/vault/patches`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paperId, patches: nextPatches }),
-    });
-    const data = await readServiceResponse(response);
-    if (!response.ok) throw new Error(data.error || 'Could not save the working edition.');
+    const data = await bridgePost(
+      '/vault/patches',
+      { paperId, patches: nextPatches },
+      'Could not save the working edition.',
+    );
     setPatches((current) => ({ ...current, [paperId]: data.patches ?? [] }));
     setGraph(data.graph ?? emptyGraph);
     notify('Working edition saved locally.');
@@ -857,13 +808,11 @@ export default function Home() {
       status: 'running',
     });
     try {
-      const response = await fetch(`${bridgeUrl}/node-edit/suggest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paper, profile, node: targetNode, threadId: audit.threadId }),
-      });
-      const data = await readServiceResponse(response);
-      if (!response.ok) throw new Error(data.error || 'Codex could not inspect this unit.');
+      const data = await bridgePost(
+        '/node-edit/suggest',
+        { paper, profile, node: targetNode, threadId: audit.threadId },
+        'Codex could not inspect this unit.',
+      );
       const parsed = parseJsonObject(readString(data.text));
       reportReaderProcess({
         id: processId,
@@ -886,23 +835,27 @@ export default function Home() {
     }
   }
   async function refreshDiscoveries(area?: string, latestBatch = false) {
+    // A newer request supersedes an older one, so a slow earlier response cannot replace newer results.
+    discoveriesRequestRef.current?.abort();
+    const request = new AbortController();
+    discoveriesRequestRef.current = request;
     setLoadingDiscoveries(true);
     try {
       const categories = area ? [area] : profile.areas;
-      const response = await fetch(
+      const data = await readerApiGet(
         `/api/arxiv?categories=${encodeURIComponent(categories.join(','))}${latestBatch ? '&latest=1' : ''}`,
+        'arXiv is unavailable.',
+        { signal: request.signal },
       );
-      const data = await readServiceResponse(response);
-      if (!response.ok) throw new Error(data.error || 'arXiv is unavailable.');
       setDiscoveries(data.papers ?? []);
       if (latestBatch)
         notify(
           `${data.papers?.length ?? 0} paper${data.papers?.length === 1 ? '' : 's'} from arXiv’s latest ${area} update${data.batchLabel ? ` · ${data.batchLabel}` : ''}.`,
         );
     } catch {
-      notify('arXiv is unavailable right now; the current discovery list was kept.');
+      if (!request.signal.aborted) notify('arXiv is unavailable right now; the current discovery list was kept.');
     } finally {
-      setLoadingDiscoveries(false);
+      if (discoveriesRequestRef.current === request) setLoadingDiscoveries(false);
     }
   }
   function openUnit(paperId: string, nodeId: string) {

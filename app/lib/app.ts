@@ -1,16 +1,6 @@
-import type {
-  Graph,
-  Note,
-  Paper,
-  PaperChatMessage,
-  Profile,
-  ReaderProcessUpdate,
-  ReadingMark,
-  ServiceResponse,
-  WorkingPatch,
-} from './types';
+import { bridgeUrl } from './bridge-client';
+import type { Graph, Paper, PaperChatMessage, Profile, ReaderProcessUpdate, WorkingPatch } from './types';
 
-export const bridgeUrl = 'http://127.0.0.1:4318';
 export const preferenceKey = 'proofroom-reader-preferences-v1';
 export const onboardingCompleteKey = 'arxivpecker-onboarding-complete-v1';
 export const paperScaleKey = 'proofroom-paper-scale-v1';
@@ -171,23 +161,6 @@ export function readString(value: unknown, fallback = '') {
 export function asArray(value: unknown) {
   return Array.isArray(value) ? value : [];
 }
-export async function readServiceResponse(response: Response): Promise<ServiceResponse> {
-  let text = '';
-  try {
-    text = await response.text();
-  } catch {
-    return { error: `The service response could not be read (HTTP ${response.status}).` };
-  }
-  if (!text.trim()) return { error: `The service returned an empty response (HTTP ${response.status}).` };
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as ServiceResponse)
-      : { error: `The service returned an invalid response (HTTP ${response.status}).` };
-  } catch {
-    return { error: `The service returned an invalid response (HTTP ${response.status}).` };
-  }
-}
 export function makeId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
@@ -210,64 +183,4 @@ export function parseJsonObject(rawText: string) {
   const last = clean.lastIndexOf('}');
   if (first < 0 || last <= first) throw new Error('Codex returned no structured suggestion.');
   return JSON.parse(clean.slice(first, last + 1)) as Record<string, unknown>;
-}
-
-export type ReaderStateSlices = {
-  notes: Note[];
-  nodeNotes: Record<string, Record<string, string>>;
-  nodeAnswers: Record<string, Record<string, string>>;
-  expanded: Record<string, Record<string, boolean>>;
-  marks: Record<string, Record<string, Exclude<ReadingMark, ''>>>;
-};
-
-// State updates replace only the slice of the paper they touch, so comparing
-// slices by identity finds every paper whose reader state needs saving.
-export function changedReaderPapers(previous: ReaderStateSlices, next: ReaderStateSlices) {
-  const changed = new Set<string>();
-  for (const key of ['nodeNotes', 'nodeAnswers', 'expanded', 'marks'] as const) {
-    const before: Record<string, unknown> = previous[key];
-    const after: Record<string, unknown> = next[key];
-    if (before === after) continue;
-    for (const paperId of new Set([...Object.keys(before), ...Object.keys(after)]))
-      if (before[paperId] !== after[paperId]) changed.add(paperId);
-  }
-  if (previous.notes !== next.notes) {
-    const byPaper = (notes: Note[]) => {
-      const groups = new Map<string, Note[]>();
-      for (const note of notes) {
-        const group = groups.get(note.paperId);
-        if (group) group.push(note);
-        else groups.set(note.paperId, [note]);
-      }
-      return groups;
-    };
-    const before = byPaper(previous.notes);
-    const after = byPaper(next.notes);
-    for (const paperId of new Set([...before.keys(), ...after.keys()])) {
-      const left = before.get(paperId) ?? [];
-      const right = after.get(paperId) ?? [];
-      if (left.length !== right.length || left.some((note, index) => note !== right[index])) changed.add(paperId);
-    }
-  }
-  return changed;
-}
-
-export function saveReaderState(paperId: string, state: ReaderStateSlices) {
-  const body = JSON.stringify({
-    paperId,
-    reader: {
-      notes: state.notes.filter((item) => item.paperId === paperId),
-      nodeNotes: state.nodeNotes[paperId] ?? {},
-      nodeAnswers: state.nodeAnswers[paperId] ?? {},
-      expanded: state.expanded[paperId] ?? {},
-      marks: state.marks[paperId] ?? {},
-    },
-  });
-  // keepalive lets a save started as the tab closes complete; browsers cap it at 64 KB.
-  return fetch(`${bridgeUrl}/vault/reader`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-    keepalive: body.length < 20_000,
-  });
 }

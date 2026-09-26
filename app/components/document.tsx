@@ -14,7 +14,8 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { AIText, Latex, MathText } from './math';
-import { bridgeUrl, makeId, reportReaderProcess } from '../lib/app';
+import { makeId, reportReaderProcess } from '../lib/app';
+import { bridgeUrl } from '../lib/bridge-client';
 import {
   applyWorkingPatches,
   displayUnitLabel,

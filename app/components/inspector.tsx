@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { EditableSavedNote } from './document';
 import { AIText, MathText } from './math';
-import { bridgeUrl, makeId, readServiceResponse, readString, reportReaderProcess } from '../lib/app';
+import { makeId, readString, reportReaderProcess } from '../lib/app';
+import { bridgePost } from '../lib/bridge-client';
 import {
   displayUnitLabel,
   kindClass,
@@ -61,13 +62,11 @@ export function VersionComparisonPanel({
     setError('');
     setResult(null);
     try {
-      const response = await fetch(`${bridgeUrl}/compare-versions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paper, profile, fromVersion, toVersion }),
-      });
-      const data = await readServiceResponse(response);
-      if (!response.ok) throw new Error(data.error || 'Version comparison failed.');
+      const data = await bridgePost(
+        '/compare-versions',
+        { paper, profile, fromVersion, toVersion },
+        'Version comparison failed.',
+      );
       setResult(parseVersionComparison(readString(data.text)));
       setSources(data.sources ?? null);
       reportReaderProcess({
