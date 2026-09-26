@@ -238,10 +238,11 @@ function normalizeDisplayMathEnvironments(source: string) {
     );
 }
 
+// AI-written text cites like the paper: \cite and its natbib and biblatex forms.
 export function cleanTeXProse(value: string) {
   return normalizeDisplayMathEnvironments(unwrapTextColorCommands(decodeTeXText(value)))
     .replace(
-      /\$\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}\$/g,
+      /\$\\(?:[Cc]ite\w*|(?:[Pp]aren|[Tt]ext|[Aa]uto|[Ss]mart|[Ss]uper|[Ff]ull|[Ff]oot(?:full)?)cite(?:text)?)\*?\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}\$/g,
       (_match, preNote: string | undefined, postNote: string | undefined, keys: string) => {
         const locator = [preNote, postNote]
           .map((item) => item?.trim())
@@ -254,7 +255,7 @@ export function cleanTeXProse(value: string) {
       },
     )
     .replace(
-      /\\cite\w*\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}/g,
+      /\\(?:[Cc]ite\w*|(?:[Pp]aren|[Tt]ext|[Aa]uto|[Ss]mart|[Ss]uper|[Ff]ull|[Ff]oot(?:full)?)cite(?:text)?)\*?\s*(?:\[([^\]]*)\])?\s*(?:\[([^\]]*)\])?\s*\{([^{}]+)\}/g,
       (_match, preNote: string | undefined, postNote: string | undefined, keys: string) => {
         const locator = [preNote, postNote]
           .map((item) => item?.trim())

@@ -383,3 +383,13 @@ assert.equal(newerVersion('2401.00001', baseline), '2401.00001v2', 'An unversion
 assert.equal(parseWatch('{broken'), null);
 assert.deepEqual(parseWatch(JSON.stringify(later)).newIds, ['W3', 'W2']);
 console.log('Reader logic: update and citation watch verified.');
+
+// AI-written citations read like the paper's, whichever citation package they use.
+{
+  const { cleanTeXProse } = await import('../app/lib/tex-text.ts');
+  assert.equal(
+    cleanTeXProse(String.raw`As \parencite[Thm.~2]{kn} and \textcite{ab,cd} show, see also \cite{ef}.`),
+    'As [kn, Thm.~2] and [ab] [cd] show, see also [ef].',
+  );
+  console.log('Reader logic: citation commands in AI text verified.');
+}
