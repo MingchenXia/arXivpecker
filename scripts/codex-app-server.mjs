@@ -555,6 +555,7 @@ class CodexAppServer {
   status() {
     return {
       running: Boolean(this.process && !this.process.killed),
+      backend: { kind: 'codex', label: 'Codex (local sign-in)', baseUrl: '', model: '' },
       account: this.account ? { type: this.account.type, planType: this.account.planType ?? null } : null,
       models: this.models.map((item) => ({
         id: item.model ?? item.id,

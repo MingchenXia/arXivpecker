@@ -8518,3 +8518,31 @@ body.assistant-resizing {
   color: #8b8580;
   font-size: 11px;
 }
+
+/* Settings: which AI backend the bridge runs. */
+.settings-backend {
+  display: grid;
+  gap: 4px;
+  margin-top: 22px;
+  border: 1px solid #dfe5de;
+  border-radius: 8px;
+  background: #fbfcfa;
+  padding: 12px 14px;
+  color: #4f5a53;
+  font-size: 13px;
+}
+.settings-backend b {
+  color: #2f3a33;
+  font-size: 14px;
+}
+.settings-backend small {
+  color: #7a857d;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.settings-backend code {
+  border-radius: 3px;
+  background: #eef2ed;
+  padding: 0 3px;
+  font-size: 11px;
+}

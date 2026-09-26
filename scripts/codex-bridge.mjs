@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { cloudStatus, createCloudShare } from './cloud-share.mjs';
+import { chatBackendFromEnvironment } from './chat-backend.mjs';
 import { CodexAppServer } from './codex-app-server.mjs';
 import { extractLatexDocument } from './codex-prompts.mjs';
 import { PaperVault, relativePathEscapes } from './paper-vault.mjs';
@@ -427,7 +428,26 @@ function normalizeArxivVersion(value) {
   );
 }
 
-const codex = new CodexAppServer();
+// The AI backend: the signed-in Codex CLI by default, or any OpenAI-compatible
+// Chat Completions server (see PROOFROOM_AI_BACKEND in the README).
+const codex =
+  chatBackendFromEnvironment(process.env, { resolveSource: (paper) => storedPrimarySource(paper.id) }) ??
+  new CodexAppServer();
+
+/** Where a stored paper's TeX lives, for a backend that must be sent the source. */
+async function storedPrimarySource(paperId) {
+  const record = await vault.recordFor(String(paperId));
+  const directory = vault.paperDirectory(record);
+  const paper = JSON.parse(await readFile(path.join(directory, 'paper.json'), 'utf8'));
+  const source = paper.source ?? {};
+  if (!source.mainTex) return null;
+  const resolve = (value) => (path.isAbsolute(value) ? value : path.resolve(directory, value));
+  return {
+    kind: source.analysisFormat === 'ai-tex' ? 'ai-tex' : 'tex',
+    entryFile: resolve(source.mainTex),
+    sourceDirectory: resolve(source.sourceDirectory || path.dirname(source.mainTex)),
+  };
+}
 const threadQueues = new Map();
 let vaultMutationQueue = Promise.resolve();
 const activeAuditPaperIds = new Set();

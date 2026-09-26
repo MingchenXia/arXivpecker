@@ -1035,7 +1035,7 @@ export function Settings({
         />
         <AreaMultiSelect value={profile.areas} onChange={(areas) => setProfile((current) => ({ ...current, areas }))} />
         <Select
-          label="Codex model"
+          label={bridge?.backend?.kind === 'chat-completions' ? 'Model' : 'Codex model'}
           value={profile.model}
           options={(bridge?.models ?? []).map((item) => item.id)}
           labels={(bridge?.models ?? []).reduce<Record<string, string>>(
@@ -1043,7 +1043,7 @@ export function Settings({
             {},
           )}
           onChange={(value) => update('model', value)}
-          emptyLabel="Codex default"
+          emptyLabel={bridge?.backend?.kind === 'chat-completions' ? 'Configured model' : 'Codex default'}
         />
         <Select
           label="Reasoning effort"
@@ -1052,6 +1052,23 @@ export function Settings({
           onChange={(value) => update('reasoning', value)}
         />
       </div>
+      <section className="settings-backend" aria-label="AI backend">
+        <b>AI backend</b>
+        <p>
+          {bridge?.backend
+            ? bridge.backend.kind === 'chat-completions'
+              ? `OpenAI-compatible API at ${bridge.backend.baseUrl}${bridge.backend.model ? ` · ${bridge.backend.model}` : ''}`
+              : 'Codex, through your local Codex sign-in'
+            : 'The local bridge is not running.'}
+          {bridge?.lastError ? ` · ${bridge.lastError}` : ''}
+        </p>
+        <small>
+          The bridge chooses its backend when it starts. To use another model, hosted or local (Ollama, LM Studio,
+          vLLM), start it with <code>PROOFROOM_AI_BACKEND=openai-compatible</code>, <code>PROOFROOM_AI_BASE_URL</code>,
+          and <code>PROOFROOM_AI_MODEL</code> (plus <code>PROOFROOM_AI_API_KEY</code> for a hosted API). Such models
+          read the paper&rsquo;s TeX, not PDFs.
+        </small>
+      </section>
       <div className="france-toggle">
         <b>Do you like France?</b>
         <button role="switch" aria-checked="false" disabled>

@@ -240,6 +240,8 @@ type GraphEdge = {
 export type Graph = { version: number; updatedAt: string | null; nodes: GraphNode[]; edges: GraphEdge[] };
 export type Bridge = {
   running: boolean;
+  /** Which AI backend the bridge runs: the signed-in Codex CLI, or an OpenAI-compatible API. */
+  backend?: { kind: 'codex' | 'chat-completions'; label: string; baseUrl: string; model: string };
   account: { type: string; planType: string | null } | null;
   models: { id: string; label: string; efforts: string[]; defaultEffort: string | null; isDefault: boolean }[];
   lastError: string | null;
