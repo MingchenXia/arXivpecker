@@ -13,7 +13,7 @@ function decodeSourceBuffer(payload) {
   const errors = (value) => (value.match(/\uFFFD/g) || []).length;
   return errors(legacy) < errors(utf8) ? legacy : utf8;
 }
-async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 0) {
+async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 0, mainDirectory = path.dirname(entryFile)) {
   if (depth > 12 || seen.has(entryFile)) return '';
   const relative = path.relative(sourceRoot, entryFile);
   if (relativePathEscapes(relative)) return '';
@@ -21,17 +21,24 @@ async function readExpandedTex(entryFile, sourceRoot, seen = new Set(), depth = 
   if (relativePathEscapes(path.relative(await realpath(sourceRoot), await realpath(entryFile)))) return '';
   seen.add(entryFile);
   let source = decodeSourceBuffer(await readFile(entryFile));
-  const include = /\\(?:input|include)\s*\{([^}]+)\}/g;
+  // `\\include` needs braces; `\\input` also accepts a bare file name (`\\input macros`).
+  const include = /\\(?:input|include)\s*\{([^}]+)\}|\\input\s+([A-Za-z0-9_./-]+)/g;
   const literalRanges = literalSourceRanges(source);
   let expanded = ''; let cursor = 0;
   for (const match of source.matchAll(include)) {
     const start = match.index ?? 0;
     if (insideSourceRanges(start, literalRanges) || isLatexCommentedAt(source, start)) continue;
     expanded += source.slice(cursor, match.index);
-    const requested = match[1].trim();
-    const candidate = path.resolve(path.dirname(entryFile), /\.[A-Za-z0-9]+$/.test(requested) ? requested : `${requested}.tex`);
-    try { expanded += await readExpandedTex(candidate, sourceRoot, seen, depth + 1); }
-    catch { expanded += `\n% arXivpecker could not resolve ${requested}\n`; }
+    const requested = (match[1] ?? match[2]).trim();
+    const filename = /\.[A-Za-z0-9]+$/.test(requested) ? requested : `${requested}.tex`;
+    // TeX resolves every include against the main document's folder, even from
+    // a nested file; also accept paths written relative to the including file.
+    let included = null;
+    for (const candidate of new Set([path.resolve(mainDirectory, filename), path.resolve(path.dirname(entryFile), filename)])) {
+      try { included = await readExpandedTex(candidate, sourceRoot, seen, depth + 1, mainDirectory); break; }
+      catch { /* Try the next location. */ }
+    }
+    expanded += included ?? `\n% arXivpecker could not resolve ${requested}\n`;
     cursor = start + match[0].length;
   }
   expanded += source.slice(cursor);

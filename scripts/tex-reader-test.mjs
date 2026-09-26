@@ -117,6 +117,19 @@ try {
     { kind: 'tex', entryFile: path.join(aliasDirectory, 'main.tex'), sourceDirectory: aliasDirectory },
   ), false, 'A real included-file change must still reach structural AI comparison.');
 
+  // Nested includes resolve against the main file's folder, as TeX does, and a
+  // bare \input name is expanded like the braced form.
+  const nestedRoot = path.join(sourceRoot, 'nested');
+  await mkdir(path.join(nestedRoot, 'sections'), { recursive: true });
+  await writeFile(path.join(nestedRoot, 'main.tex'), String.raw`\input macros
+\input{sections/a}`);
+  await writeFile(path.join(nestedRoot, 'macros.tex'), 'Macro file text.');
+  await writeFile(path.join(nestedRoot, 'sections/a.tex'), String.raw`Section A. \input{sections/b}`);
+  await writeFile(path.join(nestedRoot, 'sections/b.tex'), 'Section B.');
+  const nested = await readExpandedTex(path.join(nestedRoot, 'main.tex'), nestedRoot);
+  assert.match(nested, /Macro file text\./, 'A brace-less \\input must be expanded.');
+  assert.match(nested, /Section A\. Section B\./, 'A nested include must resolve against the main document folder.');
+
   // arXiv sources usually ship only the compiled .bbl for \bibliography{...}.
   const bblRoot = path.join(sourceRoot, 'bbl');
   await mkdir(bblRoot);
