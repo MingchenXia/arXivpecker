@@ -997,6 +997,10 @@ export default function Home() {
   </main>;
 }
 
+// Outlives Reader remounts, so leaving the reader and returning does not replay
+// an activity-tray navigation that was already handled.
+let handledNavigationNonce = 0;
+
 type ReaderProps = { paper?: Paper; audit?: PaperAudit; openImport: () => void; selectedNodeId: string; setSelectedNodeId: (id: string) => void; expanded: Record<string, boolean>; setExpanded: (id: string, value: boolean) => void; marks: Record<string, Exclude<ReadingMark, ''>>; setMark: (id: string, value: ReadingMark) => void; readerNotes: Record<string, string>; notes: Note[]; answers: Record<string, string>; savePaperMessages: (messages: PaperChatMessage[]) => void; patches: WorkingPatch[]; savePatches: (patches: WorkingPatch[]) => Promise<void>; suggestEdit: (node: AuditNode) => Promise<EditorialSuggestion>; graph: Graph; analysing: boolean; auditActionLabel?: string; askingId: string | null; analyze: () => void; askNode: (node: AuditNode, question: string) => Promise<void>; rememberAuditThread: (threadId: string) => void; saveNote: (anchor: string, nodeId: string, text: string, latex: string) => void; updateNote: (noteId: string, text: string) => void; deleteNote: (noteId: string) => void; addLink: (link: Omit<CrossLink, 'id' | 'source' | 'createdAt'>) => Promise<void>; removeLink: (linkId: string) => Promise<void>; openUnit: (paperId: string, nodeId: string) => void; profile: Profile; navigationRequest: ReaderNavigationRequest | null };
 
 function Reader({ paper, audit, openImport, selectedNodeId, setSelectedNodeId, expanded, setExpanded, marks, setMark, readerNotes, notes, answers, savePaperMessages, patches, savePatches, suggestEdit, graph, analysing, auditActionLabel, askingId, analyze, askNode, rememberAuditThread, saveNote, updateNote, deleteNote, addLink, removeLink, openUnit, profile, navigationRequest }: ReaderProps) {
@@ -1007,7 +1011,6 @@ function Reader({ paper, audit, openImport, selectedNodeId, setSelectedNodeId, e
   const paperMessagesOwnerRef = useRef(paper?.id);
   const readerDocumentRef = useRef<HTMLElement>(null);
   const selectedDocumentElementRef = useRef<HTMLElement | null>(null);
-  const handledNavigationNonceRef = useRef(0);
   const originalNodes = useMemo(() => audit?.nodes ?? [], [audit]);
   const editionNodes = useMemo(() => edition === 'working' ? applyWorkingPatches(originalNodes, patches) : originalNodes, [edition, originalNodes, patches]);
   const sourceUnits = useMemo(() => (audit?.sourceBlocks ?? []).filter((block) => block.kind === 'section' || block.kind === 'paragraph' || block.kind === 'figure').map((block) => sourceBlockAsNode(block, edition === 'working' ? patches : [])), [audit, edition, patches]);
@@ -1096,10 +1099,12 @@ function Reader({ paper, audit, openImport, selectedNodeId, setSelectedNodeId, e
     setOutlineOpen(panel === 'outline'); setPaperChatOpen(panel === 'chat'); setInspectorOpen(panel === 'assistant'); setReferenceOpen(panel === 'reference'); setMarkupOpen(panel === 'markup'); setToolsOpen(panel === 'tools'); setMobileDockOpen(false);
   }
   useEffect(() => {
-    if (!navigationRequest || navigationRequest.paperId !== paper?.id || handledNavigationNonceRef.current === navigationRequest.nonce) return;
-    handledNavigationNonceRef.current = navigationRequest.nonce;
+    if (!navigationRequest || navigationRequest.paperId !== paper?.id || handledNavigationNonce >= navigationRequest.nonce) return;
     let jumpFrame = 0;
     const openFrame = window.requestAnimationFrame(() => {
+      // Mark it handled only once it runs: a cancelled frame (StrictMode's
+      // effect replay) must not swallow the request.
+      handledNavigationNonce = navigationRequest.nonce;
       setMode('interactive'); setEdition('working'); setFocusPath(false); setOutlineOpen(false); setReferenceOpen(false); setMarkupOpen(false); setToolsOpen(false); setMobileDockOpen(false);
       if (navigationRequest.panel === 'paper-chat') { setInspectorOpen(false); setPaperChatOpen(true); return; }
       setPaperChatOpen(false); setInspectorOpen(true);
