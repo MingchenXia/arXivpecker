@@ -254,8 +254,10 @@ function readableLatex(source) {
     .replace(/\\'\{?E\}?/g, 'É')
     .replace(/\\"\{?([aeiouAEIOU])\}?/g, (_match, letter) => ({ a: 'ä', e: 'ë', i: 'ï', o: 'ö', u: 'ü', A: 'Ä', E: 'Ë', I: 'Ï', O: 'Ö', U: 'Ü' }[letter] || letter))
     .replace(/\\~\{?([anoANO])\}?/g, (_match, letter) => ({ a: 'ã', n: 'ñ', o: 'õ', A: 'Ã', N: 'Ñ', O: 'Õ' }[letter] || letter))
-    .replace(/\\u\{?([aeiouAEIOU])\}?/g, (_match, letter) => ({ a: 'ă', e: 'ĕ', i: 'ĭ', o: 'ŏ', u: 'ŭ', A: 'Ă', E: 'Ĕ', I: 'Ĭ', O: 'Ŏ', U: 'Ŭ' }[letter] || letter))
-    .replace(/\\c\{?([cCtTsS])\}?/g, (_match, letter) => ({ c: 'ç', C: 'Ç', t: 'ţ', T: 'Ţ', s: 'ş', S: 'Ş' }[letter] || letter))
+    // `\\u` and `\\c` are also prefixes of control words such as `\\upsilon`, `\\csc`,
+    // or an author's `\\cS`; accept only the braced or space-separated accent forms.
+    .replace(/\\u(?:\{([aeiouAEIOU])\}|\s+([aeiouAEIOU])(?![A-Za-z]))/g, (_match, braced, spaced) => ({ a: 'ă', e: 'ĕ', i: 'ĭ', o: 'ŏ', u: 'ŭ', A: 'Ă', E: 'Ĕ', I: 'Ĭ', O: 'Ŏ', U: 'Ŭ' }[braced || spaced]))
+    .replace(/\\c(?:\{([cCtTsS])\}|\s+([cCtTsS])(?![A-Za-z]))/g, (_match, braced, spaced) => ({ c: 'ç', C: 'Ç', t: 'ţ', T: 'Ţ', s: 'ş', S: 'Ş' }[braced || spaced]))
     .replace(/\\v(?:\{([cszCSZ])\}|\s+([cszCSZ])\b)/g, (_match, braced, spaced) => { const letter = braced || spaced; return ({ c: 'č', s: 'š', z: 'ž', C: 'Č', S: 'Š', Z: 'Ž' }[letter] || letter); })
     // `\\l` and `\\L` are Polish letter macros, but they are also prefixes of
     // ordinary TeX commands such as `\\left` and `\\Lambda`. Only convert the
@@ -437,11 +439,15 @@ function authorMacroTable(source) {
   const text = String(source || '');
   const literalRanges = literalSourceRanges(text);
   const macros = new Map();
-  const declarations = /\\(?:newcommand|renewcommand)\s*\{\\([A-Za-z@]+)\}\s*(?:\[(\d+)\])?\s*(?:\[([^\]]*)\])?\s*\{/g;
+  // Accept every form stripDocumentDeclarations removes: starred, brace-less
+  // names (\\newcommand\\R{...}), \\providecommand, and \\DeclareRobustCommand.
+  const declarations = /\\(newcommand|renewcommand|providecommand|DeclareRobustCommand)\*?\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*(?:\[(\d+)\])?\s*(?:\[([^\]]*)\])?\s*\{/g;
   for (const match of text.matchAll(declarations)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
+    const name = match[2] || match[3];
+    if (match[1] === 'providecommand' && macros.has(name)) continue;
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
-    if (group) macros.set(match[1], { replacement: group.content, arity: Number(match[2] || 0), defaultArg: match[3] });
+    if (group) macros.set(name, { replacement: group.content, arity: Number(match[4] || 0), defaultArg: match[5] });
   }
   for (const match of text.matchAll(/\\def\s*\\([A-Za-z@]+)\s*((?:#\d\s*)*)\{/g)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
@@ -451,10 +457,11 @@ function authorMacroTable(source) {
     if (arity === 0 && /^\\(?:widehat|widetilde|overline|underline)$/.test(replacement.trim())) { arity = 1; replacement = `${replacement.trim()}{#1}`; }
     if (group) macros.set(match[1], { replacement, arity });
   }
-  for (const match of text.matchAll(/\\DeclareMathOperator\*?\s*\{\\([A-Za-z@]+)\}\s*\{/g)) {
+  for (const match of text.matchAll(/\\DeclareMathOperator(\*?)\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*\{/g)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
     const group = balancedGroup(text, (match.index ?? 0) + match[0].length - 1);
-    if (group) macros.set(match[1], { replacement: `\\operatorname{${group.content}}`, arity: 0 });
+    // The starred form places sub/superscripts as limits, like \\lim.
+    if (group) macros.set(match[2] || match[3], { replacement: `\\operatorname${match[1]}{${group.content}}`, arity: 0 });
   }
   for (const match of text.matchAll(/\\let\s*\\([A-Za-z@]+)\s*(?:=\s*)?\\([A-Za-z@]+)/g)) {
     if (insideSourceRanges(match.index ?? 0, literalRanges) || isLatexCommentedAt(text, match.index ?? 0)) continue;
@@ -602,7 +609,7 @@ function sourceProofEvents(source, units = [], declarationSource = source) {
   }
   const proofNames = [...proofEnvironments].map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   if (!proofNames) return [];
-  const pattern = new RegExp(`\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1`, 'g');
+  const pattern = new RegExp(`\\\\begin\\{(${proofNames})\\}(?:\\[([^\\]]*)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'g');
   const events = [];
   for (const match of value.matchAll(pattern)) {
     const start = match.index ?? 0;
@@ -835,8 +842,9 @@ function stripDocumentDeclarations(source) {
       const replacement = takeGroup(position); if (!replacement) continue;
       position = replacement.end;
     } else if (command === 'DeclareMathOperator') {
-      const name = takeGroup(position); if (!name) continue;
-      const replacement = takeGroup(name.end); if (!replacement) continue;
+      position = takeMacroName(position);
+      if (position < 0) continue;
+      const replacement = takeGroup(position); if (!replacement) continue;
       position = replacement.end;
     } else if (/^(?:newenvironment|renewenvironment)$/.test(command)) {
       const name = takeGroup(position); if (!name) continue; position = name.end;

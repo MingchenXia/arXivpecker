@@ -63,6 +63,29 @@ const longUnits = extractSourceUnits(longSource);
 assert.equal(longUnits.length, 320, 'Long papers must retain every extracted result.');
 assert.equal(longUnits.at(-1)?.printedNumber, '4.80', 'Long papers must reset section-scoped counters at section boundaries.');
 
+const standaloneProof = String.raw`\begin{document}
+\section{A}
+Some prose before.
+\begin{proof}Easy.\end{proof}
+After text.
+\end{document}`;
+const standaloneBlocks = buildSourceBlocks(standaloneProof, extractSourceUnits(standaloneProof), new Map());
+assert.deepEqual(standaloneBlocks.filter((block) => block.kind === 'paragraph').map((block) => block.content.trim()), ['Some prose before.', 'After text.'], 'A standalone proof must consume its whole \\end{proof}, leaving no stray brace.');
+
+const macroForms = expandAuthorMacros(String.raw`\newcommand\Rr{\mathbb{R}}
+\newcommand*{\Zz}{\mathbb{Z}}
+\providecommand{\Nn}{\mathbb{N}}
+\providecommand{\Rr}{WRONG}
+\DeclareMathOperator\Spec{Spec}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\begin{document}
+$\Rr\to\Zz$, $\Nn$, $\Spec A$, $\argmax_x g$
+\end{document}`);
+assert.match(macroForms, /\$\\mathbb\{R\}\\to\\mathbb\{Z\}\$, \$\\mathbb\{N\}\$, \$\\operatorname\{Spec\} A\$, \$\\operatorname\*\{arg\\,max\}_x g\$/, 'Brace-less, starred, and provided macro definitions must all expand.');
+
+assert.equal(readableLatex(String.raw`$\csc x$, $\cS\subset\cC$, $\upsilon$`), String.raw`$\csc x$, $\cS\subset\cC$, $\upsilon$`, 'Accent rules must not rewrite control words that merely start with \\c or \\u.');
+assert.equal(readableLatex(String.raw`Ho\c{s}ten, \c c, \u{a}`), 'Hoşten, ç, ă');
+
 const sourceRoot = await mkdtemp(path.join(tmpdir(), 'arxivpecker-reader-'));
 try {
   await mkdir(path.join(sourceRoot, 'chapters'));
