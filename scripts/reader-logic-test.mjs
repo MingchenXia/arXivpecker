@@ -213,3 +213,24 @@ assert.deepEqual(used('w \\in W_n(F)'), ['W_n', 'F']);
 assert.deepEqual(used('\\mathbb{F}_q \\times F_v'), [], 'Neither a font letter nor a subscripted symbol is F.');
 assert.deepEqual(used('\\Phi + I_n'), [], 'I_n( is looked for with its argument.');
 console.log('Reader logic: notation glossary verified.');
+
+// The side-by-side PDF follows prose to the page of the result before it.
+const { unitPage } = await import('../app/lib/pdf-sync.ts');
+const pagedUnits = [
+  { id: 'thm', anchor: { page: 4 } },
+  { id: 'lemma', anchor: { page: null } },
+  { id: 'def', anchor: { page: 7 } },
+];
+const pagedBlocks = [
+  { id: 'p0', nodeId: '' },
+  { id: 'r1', nodeId: 'thm' },
+  { id: 'p1', nodeId: '' },
+  { id: 'r2', nodeId: 'lemma' },
+  { id: 'r3', nodeId: 'def' },
+];
+assert.equal(unitPage('def', pagedUnits, pagedBlocks), 7);
+assert.equal(unitPage('source-block:p1', pagedUnits, pagedBlocks), 4);
+assert.equal(unitPage('lemma', pagedUnits, pagedBlocks), 4, 'A result without a page takes the previous one.');
+assert.equal(unitPage('source-block:p0', pagedUnits, pagedBlocks), undefined);
+assert.equal(unitPage('unknown', pagedUnits, pagedBlocks), undefined);
+console.log('Reader logic: PDF page sync verified.');

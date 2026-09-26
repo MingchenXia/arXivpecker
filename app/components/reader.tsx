@@ -27,6 +27,7 @@ import {
 import { bridgePost } from '../lib/bridge-client';
 import { arxivKey, citedArxivPapers } from '../lib/cited-papers';
 import { buildGlossary } from '../lib/glossary';
+import { unitPage } from '../lib/pdf-sync';
 import { GlossaryList } from './glossary';
 import type { CitedArxivPaper } from '../lib/cited-papers';
 import {
@@ -150,6 +151,9 @@ export function Reader({
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineTab, setOutlineTab] = useState<'units' | 'notation'>('units');
+  const [pdfBeside, setPdfBeside] = useState(false);
+  // The page the side-by-side PDF stays on; null while it follows the reading position.
+  const [pdfPinnedPage, setPdfPinnedPage] = useState<number | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [assistantSize, setAssistantSize] = useState<AssistantSize | null>(null);
   const [paperChatOpen, setPaperChatOpen] = useState(false);
@@ -581,6 +585,9 @@ export function Reader({
     );
   const page = originalPage ?? node?.anchor.page ?? undefined;
   const pdfUrl = originalPaperUrl(paper, page);
+  const showPdfBeside = pdfBeside && mode === 'interactive' && hasOriginalPdf;
+  const besidePage =
+    pdfPinnedPage ?? (node ? unitPage(node.id, editionNodes, audit.sourceBlocks ?? []) : undefined) ?? 1;
   return (
     <section
       className={`reader-page ${mode === 'source' ? 'reader-original-mode' : ''} ${analysing ? 'reader-audit-locked' : ''} ${isFullscreen ? 'reader-fullscreen-active' : ''}`}
@@ -656,7 +663,7 @@ export function Reader({
         </div>
       )}
       <div
-        className={`reader-grid ${outlineOpen ? 'reader-grid-outline' : ''} ${inspectorOpen ? 'reader-grid-inspector' : ''}`}
+        className={`reader-grid ${outlineOpen ? 'reader-grid-outline' : ''} ${inspectorOpen ? 'reader-grid-inspector' : ''} ${showPdfBeside ? 'reader-grid-split' : ''}`}
       >
         {outlineOpen && (
           <aside className="reader-outline reader-drawer" data-reader-floating-panel>
@@ -772,6 +779,29 @@ export function Reader({
             />
           )}
         </main>
+        {showPdfBeside && (
+          <aside className="reader-pdf-pane" aria-label="Original PDF beside the paper">
+            <header>
+              <b>Original PDF</b>
+              <span>p. {besidePage}</span>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={pdfPinnedPage === null}
+                  onChange={(event) => setPdfPinnedPage(event.target.checked ? null : besidePage)}
+                />
+                Follow reading
+              </label>
+              <a href={originalPaperUrl(paper, besidePage)} target="_blank" rel="noreferrer">
+                Open ↗
+              </a>
+              <button onClick={() => setPdfBeside(false)} aria-label="Close the PDF beside the paper">
+                ×
+              </button>
+            </header>
+            <iframe title={`Original PDF beside ${paper.title}`} src={originalPaperUrl(paper, besidePage)} />
+          </aside>
+        )}
         {inspectorOpen && mode !== 'source' && (
           <aside
             className="reader-inspector reader-drawer"
@@ -868,6 +898,17 @@ export function Reader({
               <ReaderIcon name="reference" />
               <span>Reference reader</span>
             </button>
+            {hasOriginalPdf && (
+              <button
+                className={pdfBeside ? 'active' : ''}
+                onClick={() => setPdfBeside(!pdfBeside)}
+                aria-label="Show the original PDF beside the paper"
+                aria-pressed={pdfBeside}
+              >
+                <ReaderIcon name="original" />
+                <span>PDF side by side</span>
+              </button>
+            )}
             <button
               className={markupOpen ? 'active' : ''}
               onMouseDown={(event) => event.preventDefault()}

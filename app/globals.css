@@ -8197,3 +8197,68 @@ body.assistant-resizing {
     display: none;
   }
 }
+
+/* The original PDF beside the paper, following the reading position. */
+.reader-page .reader-grid.reader-grid-split {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.reader-pdf-pane {
+  position: sticky;
+  top: 58px;
+  display: flex;
+  height: calc(100vh - 72px);
+  flex-direction: column;
+  margin: 0 62px 0 8px;
+  overflow: hidden;
+  border: 1px solid #ded6cc;
+  border-radius: 7px;
+  background: #fffefa;
+}
+.reader-pdf-pane > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #e4dbd3;
+  padding: 6px 10px;
+  color: #6f655e;
+  font-size: 12px;
+}
+.reader-pdf-pane > header b {
+  color: #4f4843;
+  font-size: 13px;
+}
+.reader-pdf-pane > header label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  accent-color: #8f1d2c;
+}
+.reader-pdf-pane > header a {
+  color: #8f1d2c;
+  font-weight: 750;
+  text-decoration: none;
+}
+.reader-pdf-pane > header button {
+  color: #8c827a;
+  font-size: 17px;
+  line-height: 1;
+}
+.reader-pdf-pane iframe {
+  width: 100%;
+  flex: 1;
+  border: 0;
+}
+@media (max-width: 900px) {
+  .reader-page .reader-grid.reader-grid-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .reader-pdf-pane {
+    display: none;
+  }
+}
+@media print {
+  .reader-pdf-pane {
+    display: none;
+  }
+}
